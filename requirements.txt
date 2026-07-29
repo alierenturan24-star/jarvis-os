@@ -1,0 +1,2 @@
+ JARVIS OS Python paketleri buraya eklenecek.
+ 

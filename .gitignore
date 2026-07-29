@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+
+# Sanal ortamlar
+.venv/
+venv/
+
+# Ortam değişkenleri ve gizli anahtarlar
+.env
+
+# VS Code kişisel ayarları
+.vscode/
+
+# İşletim sistemi dosyaları
+.DS_Store
+Thumbs.db
+
+# Log dosyaları
+*.log

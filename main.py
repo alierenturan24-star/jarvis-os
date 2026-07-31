@@ -1,10 +1,22 @@
-def main() -> None:
-    """JARVIS uygulamasının başlangıç noktası."""
+from src.core.jarvis import Jarvis
 
-    print("=" * 40)
-    print("JARVIS OS başlatılıyor...")
-    print("Merhaba Ali, sistem hazır.")
-    print("=" * 40)
+
+def main():
+    jarvis = Jarvis()
+
+    print("=== Jarvis Başlatıldı ===")
+
+    while True:
+        prompt = input("\nSen: ")
+
+        if prompt.lower() in ["çık", "exit", "quit"]:
+            print("Jarvis kapatılıyor...")
+            break
+
+        cevap = jarvis.chat(prompt)
+
+        print("\nJarvis:")
+        print(cevap)
 
 
 if __name__ == "__main__":

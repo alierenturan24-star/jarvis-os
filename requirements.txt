@@ -1,2 +1,1 @@
- JARVIS OS Python paketleri buraya eklenecek.
- 
+ddgs>=9.14.4,<10

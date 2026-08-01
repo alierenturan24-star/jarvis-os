@@ -1,29 +1,50 @@
+from src.planner.task import Task
+
+
 class Planner:
 
-    def create_plan(self, user_message: str):
+    def build(self, message: str):
 
-        plan = []
+        text = message.lower()
 
-        text = user_message.lower()
+        tasks = []
 
-        if any(word in text for word in [
-            "ara",
-            "internette",
-            "google",
-            "haber",
-            "araştır"
-        ]):
-            plan.append("research")
+        if "google" in text:
 
-        if any(word in text for word in [
-            "dosya",
-            "klasör",
-            "oluştur",
-            "sil",
-            "kaydet"
-        ]):
-            plan.append("tool")
+            tasks.append(
+                Task(
+                    agent="browser",
+                    action="open_google"
+                )
+            )
 
-        plan.append("chat")
+        elif "youtube" in text:
 
-        return plan
+            tasks.append(
+                Task(
+                    agent="browser",
+                    action="open_youtube"
+                )
+            )
+
+        elif "araştır" in text:
+
+            tasks.append(
+                Task(
+                    agent="research",
+                    action="research",
+                    target=message
+                )
+            )
+
+        else:
+
+            tasks.append(
+                Task(
+                    agent="chat",
+                    action="chat",
+                    target=message
+                )
+            )
+
+        return tasks

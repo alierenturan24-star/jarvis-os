@@ -1,250 +1,61 @@
-from pathlib import Path
-
-from src.agents.agent_manager import AgentManager
-from src.core.context_builder import ContextBuilder
 from src.intent.intent_router import IntentRouter
-from src.memory.conversation_memory import ConversationMemory
+from src.core.tool_selector import ToolSelector
 from src.providers.router import ModelRouter
-from src.tools.tool_manager import ToolManager
+from src.memory.conversation_memory import ConversationMemory
+
+from src.agents.browser_agent import BrowserAgent
 
 
 class Commander:
-    """Kullanıcı komutlarını araçlara, ajanlara veya yapay zekâya yönlendirir."""
 
-    def __init__(self) -> None:
+    def __init__(self):
+
+        self.intent_router = IntentRouter()
+        self.tool_selector = ToolSelector()
+
+        self.browser_agent = BrowserAgent()
+
         self.router = ModelRouter()
         self.memory = ConversationMemory()
-        self.context_builder = ContextBuilder()
-        self.agent_manager = AgentManager()
-        self.intent_router = IntentRouter()
-        self.tool_manager = ToolManager()
 
-        self.system_prompt = """
-Sen JARVIS adlı gelişmiş kişisel yapay zekâ asistansın.
-
-Kimliğin:
-- Kullanıcının kişisel yardımcı asistanısın.
-- Her zaman Türkçe konuş.
-- Samimi, saygılı ve profesyonel ol.
-
-Kurallar:
-- Kullanıcı istemedikçe kod yazma.
-- Kullanıcı istemedikçe uzun örnekler verme.
-- Gereksiz uzun cevap verme.
-- Sadece sorulan konuya cevap ver.
-- Önceki konuşmaları dikkate al.
-- Emin olmadığın bilgileri uydurma.
-- Bilmediğin konuda açıkça "Bilmiyorum." de.
-- Dosya, klasör veya program işlemleri gerektiğinde uygun aracı kullan.
-- Kritik veya tehlikeli işlemleri kullanıcı onayı olmadan gerçekleştirme.
-"""
-
-    def process(self, user_message: str) -> str:
-        """Kullanıcının mesajını işler ve uygun cevabı döndürür."""
-
-        user_message = user_message.strip()
-
-        if not user_message:
-            return "Lütfen bir komut veya mesaj yaz."
+    def process(self, user_message):
 
         self.memory.add("Kullanıcı", user_message)
 
-        program_response = self._handle_program_command(user_message)
-
-        if program_response is not None:
-            self.memory.add("Jarvis", program_response)
-            return program_response
-
         intent = self.intent_router.detect(user_message)
 
-        tool_response = self._execute_intent(intent)
+        # Browser Agent
+        if intent == "browser":
 
-        if tool_response is not None:
-            self.memory.add("Jarvis", tool_response)
-            return tool_response
+            result = self.browser_agent.execute(user_message)
 
-        response = self._generate_chat_response(user_message)
+            self.memory.add("Jarvis", result)
+
+            return result
+
+        history = self.memory.build_prompt()
+
+        prompt = f"""
+Sen JARVIS adlı kişisel yapay zekâ asistansın.
+
+Her zaman Türkçe konuş.
+
+Geçmiş konuşmalar:
+
+{history}
+
+Kullanıcı:
+
+{user_message}
+
+Cevap:
+"""
+
+        response = self.router.generate(
+            prompt=prompt,
+            provider_name="ollama",
+        )
 
         self.memory.add("Jarvis", response)
 
         return response
-
-    def _handle_program_command(self, user_message: str) -> str | None:
-        """Program açma komutlarını algılar."""
-
-        message = user_message.lower()
-
-        program_commands = {
-            "not defteri": "notepad",
-            "notepad": "notepad",
-            "hesap makinesi": "hesap makinesi",
-            "calculator": "calculator",
-            "paint": "paint",
-            "powershell": "powershell",
-            "cmd": "cmd",
-            "komut istemi": "cmd",
-            "dosya gezgini": "explorer",
-            "explorer": "explorer",
-            "chrome": "chrome.exe",
-        }
-
-        open_words = {
-            "aç",
-            "açar mısın",
-            "açabilir misin",
-            "çalıştır",
-            "başlat",
-        }
-
-        wants_to_open = any(
-            word in message
-            for word in open_words
-        )
-
-        if not wants_to_open:
-            return None
-
-        for command_text, program_name in program_commands.items():
-            if command_text in message:
-                return self.tool_manager.execute(
-                    "program",
-                    program=program_name,
-                )
-
-        return None
-
-    def _execute_intent(self, intent) -> str | None:
-        """Intent Router tarafından belirlenen işlemi çalıştırır."""
-
-        if intent.name == "empty":
-            return "Lütfen bir komut veya mesaj yaz."
-
-        if intent.name == "tools.list":
-            return self._list_tools()
-
-        if intent.name == "file.write":
-            path = intent.parameters.get("path")
-            content = intent.parameters.get("content", "")
-
-            if not path:
-                return "Dosya adı bulunamadı."
-
-            return self.tool_manager.execute(
-                "file",
-                action="write",
-                path=path,
-                content=content,
-            )
-
-        if intent.name == "file.read":
-            path = intent.parameters.get("path")
-
-            if not path:
-                return "Okunacak dosyanın adı bulunamadı."
-
-            return self.tool_manager.execute(
-                "file",
-                action="read",
-                path=path,
-            )
-
-        if intent.name == "file.delete":
-            path = intent.parameters.get("path")
-
-            if not path:
-                return "Silinecek dosyanın adı bulunamadı."
-
-            return self.tool_manager.execute(
-                "file",
-                action="delete",
-                path=path,
-            )
-
-        if intent.name == "folder.create":
-            path = intent.parameters.get("path")
-
-            if not path:
-                return "Klasör adı bulunamadı."
-
-            return self.tool_manager.execute(
-                "folder",
-                action="create",
-                path=path,
-            )
-
-        if intent.name == "folder.list":
-            path_text = intent.parameters.get("path", ".")
-            path = Path(path_text)
-
-            try:
-                if not path.exists():
-                    return f"Klasör bulunamadı: {path}"
-
-                if not path.is_dir():
-                    return f"Bu yol bir klasör değil: {path}"
-
-                items = sorted(
-                    item.name
-                    for item in path.iterdir()
-                )
-
-                if not items:
-                    return "Bu klasörde gösterilecek öğe yok."
-
-                return "Klasörde bulunan öğeler:\n- " + "\n- ".join(items)
-
-            except Exception as error:
-                return f"Klasör listelenemedi: {error}"
-
-        return None
-
-    def _list_tools(self) -> str:
-        """Sistemde kayıtlı araçları listeler."""
-
-        tools = self.tool_manager.list_tools()
-
-        if not tools:
-            return "Kullanılabilir araç bulunamadı."
-
-        lines = ["Kullanılabilir araçlar:"]
-
-        for tool in tools:
-            name = tool.get("name", "İsimsiz araç")
-            description = tool.get(
-                "description",
-                "Açıklama bulunmuyor.",
-            )
-
-            lines.append(f"- {name}: {description}")
-
-        return "\n".join(lines)
-
-    def _generate_chat_response(self, user_message: str) -> str:
-        """Araç gerektirmeyen mesajları Ollama modeline gönderir."""
-
-        selected_agent = self.agent_manager.find_agent(
-            user_message
-        )
-
-        history = self.memory.build_prompt()
-
-        if selected_agent:
-            agent_info = (
-                f"Aktif Agent: {selected_agent.name}\n"
-                "Bu agent görevi yönetiyor."
-            )
-        else:
-            agent_info = "Aktif Agent: Genel Sohbet"
-
-        prompt = self.context_builder.build(
-            system_prompt=(
-                f"{self.system_prompt}\n\n{agent_info}"
-            ),
-            conversation_history=history,
-            user_message=user_message,
-        )
-
-        return self.router.generate(
-            prompt=prompt,
-            provider_name="ollama",
-        )

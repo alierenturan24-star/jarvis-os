@@ -1,35 +1,51 @@
 class ToolSelector:
 
+    TOOL_RULES = {
+        "file": [
+            "dosya oluştur",
+            "dosya yaz",
+            "kaydet",
+            ".txt",
+            ".py",
+        ],
+
+        "folder": [
+            "klasör oluştur",
+            "yeni klasör",
+            "dizin oluştur",
+        ],
+
+        "browser": [
+            "google aç",
+            "youtube aç",
+            "github aç",
+            "chatgpt aç",
+            "tarayıcı aç",
+            "chrome aç",
+        ],
+
+        "web": [
+            "araştır",
+            "internette ara",
+            "web ara",
+            "google'da ara",
+        ],
+
+        "program": [
+            "hesap makinesi",
+            "not defteri",
+            "paint",
+            "vs code",
+        ],
+    }
+
     def select(self, message: str):
 
         text = message.lower()
 
-        if any(x in text for x in [
-            "dosya oluştur",
-            "dosya yaz",
-            "kaydet",
-        ]):
-            return "file"
+        for tool_name, keywords in self.TOOL_RULES.items():
 
-        if any(x in text for x in [
-            "klasör oluştur",
-            "yeni klasör",
-        ]):
-            return "folder"
-
-        if any(x in text for x in [
-            "ara",
-            "google",
-            "internette",
-            "web",
-        ]):
-            return "web"
-
-        if any(x in text for x in [
-            "site aç",
-            "tarayıcı aç",
-            "chrome aç",
-        ]):
-            return "browser"
+            if any(keyword in text for keyword in keywords):
+                return tool_name
 
         return None

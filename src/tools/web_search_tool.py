@@ -1,6 +1,7 @@
-from src.tools.base_tool import BaseTool
+from urllib.parse import quote_plus
+import webbrowser
 
-import requests
+from src.tools.base_tool import BaseTool
 
 
 class WebSearchTool(BaseTool):
@@ -15,18 +16,22 @@ class WebSearchTool(BaseTool):
 
     def execute(self, **kwargs):
 
-        query = kwargs.get("query", "")
+        query = kwargs.get("query")
 
         if not query:
 
             return "Arama metni boş."
 
-        try:
+        url = (
+            "https://duckduckgo.com/?q="
+            + quote_plus(query)
+        )
 
-            url = "https://duckduckgo.com/?q=" + query.replace(" ", "+")
+        webbrowser.open(url)
 
-            return f"Arama bağlantısı:\n{url}"
+        return f"Arama başlatıldı:\n{query}"
 
-        except Exception as e:
+    # ResearchAgent için uyumluluk
+    def search(self, query):
 
-            return f"Hata: {e}"
+        return self.execute(query=query)

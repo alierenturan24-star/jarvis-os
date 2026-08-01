@@ -9,15 +9,15 @@ from src.tools.tool_manager import ToolManager
 
 
 class Commander:
-    """JARVIS görevlerini yöneten ana kontrol merkezi."""
+    """Kullanıcı komutlarını araçlara, ajanlara veya yapay zekâya yönlendirir."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.router = ModelRouter()
         self.memory = ConversationMemory()
         self.context_builder = ContextBuilder()
         self.agent_manager = AgentManager()
-        self.tool_manager = ToolManager()
         self.intent_router = IntentRouter()
+        self.tool_manager = ToolManager()
 
         self.system_prompt = """
 Sen JARVIS adlı gelişmiş kişisel yapay zekâ asistansın.
@@ -35,16 +35,25 @@ Kurallar:
 - Önceki konuşmaları dikkate al.
 - Emin olmadığın bilgileri uydurma.
 - Bilmediğin konuda açıkça "Bilmiyorum." de.
-- Dosya veya klasör işlemleri gerektiğinde uygun aracı kullan.
+- Dosya, klasör veya program işlemleri gerektiğinde uygun aracı kullan.
+- Kritik veya tehlikeli işlemleri kullanıcı onayı olmadan gerçekleştirme.
 """
 
     def process(self, user_message: str) -> str:
+        """Kullanıcının mesajını işler ve uygun cevabı döndürür."""
+
         user_message = user_message.strip()
 
         if not user_message:
             return "Lütfen bir komut veya mesaj yaz."
 
         self.memory.add("Kullanıcı", user_message)
+
+        program_response = self._handle_program_command(user_message)
+
+        if program_response is not None:
+            self.memory.add("Jarvis", program_response)
+            return program_response
 
         intent = self.intent_router.detect(user_message)
 
@@ -60,7 +69,53 @@ Kurallar:
 
         return response
 
+    def _handle_program_command(self, user_message: str) -> str | None:
+        """Program açma komutlarını algılar."""
+
+        message = user_message.lower()
+
+        program_commands = {
+            "not defteri": "notepad",
+            "notepad": "notepad",
+            "hesap makinesi": "hesap makinesi",
+            "calculator": "calculator",
+            "paint": "paint",
+            "powershell": "powershell",
+            "cmd": "cmd",
+            "komut istemi": "cmd",
+            "dosya gezgini": "explorer",
+            "explorer": "explorer",
+            "chrome": "chrome.exe",
+        }
+
+        open_words = {
+            "aç",
+            "açar mısın",
+            "açabilir misin",
+            "çalıştır",
+            "başlat",
+        }
+
+        wants_to_open = any(
+            word in message
+            for word in open_words
+        )
+
+        if not wants_to_open:
+            return None
+
+        for command_text, program_name in program_commands.items():
+            if command_text in message:
+                return self.tool_manager.execute(
+                    "program",
+                    program=program_name,
+                )
+
+        return None
+
     def _execute_intent(self, intent) -> str | None:
+        """Intent Router tarafından belirlenen işlemi çalıştırır."""
+
         if intent.name == "empty":
             return "Lütfen bir komut veya mesaj yaz."
 
@@ -93,6 +148,18 @@ Kurallar:
                 path=path,
             )
 
+        if intent.name == "file.delete":
+            path = intent.parameters.get("path")
+
+            if not path:
+                return "Silinecek dosyanın adı bulunamadı."
+
+            return self.tool_manager.execute(
+                "file",
+                action="delete",
+                path=path,
+            )
+
         if intent.name == "folder.create":
             path = intent.parameters.get("path")
 
@@ -106,11 +173,16 @@ Kurallar:
             )
 
         if intent.name == "folder.list":
-            path = Path(
-                intent.parameters.get("path", ".")
-            )
+            path_text = intent.parameters.get("path", ".")
+            path = Path(path_text)
 
             try:
+                if not path.exists():
+                    return f"Klasör bulunamadı: {path}"
+
+                if not path.is_dir():
+                    return f"Bu yol bir klasör değil: {path}"
+
                 items = sorted(
                     item.name
                     for item in path.iterdir()
@@ -127,6 +199,8 @@ Kurallar:
         return None
 
     def _list_tools(self) -> str:
+        """Sistemde kayıtlı araçları listeler."""
+
         tools = self.tool_manager.list_tools()
 
         if not tools:
@@ -146,6 +220,8 @@ Kurallar:
         return "\n".join(lines)
 
     def _generate_chat_response(self, user_message: str) -> str:
+        """Araç gerektirmeyen mesajları Ollama modeline gönderir."""
+
         selected_agent = self.agent_manager.find_agent(
             user_message
         )

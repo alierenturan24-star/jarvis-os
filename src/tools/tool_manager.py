@@ -1,6 +1,6 @@
 from src.tools.file_tool import FileTool
 from src.tools.folder_tool import FolderTool
-from src.tools.web_search_tool import WebSearchTool
+from src.tools.program_tool import ProgramTool
 from src.tools.browser_tool import BrowserTool
 
 
@@ -11,7 +11,7 @@ class ToolManager:
         self.tools = {
             "file": FileTool(),
             "folder": FolderTool(),
-            "web": WebSearchTool(),
+            "program": ProgramTool(),
             "browser": BrowserTool(),
         }
 
@@ -28,7 +28,6 @@ class ToolManager:
         tool = self.get_tool(tool_name)
 
         if tool is None:
-
             return f"{tool_name} bulunamadı."
 
         return tool.execute(**kwargs)

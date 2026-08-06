@@ -1,0 +1,17 @@
+JARVIS Sprint 10.2 - Çıktı Kalitesi ve Dayanıklılık
+
+1) ZIP içindeki src ve tests klasörlerini C:\Projects\jarvis-os içine kopyala.
+2) Windows sorarsa "Hedefteki dosyaları değiştir" seç.
+3) Test:
+   python -m unittest discover -s tests -v
+4) Çalıştır:
+   python main.py
+5) Deneme:
+   Bitcoin analiz et, AI fırsatlarını araştır ve NVIDIA'yı incele
+
+Bu paket:
+- Ollama'ya gönderilen kaynakları kısaltır.
+- Zaman aşımında boş rapor yerine kaynak tabanlı özet üretir.
+- Zaman aşımı içeren eski araştırma kaydını geçerli hafıza saymaz.
+- Çoklu görev çıktısına JARVIS Yönetici Özeti ekler.
+- Türkçe çıktı kurallarını sertleştirir.

@@ -1,27 +1,29 @@
 from dataclasses import dataclass, field
-from typing import List
+from datetime import datetime
 import uuid
 
 
 @dataclass
 class Task:
 
-    title: str
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
 
-    description: str
+    agent: str = "chat"
 
-    status: str = "waiting"
+    action: str = ""
+
+    target: str = ""
 
     priority: int = 1
 
-    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    status: str = "waiting"
 
-    subtasks: List["Task"] = field(default_factory=list)
+    result: str = ""
 
-    def complete(self):
+    error: str = ""
 
-        self.status = "completed"
+    created_at: datetime = field(default_factory=datetime.now)
 
-    def add_subtask(self, task):
+    finished_at: datetime | None = None
 
-        self.subtasks.append(task)
+    metadata: dict = field(default_factory=dict)

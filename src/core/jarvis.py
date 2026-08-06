@@ -1,64 +1,74 @@
 from src.ai.brain import Brain
-from src.core.commander import Commander
-
-from src.reasoning.reasoning_engine import ReasoningEngine
-
-from src.planner.planner import Planner
-from src.planner.task_queue import TaskQueue
-
 from src.core.agent_router import AgentRouter
-from src.core.executor import Executor
+from src.core.ceo import CEO
+from src.core.workflow_engine import WorkflowEngine
+from src.decision.decision_engine import DecisionEngine
+from src.memory.memory_manager import MemoryManager
+from src.mission.department import detect_mission_type
 
 
 class Jarvis:
-
-    def __init__(self):
-
+    def __init__(self) -> None:
         self.brain = Brain()
-
-        self.commander = Commander()
-
-        self.reasoning = ReasoningEngine()
-
-        self.planner = Planner()
-
-        self.queue = TaskQueue()
-
+        self.decision_engine = DecisionEngine()
         self.agent_router = AgentRouter()
+        self.workflow = WorkflowEngine(self.agent_router)
+        self.memory = MemoryManager()
 
-        self.executor = Executor(
-            self.queue,
-            self.agent_router,
-        )
+        # Sprint 14: mevcut CEO/Mission katmanına (Sprint 13) CANLI bağlantı.
+        # WorkflowEngine DEĞİŞTİRİLMEDİ; Mission yalnızca gerçekten gerekli
+        # olduğunda (bkz. _requires_mission) devreye girer, aksi halde eski
+        # akış (self.workflow.run) AYNEN çalışmaya devam eder.
+        self.ceo = CEO()
 
-    def chat(self, message: str):
+    def chat(self, message: str) -> str:
+        message = message.strip()
 
-        # 1) Görevi analiz et
-        plan = self.reasoning.analyze(message)
+        if not message:
+            return "Boş komut gönderildi."
 
-        # 2) Görev listesini oluştur
-        tasks = self.planner.build(message)
+        decision = self.decision_engine.analyze(message)
 
-        # 3) Kuyruğa ekle
-        self.queue.clear()
+        if decision.blocked:
+            return (
+                "Bu komut güvenlik nedeniyle engellendi.\n"
+                f"Sebep: {decision.reason}"
+            )
 
-        for task in tasks:
-            self.queue.add(task)
+        if decision.confirmation:
+            return (
+                "Bu işlem açık onay gerektiriyor ve henüz çalıştırılmadı.\n"
+                f"Sebep: {decision.reason}"
+            )
 
-        # 4) Görevleri çalıştır
-        results = self.executor.run()
+        if self._requires_mission(message):
+            return self._run_mission(message)
 
-        # 5) Eğer görev üretildiyse onları döndür
-        if results:
-            return "\n".join(results)
+        return self.workflow.run(message)
 
-        # 6) Hiç görev oluşmadıysa normal sohbet
-        return self.commander.process(message)
+    @staticmethod
+    def _requires_mission(message: str) -> bool:
+        """Mesaj, mevcut Mission sınıflandırıcısının (``src.mission``)
+        tanıdığı en az bir alan-özel sinyal içeriyorsa ``True``. Düz
+        sohbet ("Merhaba" gibi) hiçbir sinyalle eşleşmez → ``False`` →
+        eski ``WorkflowEngine`` akışı BOZULMADAN devam eder."""
+
+        return detect_mission_type(message) is not None
+
+    def _run_mission(self, message: str) -> str:
+        """Mission → TaskPlan → PlanExecutor → Execution zincirini
+        (Sprint 13, DEĞİŞTİRİLMEDİ) CANLI olarak çalıştırır; sonucu
+        Sprint 16'nın CEO Report Engine'i (``CEO.build_report`` ->
+        ``src.mission.report_builder``) ile okunabilir bir CEO raporuna
+        çevirir -- departmanların GERÇEK bulguları (GitHub/Evaluation/
+        Sandbox/Integration) artık kullanıcıya YANSITILIR, yalnızca
+        durum sayaçları değil."""
+
+        mission, _plan, _report = self.ceo.run_mission(message)
+        return self.ceo.build_report(mission)
 
     def remember(self, key, value):
-
-        self.brain.remember(key, value)
+        self.memory.save(key, value)
 
     def recall(self, key):
-
-        return self.brain.recall(key)
+        return self.memory.load(key)

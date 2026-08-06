@@ -1,1 +1,4 @@
 ddgs>=9.14.4,<10
+requests
+python-dotenv
+pytest

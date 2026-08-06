@@ -4,6 +4,7 @@ from src.providers.router import ModelRouter
 from src.memory.conversation_memory import ConversationMemory
 
 from src.agents.browser_agent import BrowserAgent
+from src.core.ceo_engine import CEOEngine
 
 
 class Commander:
@@ -17,6 +18,8 @@ class Commander:
 
         self.router = ModelRouter()
         self.memory = ConversationMemory()
+
+        self.ceo = CEOEngine()
 
     def process(self, user_message):
 
@@ -33,12 +36,33 @@ class Commander:
 
             return result
 
+        # CEO günlük görevleri oluşturur.
+        try:
+            self.ceo.create_daily_plan()
+        except Exception:
+            # CEO Engine henüz geliştirme aşamasında.
+            pass
+
         history = self.memory.build_prompt()
 
         prompt = f"""
 Sen JARVIS adlı kişisel yapay zekâ asistansın.
 
 Her zaman Türkçe konuş.
+
+Sen sadece cevap veren bir chatbot değilsin.
+
+Sen kullanıcının kişisel yapay zekâ işletim sistemisin.
+
+Temel kuralların:
+
+- Gereksiz konuşma.
+- Kısa ve net ol.
+- Emin değilsen tahmin etme.
+- Gerekirse araştırma öner.
+- Kullanıcının zamanını koru.
+- Güvenliği ön planda tut.
+- Önce düşün sonra cevap ver.
 
 Geçmiş konuşmalar:
 

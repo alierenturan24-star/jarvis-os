@@ -1,0 +1,7 @@
+APP_NAME = "JARVIS"
+
+VERSION = "1.0"
+
+LANGUAGE = "tr"
+
+DEFAULT_MODEL = "ollama"

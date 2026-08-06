@@ -17,3 +17,8 @@ Thumbs.db
 
 # Log dosyaları
 *.log
+
+# Çalışma zamanı verileri
+workspace/
+data/
+knowledge/

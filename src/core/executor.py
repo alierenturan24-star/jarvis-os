@@ -1,10 +1,17 @@
+from datetime import datetime
+
+
 class Executor:
 
-    def __init__(self, queue, agent_router):
+    def __init__(
+        self,
+        queue,
+        router,
+    ):
 
         self.queue = queue
 
-        self.agent_router = agent_router
+        self.router = router
 
     def run(self):
 
@@ -12,11 +19,17 @@ class Executor:
 
         while not self.queue.empty():
 
-            task = self.queue.pop()
+            task = self.queue.next()
 
-            result = self.agent_router.execute(task)
+            task.status = "running"
 
-            task.status = "completed"
+            result = self.router.execute(task)
+
+            task.status = "finished"
+
+            task.result = str(result)
+
+            task.finished_at = datetime.now()
 
             results.append(result)
 

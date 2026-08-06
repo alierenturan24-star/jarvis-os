@@ -12,18 +12,33 @@ def main() -> None:
 
     while runtime.state != runtime.STOPPED:
         try:
-            prompt = input("\nSen: ").strip()
+            first_line = input("\nSen: ")
+            stripped_first = first_line.strip()
 
-            if not prompt:
+            if not stripped_first:
                 continue
 
-            if prompt.lower() in {"çık", "exit", "quit", "kapat"}:
+            if stripped_first.lower() in {"çık", "exit", "quit", "kapat"}:
                 runtime.shutdown()
                 print("Jarvis güvenli şekilde kapatılıyor...")
                 break
 
-            if prompt.lower() in {"durum", "sistem durumu"}:
+            if stripped_first.lower() in {"durum", "sistem durumu"}:
                 print("\n" + runtime.status())
+                continue
+
+            # Çok satırlı görev girişi: kullanıcı boş satır veya "BITIR"
+            # yazana kadar satırlar tek mesajda biriktirilir.
+            lines = [first_line]
+            while True:
+                line = input("... ")
+                if line.strip().upper() == "BITIR" or line.strip() == "":
+                    break
+                lines.append(line)
+
+            prompt = "\n".join(lines).strip()
+
+            if not prompt:
                 continue
 
             print("\nJarvis uyandı. Görev çalışıyor...")

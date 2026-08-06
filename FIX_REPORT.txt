@@ -1,0 +1,20 @@
+JARVIS OS v0.5.1 - UYUMLULUK DÜZELTMESİ
+
+Düzeltilenler:
+- src/config/settings.py yeniden mevcut Settings sınıfı ile uyumlu hale getirildi.
+- Eski ve yeni ayar importları için geriye dönük uyumluluk eklendi.
+- src/core/router.py içindeki girinti/sözdizimi hatası düzeltildi.
+- src/providers/router.py tek merkezli provider router haline getirildi.
+- Ollama, AIML, OpenAI, Anthropic/Claude, Gemini, DeepSeek, Groq ve OpenRouter desteği birleştirildi.
+- Ek Python SDK paketleri gerektirmeden requests üzerinden API bağlantıları hazırlandı.
+- model_name parametresi AI Council ile uyumlu hale getirildi.
+- API anahtarı eksikse anlaşılır hata mesajı dönmesi sağlandı.
+
+Kontroller:
+- python -m compileall: BAŞARILI
+- pytest: 15/15 BAŞARILI
+- JarvisRuntime boot/status: BAŞARILI
+
+Not:
+- API anahtarları .env dosyasına kullanıcı tarafından eklenmelidir.
+- Gerçek API çağrıları anahtarlar boş olduğu için yapılmadı.

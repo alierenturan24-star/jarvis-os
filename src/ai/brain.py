@@ -1,35 +1,40 @@
-from src.memory.memory_manager import MemoryManager
+from src.providers.router import ModelRouter
 
 
 class Brain:
+
     def __init__(self):
-        self.memory = MemoryManager()
+        self.router = ModelRouter()
 
-    # -----------------------------
-    # Memory
-    # -----------------------------
-
-    def remember(self, key: str, value):
-        self.memory.save(key, value)
-
-    def recall(self, key: str):
-        return self.memory.load(key)
-
-    # -----------------------------
-    # Future
-    # -----------------------------
-
-    def think(self, message: str):
+    def think(
+        self,
+        prompt: str,
+        provider: str = None
+    ):
         """
-        Gelecekte burada;
-
-        - Planlama
-        - Karar verme
-        - Araştırma
-        - Tool seçimi
-        - Agent yönetimi
-
-        yapılacak.
+        İstenen modele soruyu gönderir.
+        Provider verilmezse varsayılan modeli kullanır.
         """
 
-        return None
+        return self.router.generate(
+            prompt=prompt,
+            provider_name=provider
+        )
+
+    def ask_openai(self, prompt):
+        return self.think(prompt, "openai")
+
+    def ask_claude(self, prompt):
+        return self.think(prompt, "anthropic")
+
+    def ask_gemini(self, prompt):
+        return self.think(prompt, "gemini")
+
+    def ask_deepseek(self, prompt):
+        return self.think(prompt, "deepseek")
+
+    def ask_groq(self, prompt):
+        return self.think(prompt, "groq")
+
+    def ask_aiml(self, prompt):
+        return self.think(prompt, "aiml")

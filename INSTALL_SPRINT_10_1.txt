@@ -1,0 +1,17 @@
+JARVIS Sprint 10.1 - Capability Registry
+
+1. Bu ZIP içindeki src ve tests klasörlerini C:\Projects\jarvis-os içine kopyala.
+2. Windows sorarsa hedefteki dosyaları değiştir.
+3. PowerShell'i C:\Projects\jarvis-os konumunda aç.
+4. Test:
+   python -m unittest discover -s tests -v
+5. JARVIS:
+   python main.py
+6. Deneme komutu:
+   Bitcoin analiz et, AI fırsatlarını araştır ve NVIDIA'yı incele
+
+Bu pakette:
+- WorkerRegistry eklendi.
+- AgentRouter registry üzerinden çalışıyor.
+- tests klasörü gerçekten pakete eklendi.
+- Bitcoin -> Bit temizleme hatası düzeltildi.

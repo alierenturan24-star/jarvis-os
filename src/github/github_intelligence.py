@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from src.github.categories import SUPPORTED_CATEGORIES
@@ -7,6 +8,7 @@ from src.github.client import GitHubClient
 from src.github.errors import GitHubIntelligenceError
 from src.github.models import RepoData, RepoRecommendation
 from src.github.scoring import build_reason, days_since, quality_score, risk_score
+from src.tools.web_search_tool import WebSearchTool
 
 # GitHub'daki bazı repolar (bozuk/otomatik oluşturulmuş metadata) description
 # alanında binlerce karakterlik ham sayfa/dosya dökümü taşıyabiliyor (ör.
@@ -110,6 +112,125 @@ class GitHubIntelligence:
                 repo.readme_excerpt = self.client.get_readme_excerpt(repo.full_name)
 
         return repos
+
+    def search_named_target(
+        self, name: str, max_results: int = 10, fetch_readme: bool = False,
+    ) -> list[RepoData]:
+        """Search an explicit project name before using a category fallback."""
+        name = (name or "").strip()
+        if not name:
+            return []
+        max_results = max(1, min(max_results, 50))
+        cache_key = "".join(ch for ch in name.casefold() if ch.isalnum())
+        cached = type(self)._named_search_cache.get(cache_key)
+        if cached is not None:
+            repos = list(cached[:max_results])
+            if fetch_readme and repos and not repos[0].readme_excerpt:
+                repos[0].readme_excerpt = self.client.get_readme_excerpt(repos[0].full_name)
+            return repos
+        try:
+            payload = self.client.get(
+                "/search/repositories",
+                params={"q": f'"{name}" in:name', "per_page": min(max_results, 30)},
+            )
+        except GitHubIntelligenceError:
+            repos = self._search_named_target_public(
+                name, max_results=max_results, fetch_readme=fetch_readme,
+            )
+            if repos:
+                type(self)._named_search_cache[cache_key] = list(repos)
+            return repos
+        items = payload.get("items", []) if isinstance(payload, dict) else []
+        repos = [self._to_repo_data(item, category="named target") for item in items[:max_results]]
+        normalized = "".join(ch for ch in name.casefold() if ch.isalnum())
+        repos = [repo for repo in repos if "".join(
+            ch for ch in repo.name.casefold() if ch.isalnum()
+        ) == normalized]
+        if self.fetch_contributors:
+            for repo in repos:
+                repo.contributors_count = self.client.get_contributor_count(repo.full_name)
+        if fetch_readme and repos:
+            # A named target needs evidence for the primary exact match, not
+            # one API/raw request per same-named fork.
+            repos[0].readme_excerpt = self.client.get_readme_excerpt(repos[0].full_name)
+        if repos:
+            type(self)._named_search_cache[cache_key] = list(repos)
+        return repos
+
+    def _search_named_target_public(
+        self, name: str, *, max_results: int, fetch_readme: bool,
+    ) -> list[RepoData]:
+        """Free web fallback used when the GitHub REST API is unavailable."""
+        result = WebSearchTool().search(f'"{name}" GitHub', max_results=max_results)
+        if not result.get("success"):
+            return []
+        expected = "".join(ch for ch in name.casefold() if ch.isalnum())
+        repos: list[RepoData] = []
+        seen: set[str] = set()
+        for item in result.get("results", []):
+            match = re.match(
+                r"https?://github\.com/([A-Za-z0-9-]+)/([A-Za-z0-9_.-]+?)(?:[/?#]|$)",
+                str(item.get("url", "")),
+            )
+            if not match:
+                continue
+            owner, repo_name = match.groups()
+            repo_name = repo_name.removesuffix(".git")
+            normalized = "".join(ch for ch in repo_name.casefold() if ch.isalnum())
+            full_name = f"{owner}/{repo_name}"
+            if normalized != expected or full_name.casefold() in seen:
+                continue
+            seen.add(full_name.casefold())
+            repo = RepoData(
+                name=repo_name, full_name=full_name,
+                url=f"https://github.com/{full_name}",
+                description=str(item.get("summary", ""))[:MAX_DESCRIPTION_LENGTH],
+                stars=0, forks=0, license="unknown", last_update="",
+                language="unknown", category="named target",
+            )
+            if fetch_readme and not repos:
+                repo.readme_excerpt = self.client.get_readme_excerpt(full_name)
+            repos.append(repo)
+            if len(repos) >= max_results:
+                break
+        return repos
+
+    # --- Tek repo (Sprint 31A: TargetResolver REPOSITORY hedefi) ------------
+
+    def get_repository(self, full_name: str, fetch_readme: bool = False) -> RepoData:
+        """Belirli bir ``sahip/repo``'yu DOĞRUDAN getirir -- ``search()``
+        gibi bir KATEGORİ araması YAPMAZ, GitHub'ın tek-repo REST
+        uç noktasını (``GET /repos/{full_name}``) tek bir istekle çağırır.
+
+        Kullanıcı açıkça bir repo adı/URL'i belirttiğinde (bkz.
+        ``src.mission.target_resolver.TargetResolver``, ``TargetKind.
+        REPOSITORY``), department adaptörlerinin alakasız bir kategori
+        aramasına DÜŞMEDEN doğrudan İSTENEN repoyu değerlendirebilmesi
+        için eklendi.
+        """
+
+        full_name = (full_name or "").strip().strip("/")
+        if not full_name or full_name.count("/") != 1:
+            raise GitHubIntelligenceError(
+                f"Geçersiz repo adı: {full_name!r} ('sahip/repo' biçimi bekleniyor)."
+            )
+
+        try:
+            payload = self.client.get(f"/repos/{full_name}")
+        except GitHubIntelligenceError:
+            raise
+        except Exception as error:  # beklenmeyen (ağ/parse dışı) hatalar
+            raise GitHubIntelligenceError(f"GitHub repo getirme başarısız: {error}") from error
+
+        repo = self._to_repo_data(payload, category="repository")
+
+        if self.fetch_contributors:
+            repo.contributors_count = self.client.get_contributor_count(repo.full_name)
+
+        if fetch_readme:
+            repo.readme_excerpt = self.client.get_readme_excerpt(repo.full_name)
+
+        return repo
 
     @staticmethod
     def _to_repo_data(item: dict, category: str) -> RepoData:
@@ -216,3 +337,4 @@ class GitHubIntelligence:
 
         recommendations.sort(key=lambda rec: (-rec.quality_score, rec.risk_score))
         return recommendations
+    _named_search_cache: dict[str, list[RepoData]] = {}

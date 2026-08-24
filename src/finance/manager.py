@@ -13,7 +13,7 @@ class FinanceManager:
         self.report_builder = FinanceReportBuilder()
         self.router = ModelRouter()
 
-    def analyze(self, asset: str) -> str:
+    def analyze(self, asset: str, preferred_provider: str | None = None) -> str:
         asset = asset.strip()
         if not asset:
             return "Analiz edilecek varlık belirtilmedi."
@@ -61,9 +61,29 @@ Görev:
 Finans raporu:
 """
 
-        analysis = self.router.generate(prompt=prompt, provider_name="ollama")
+        # Sprint 35: varsayılan hâlâ "ollama" (davranış BİREBİR eskisi
+        # gibi) -- AI Strategy Engine'in seçtiği provider yalnızca
+        # GERÇEKTEN kullanılabilirse devreye girer (yeni bir provider
+        # routing İCAT EDİLMEDİ, mevcut ``ProviderManager.get().
+        # is_available()`` kullanıldı).
+        provider_name = self._resolve_provider(preferred_provider)
+
+        # Sprint 40: Research'ün (Summarizer) zaten kullandığı
+        # ``route_and_generate``'e geçildi -- düz ``generate()`` yerine,
+        # otomatik Ollama fallback'i ve çağrı geçmişi kaydını (bkz.
+        # ``src.providers.execution_history``) ÜCRETSİZ kazanır; yeni bir
+        # fallback mantığı İCAT EDİLMEDİ.
+        route_result = self.router.manager.route_and_generate(
+            prompt=prompt, task_type="finance", preferred_provider=provider_name,
+        )
+        analysis = route_result.output
         if is_llm_failure(analysis):
             analysis = source_fallback(asset, selected, limit=5)
+        elif route_result.fallback_used:
+            analysis += (
+                f"\n\n(Not: birincil sağlayıcı ({route_result.chosen_provider}) başarısız oldu, "
+                f"otomatik olarak {route_result.provider_used}'a geçildi.)"
+            )
 
         report_path = self.report_builder.save(
             asset=asset,
@@ -82,3 +102,18 @@ Finans raporu:
             f"{analysis}\n\n"
             f"Rapor kaydedildi:\n{report_path}"
         )
+
+    def _resolve_provider(self, preferred_provider: str | None) -> str:
+        """Sprint 35: AI Strategy Engine'in seçtiği provider'ı yalnızca
+        GERÇEKTEN kullanılabilirse kullanır; aksi halde (veya hiç
+        verilmediyse) mevcut "ollama" varsayılanına düşer -- davranış
+        eskisiyle BİREBİR uyumlu kalır."""
+
+        if not preferred_provider:
+            return "ollama"
+
+        candidate = self.router.manager.get(preferred_provider)
+        if candidate is not None and candidate.is_available():
+            return preferred_provider
+
+        return "ollama"

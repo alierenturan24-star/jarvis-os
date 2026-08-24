@@ -47,10 +47,12 @@ class SandboxManager:
         max_repo_size_mb: float = 50.0,
         max_files: int = 5000,
         clone_timeout_seconds: int = 60,
+        subprocess_env: Optional[dict[str, str]] = None,
     ) -> None:
         self.max_repo_size_mb = max_repo_size_mb
         self.max_files = max_files
         self.clone_timeout_seconds = clone_timeout_seconds
+        self.subprocess_env = subprocess_env
         self._max_bytes = int(max_repo_size_mb * 1024 * 1024)
 
     # --- 1) Oluşturma ----------------------------------------------------------
@@ -119,16 +121,16 @@ class SandboxManager:
             return result
 
         command = [
-            "git", "-c", "core.symlinks=false", "-c", "core.longpaths=true",
+            "git", "-c", "credential.helper=", "-c", "core.symlinks=false", "-c", "core.longpaths=true",
             "clone", "--depth", "1", "--single-branch", "--no-tags",
             result.repository_url, result.sandbox_path,
         ]
 
         try:
-            proc = subprocess.run(
-                command, capture_output=True, text=True,
-                timeout=self.clone_timeout_seconds,
-            )
+            options = {"capture_output": True, "text": True, "timeout": self.clone_timeout_seconds}
+            if self.subprocess_env is not None:
+                options["env"] = self.subprocess_env
+            proc = subprocess.run(command, **options)
         except subprocess.TimeoutExpired:
             safe_rmtree(result.sandbox_path)
             result.status = SandboxStatus.FAILED

@@ -4,7 +4,7 @@ from src.core.ceo import CEO
 from src.core.workflow_engine import WorkflowEngine
 from src.decision.decision_engine import DecisionEngine
 from src.memory.memory_manager import MemoryManager
-from src.mission.department import detect_mission_type
+from src.mission.department import detect_mission_type, detect_research_loop_intent
 
 
 class Jarvis:
@@ -20,9 +20,13 @@ class Jarvis:
         # olduğunda (bkz. _requires_mission) devreye girer, aksi halde eski
         # akış (self.workflow.run) AYNEN çalışmaya devam eder.
         self.ceo = CEO()
+        self.last_mission = None
+        self.last_provider_route = None
 
-    def chat(self, message: str) -> str:
+    def chat(self, message: str, execution_hints: dict | None = None) -> str:
         message = message.strip()
+        self.last_mission = None
+        self.last_provider_route = None
 
         if not message:
             return "Boş komut gönderildi."
@@ -41,10 +45,28 @@ class Jarvis:
                 f"Sebep: {decision.reason}"
             )
 
-        if self._requires_mission(message):
-            return self._run_mission(message)
+        # Sprint 37: AUTONOMOUS RESEARCH LOOP -- "daha iyi ol"/"kendini
+        # geliştir" gibi açık self-improvement sinyali taşıyan istekler,
+        # tek seferlik Mission YERİNE (loop niyeti zaten bir Mission
+        # sinyali GEREKTİRİR, bkz. ``detect_research_loop_intent``)
+        # sınırlı-turlu bir araştırma döngüsüyle çalıştırılır. Bu kontrol
+        # ``_requires_mission``'DAN ÖNCE gelir; diğer TÜM Mission istekleri
+        # (297 mevcut test) eskisi gibi tek-seferlik kalır.
+        if self._requires_research_loop(message):
+            return self._run_research_loop(message)
 
-        return self.workflow.run(message)
+        if self._requires_mission(message):
+            return self._run_mission(message, execution_hints=execution_hints)
+
+        result = self.workflow.run(message)
+        chat_worker = self.agent_router.registry.get("chat")
+        self.last_provider_route = getattr(chat_worker, "last_route", None)
+        if self.last_provider_route is not None and not self.last_provider_route.success:
+            raise RuntimeError(
+                "All configured providers failed: "
+                + " -> ".join(self.last_provider_route.attempted_providers)
+            )
+        return result
 
     @staticmethod
     def _requires_mission(message: str) -> bool:
@@ -55,7 +77,24 @@ class Jarvis:
 
         return detect_mission_type(message) is not None
 
-    def _run_mission(self, message: str) -> str:
+    @staticmethod
+    def _requires_research_loop(message: str) -> bool:
+        """bkz. ``src.mission.department.detect_research_loop_intent`` --
+        yalnızca AÇIK bir self-improvement sinyali VE bir Mission sinyali
+        birlikte varsa ``True``."""
+
+        return detect_research_loop_intent(message)
+
+    def _run_research_loop(self, message: str) -> str:
+        """Sprint 37: Mission → TaskPlan → PlanExecutor zincirini (Sprint
+        13-36, DEĞİŞTİRİLMEDİ) sınırlı sayıda tur çalıştırır (bkz.
+        ``CEO.run_research_loop``), sonucu ``CEO.build_research_loop_report``
+        ile okunabilir bir rapora çevirir."""
+
+        result = self.ceo.run_research_loop(message)
+        return self.ceo.build_research_loop_report(result)
+
+    def _run_mission(self, message: str, execution_hints: dict | None = None) -> str:
         """Mission → TaskPlan → PlanExecutor → Execution zincirini
         (Sprint 13, DEĞİŞTİRİLMEDİ) CANLI olarak çalıştırır; sonucu
         Sprint 16'nın CEO Report Engine'i (``CEO.build_report`` ->
@@ -64,7 +103,8 @@ class Jarvis:
         Sandbox/Integration) artık kullanıcıya YANSITILIR, yalnızca
         durum sayaçları değil."""
 
-        mission, _plan, _report = self.ceo.run_mission(message)
+        mission, _plan, _report = self.ceo.run_mission(message, execution_hints=execution_hints)
+        self.last_mission = mission
         return self.ceo.build_report(mission)
 
     def remember(self, key, value):

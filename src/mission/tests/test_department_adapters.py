@@ -17,6 +17,7 @@ from src.mission.department_adapters import (
     resolve_search_category,
 )
 from src.mission.mission_engine import MissionEngine
+from src.mission.target_resolver import Target, TargetKind
 from src.sandbox.models import SandboxResult, SandboxStatus
 from src.sandbox.sandbox_manager import SandboxManager
 
@@ -32,7 +33,8 @@ def _repo(name: str = "octocat/sample-agent", stars: int = 999) -> RepoData:
         name=name.split("/")[-1],
         full_name=name,
         url=f"https://github.com/{name}",
-        description="A sample AI agent repo used for adapter tests.",
+        description="An autonomous LLM agent orchestration workflow with task agents.",
+        topics=["ai-agent", "llm", "orchestration", "workflow"],
         stars=stars,
         forks=10,
         license="mit",
@@ -209,6 +211,172 @@ class TestIntegrationDepartmentAgentCallsRealClass:
         assert "ok-summary" in output
 
 
+# --- Sprint 31A: REPOSITORY hedefi -- kategori araması YAPILMAMALI -------------
+
+
+def _repository_target():
+    return Target(
+        kind=TargetKind.REPOSITORY,
+        owner="browser-use",
+        repo="browser-use",
+        full_name="browser-use/browser-use",
+        url="https://github.com/browser-use/browser-use",
+        category_hint="ai agent",
+    )
+
+
+class TestRepositoryTargetBypassesCategorySearch:
+    """4 adaptörün de (github/evaluation/sandbox/integration), Mission.target
+    bir REPOSITORY olduğunda ``GitHubIntelligence.search()``'i (kategori
+    araması) HİÇ çağırmadığını, doğrudan ``get_repository()`` ile TEK
+    (istenen) repoyu getirdiğini doğrular -- "stripe/ai" gibi alakasız
+    bir repo asla seçilmemeli."""
+
+    def test_github_department_calls_get_repository_not_search(self, monkeypatch):
+        calls = {"search": 0, "get_repository": None}
+
+        monkeypatch.setattr(
+            GitHubIntelligence, "search",
+            lambda self, *a, **k: calls.__setitem__("search", calls["search"] + 1) or [],
+        )
+        monkeypatch.setattr(
+            GitHubIntelligence, "get_repository",
+            lambda self, full_name, fetch_readme=False: calls.__setitem__("get_repository", full_name)
+            or _repo(full_name),
+        )
+
+        agent = GitHubDepartmentAgent()
+        task = Task(
+            title="t", agent="github", target="ignored",
+            metadata={"target": _repository_target()},
+        )
+        output = agent.execute(task)
+
+        assert calls["search"] == 0
+        assert calls["get_repository"] == "browser-use/browser-use"
+        assert "browser-use/browser-use" in output
+        assert "stripe/ai" not in output
+
+    def test_evaluation_department_calls_get_repository_not_search(self, monkeypatch):
+        calls = {"search": 0, "get_repository": None}
+
+        monkeypatch.setattr(
+            GitHubIntelligence, "search",
+            lambda self, *a, **k: calls.__setitem__("search", calls["search"] + 1) or [],
+        )
+        monkeypatch.setattr(
+            GitHubIntelligence, "get_repository",
+            lambda self, full_name, fetch_readme=False: calls.__setitem__("get_repository", full_name)
+            or _repo(full_name),
+        )
+        monkeypatch.setattr(
+            SandboxManager, "run_pipeline",
+            lambda self, url, evaluation, repo=None: SandboxResult(
+                repository_name=repo.full_name if repo else url, repository_url=url,
+                status=SandboxStatus.READY_FOR_REVIEW, recommended_action="ok",
+            ),
+        )
+        monkeypatch.setattr(SandboxManager, "cleanup", lambda self, result: None)
+        monkeypatch.setattr(
+            IntegrationPlanner, "analyze",
+            lambda self, sandbox_result, evaluation: IntegrationPlan(
+                repository_name=evaluation.name, repository_url=evaluation.url,
+                target_module="src/agents", target_package="src/agents",
+                integration_strategy="test", estimated_files=1,
+                estimated_changes=1, estimated_risk="LOW",
+                breaking_change_probability=0.0, summary="ok-summary",
+            ),
+        )
+
+        agent = EvaluationDepartmentAgent()
+        task = Task(
+            title="t", agent="evaluation", target="ignored",
+            metadata={"target": _repository_target()},
+        )
+        output = agent.execute(task)
+
+        assert calls["search"] == 0
+        assert calls["get_repository"] == "browser-use/browser-use"
+        assert "browser-use/browser-use" in output
+        assert "stripe/ai" not in output
+
+    def test_sandbox_department_calls_get_repository_not_search(self, monkeypatch):
+        calls = {"search": 0, "get_repository": None}
+
+        monkeypatch.setattr(
+            GitHubIntelligence, "search",
+            lambda self, *a, **k: calls.__setitem__("search", calls["search"] + 1) or [],
+        )
+        monkeypatch.setattr(
+            GitHubIntelligence, "get_repository",
+            lambda self, full_name, fetch_readme=False: calls.__setitem__("get_repository", full_name)
+            or _repo(full_name),
+        )
+        monkeypatch.setattr(
+            SandboxManager, "run_pipeline",
+            lambda self, url, evaluation, repo=None: SandboxResult(
+                repository_name=repo.full_name if repo else url, repository_url=url,
+                status=SandboxStatus.READY_FOR_REVIEW, recommended_action="ok",
+            ),
+        )
+        monkeypatch.setattr(SandboxManager, "cleanup", lambda self, result: None)
+
+        agent = SandboxDepartmentAgent()
+        task = Task(
+            title="t", agent="sandbox", target="ignored",
+            metadata={"target": _repository_target()},
+        )
+        output = agent.execute(task)
+
+        assert calls["search"] == 0
+        assert calls["get_repository"] == "browser-use/browser-use"
+        assert "browser-use/browser-use" in output
+        assert "stripe/ai" not in output
+
+    def test_integration_department_calls_get_repository_not_search(self, monkeypatch):
+        calls = {"search": 0, "get_repository": None}
+
+        monkeypatch.setattr(
+            GitHubIntelligence, "search",
+            lambda self, *a, **k: calls.__setitem__("search", calls["search"] + 1) or [],
+        )
+        monkeypatch.setattr(
+            GitHubIntelligence, "get_repository",
+            lambda self, full_name, fetch_readme=False: calls.__setitem__("get_repository", full_name)
+            or _repo(full_name),
+        )
+        monkeypatch.setattr(
+            SandboxManager, "run_pipeline",
+            lambda self, url, evaluation, repo=None: SandboxResult(
+                repository_name=repo.full_name if repo else url, repository_url=url,
+                status=SandboxStatus.READY_FOR_REVIEW, recommended_action="ok",
+            ),
+        )
+        monkeypatch.setattr(SandboxManager, "cleanup", lambda self, result: None)
+        monkeypatch.setattr(
+            IntegrationPlanner, "analyze",
+            lambda self, sandbox_result, evaluation: IntegrationPlan(
+                repository_name=evaluation.name, repository_url=evaluation.url,
+                target_module="src/agents", target_package="src/agents",
+                integration_strategy="test", estimated_files=1,
+                estimated_changes=1, estimated_risk="LOW",
+                breaking_change_probability=0.0, summary="ok-summary",
+            ),
+        )
+
+        agent = IntegrationDepartmentAgent()
+        task = Task(
+            title="t", agent="integration", target="ignored",
+            metadata={"target": _repository_target()},
+        )
+        output = agent.execute(task)
+
+        assert calls["search"] == 0
+        assert calls["get_repository"] == "browser-use/browser-use"
+        assert "browser-use/browser-use" in output
+        assert "stripe/ai" not in output
+
+
 # --- research/finance/browser: mevcut ajanlar YENİDEN kullanılıyor mu ---------
 
 
@@ -226,10 +394,36 @@ class TestRegistryReusesExistingAgentsNoDuplicateSystem:
             assert type(handler.__self__).__name__ == expected_class_name
             assert isinstance(handler.__self__, BaseAgent)
 
+    def test_media_and_automation_resolve_to_new_sprint_39_agents(self):
+        # Sprint 39: media/automation artık GERÇEK, bağımsız alt sistemlere
+        # bağlı (bkz. src.media/src.automation) -- ikisi de mevcut
+        # BaseAgent sözleşmesini kullanan YENİ ama küçük ajanlardır, ikinci
+        # bir Mission/Agent mimarisi İCAT EDİLMEDİ.
+        registry = DepartmentAdapterRegistry()
+
+        for department, expected_class_name in (
+            ("media", "MediaAgent"),
+            ("automation", "AutomationAgent"),
+        ):
+            handler = registry.resolve(department)
+            assert handler is not None
+            assert type(handler.__self__).__name__ == expected_class_name
+            assert isinstance(handler.__self__, BaseAgent)
+
+    def test_coding_resolves_to_existing_worker_routed_agent(self):
+        handler = DepartmentAdapterRegistry().resolve("coding")
+        assert handler is not None
+        assert type(handler.__self__).__name__ == "CodingAgent"
+
     def test_still_unconnected_departments_resolve_to_none(self):
         registry = DepartmentAdapterRegistry()
-        for department in ("automation", "media", "social_media", "security", "learning", "coding"):
+        for department in ("social_media", "security"):
             assert registry.resolve(department) is None
+
+    def test_learning_resolves_to_finance_learning_handler(self):
+        handler = DepartmentAdapterRegistry().resolve("learning")
+        assert handler is not None
+        assert type(handler.__self__).__name__ == "FinanceLearningAgent"
 
 
 # --- Mission -> TaskPlan -> Execution -> Gerçek handler -> Sonuç ---------------

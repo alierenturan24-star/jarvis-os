@@ -1,21 +1,33 @@
 from __future__ import annotations
 
+import re
 import time
 from typing import Callable, Optional
 
+from src.agents.automation_agent import AutomationAgent
 from src.agents.base_agent import BaseAgent
 from src.agents.browser_agent import BrowserAgent
+from src.agents.coding_agent import CodingAgent
 from src.agents.finance_agent import FinanceAgent
+from src.finance.learning import FinanceLearningAgent
+from src.agents.media_agent import MediaAgent
 from src.agents.research_agent import ResearchAgent
 from src.evaluation.evaluation_engine import EvaluationEngine
 from src.evolution.collector import EvolutionCollector
 from src.evolution.scorer import EvolutionScorer
-from src.github.categories import SUPPORTED_CATEGORIES
+from src.github.errors import GitHubIntelligenceError
 from src.github.github_intelligence import GitHubIntelligence
 from src.github.scoring import build_reason
 from src.integration.integration_planner import IntegrationPlanner
 from src.jobs.task import Task
-from src.mission.models import MissionType
+from src.mission.target_resolver import (  # noqa: F401 -- geriye dönük uyumluluk için yeniden dışa aktarım
+    MISSION_TYPE_TO_GITHUB_CATEGORY,
+    Target,
+    TargetKind,
+    TargetResolver,
+    resolve_search_category,
+    target_matches_repo,
+)
 from src.sandbox.sandbox_manager import SandboxManager
 
 # Sprint 16 (CEO Report Engine): her adaptör, kendi ÇOKTAN HESAPLADIĞI
@@ -34,52 +46,123 @@ GITHUB_REPORT_SEARCH_LIMIT = 12
 # bkz. ``src.jobs.task.Task``) bağlar.
 
 
-# Sprint 21 düzeltmesi: metin İngilizce kategori adını içermediğinde (ki
-# Türkçe mission metinlerinin neredeyse tamamı böyledir), önceden HER ZAMAN
-# "ai agent"a düşülüyordu -- mission zaten sınıflandırılmış bir MissionType
-# taşıdığı halde bu bilgi kullanılmıyordu. Bu eşleme, mevcut MissionType
-# sınıflandırmasını (Sprint 13) mevcut GitHub kategorileriyle (Sprint 9,
-# ``SUPPORTED_CATEGORIES``) BİRLEŞTİRİR -- yeni bir sınıflandırma/kategori
-# sistemi İCAT ETMEZ. CODE/GITHUB/AI_DISCOVERY için "ai agent"/"llm" hâlâ
-# en isabetli seçenektir (JARVIS'in kendisi bir AI agent'tır) -- bu artık
-# kasıtlı bir eşleme, "hiçbiri eşleşmedi" varsayılanı değil.
-MISSION_TYPE_TO_GITHUB_CATEGORY: dict[MissionType, str] = {
-    MissionType.YOUTUBE: "youtube automation",
-    MissionType.BROWSER: "browser agent",
-    MissionType.FINANCE: "finance ai",
-    MissionType.MEDIA: "video generation",
-    MissionType.LEARNING: "llm",
-    MissionType.AI_DISCOVERY: "llm",
-    MissionType.CODE: "ai agent",
-    MissionType.GITHUB: "ai agent",
-    MissionType.SECURITY: "ai agent",
-    MissionType.SOCIAL_MEDIA: "ai agent",
-    MissionType.AUTOMATION: "ai agent",
-    MissionType.RESEARCH: "ai agent",
-}
+# Sprint 21'de burada tanımlanmış olan ``MISSION_TYPE_TO_GITHUB_CATEGORY``
+# ve ``resolve_search_category()``, Sprint 31A'da ``target_resolver.py``'ye
+# TAŞINDI (yukarıdaki import bloğundan yeniden dışa aktarılıyor -- geriye
+# dönük uyumluluk, davranış BİREBİR AYNI). Aşağıdaki 4 adaptör artık bu
+# fonksiyonu DOĞRUDAN çağırmıyor: Mission oluşturulurken TEK bir kez
+# üretilmiş ``Target``'ı (``task.metadata["target"]``) okuyor -- kategori
+# çözümlemesi yalnızca ``target.kind == CATEGORY`` iken, TEK bir yerden
+# (``TargetResolver`` içinde) devreye giriyor (bkz. Sprint 31B tasarımı).
 
 
-def resolve_search_category(text: str, mission_type: Optional[MissionType] = None) -> str:
-    """Bir GitHub arama kategorisi çıkarır.
+# Sprint 33B: README'nin kendisi CEO raporuna HAM olarak basılmaz --
+# yeni bir LLM/Agent/Provider İCAT ETMEDEN, sabit anahtar kelime/madde-
+# işareti sezgileriyle kısa, kontrollü bir özet çıkarılır (proje amacı /
+# temel özellikler / kurulum-bağımlılık sinyalleri / güvenlik notları).
+_FEATURE_LINE_PATTERN = re.compile(r"^\s*[-*•]\s+(.*)")
+_MARKDOWN_IMAGE_PATTERN = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+_MARKDOWN_LINK_PATTERN = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+_README_SETUP_KEYWORDS = (
+    "install", "npm install", "pip install", "requirements.txt", "docker",
+    "pnpm", "yarn", "prerequisite", "kurulum", "bağımlılık", "dependency",
+    "dependencies", "setup", ".env",
+)
+_README_SECURITY_KEYWORDS = (
+    "api key", "api_key", "secret", "token", "password", "credential",
+    "oauth", "güvenlik", "security", "vulnerability",
+)
+_README_SUMMARY_MAX_CHARS = 200
+_README_FEATURE_MAX_ITEMS = 5
 
-    Departman görevlerinin ``target``'ı bir Mission başlığı (serbest
-    Türkçe metin), GitHub arama kategorisi (İngilizce, sabit 10 seçenek
-    -- bkz. ``SUPPORTED_CATEGORIES``) DEĞİLDİR. Öncelik: (1) metin
-    kategorilerden birini kelimesi kelimesine içeriyorsa o kullanılır;
-    (2) yoksa ve ``mission_type`` verildiyse ``MISSION_TYPE_TO_GITHUB_CATEGORY``
-    eşlemesi kullanılır; (3) o da yoksa güvenli/genel "ai agent"
-    varsayılanına düşülür.
-    """
 
-    lowered = (text or "").lower()
-    for category in SUPPORTED_CATEGORIES:
-        if category in lowered:
-            return category
-    if mission_type is not None:
-        mapped = MISSION_TYPE_TO_GITHUB_CATEGORY.get(mission_type)
-        if mapped:
-            return mapped
-    return "ai agent"
+def summarize_readme(text: Optional[str]) -> Optional[dict]:
+    """Bir README metninden (``RepoData.readme_excerpt``) kısa, kontrollü
+    bir özet üretir: proje amacı, temel özellikler (madde işaretli
+    satırlar), kurulum/bağımlılık sinyalleri, güvenlik açısından önemli
+    noktalar. Salt-deterministik/sezgisel (regex + anahtar kelime) --
+    hiçbir LLM çağrısı YAPMAZ. Metin yoksa/boşsa ``None`` döner."""
+
+    if not text or not text.strip():
+        return None
+
+    lines = text.splitlines()
+
+    purpose = ""
+    for raw_line in lines:
+        stripped = raw_line.strip()
+        if stripped.startswith("#"):
+            continue  # başlık satırı -- proje adı DEĞİL, gerçek amaç cümlesi aranıyor
+        cleaned = _MARKDOWN_IMAGE_PATTERN.sub("", stripped)
+        cleaned = _MARKDOWN_LINK_PATTERN.sub(r"\1", cleaned).strip()
+        if len(cleaned) > 15 and not cleaned.lower().startswith(("http://", "https://")):
+            purpose = cleaned[:_README_SUMMARY_MAX_CHARS]
+            break
+
+    features: list[str] = []
+    for raw_line in lines:
+        match = _FEATURE_LINE_PATTERN.match(raw_line)
+        if not match:
+            continue
+        feature = match.group(1).strip()
+        if feature and feature not in features:
+            features.append(feature[:120])
+        if len(features) >= _README_FEATURE_MAX_ITEMS:
+            break
+
+    lowered = text.lower()
+    setup_signals = sorted({kw for kw in _README_SETUP_KEYWORDS if kw in lowered})
+    security_notes = sorted({kw for kw in _README_SECURITY_KEYWORDS if kw in lowered})
+
+    return {
+        "purpose": purpose or "(README'den net bir amaç cümlesi çıkarılamadı)",
+        "features": features,
+        "setup_signals": setup_signals,
+        "security_notes": security_notes,
+    }
+
+
+def _resolve_task_target(task: Task) -> Target:
+    """``task.metadata["target"]``'ı okur; yoksa (Mission'ı doğrudan,
+    ``MissionEngine`` atlanarak oluşturan eski/test kodu için) AYNI
+    ``TargetResolver`` ile anlık olarak çözümler -- davranış AYNI kalır,
+    yalnızca "bir kez mi, anlık mı" değişir."""
+
+    target = task.metadata.get("target")
+    if target is not None:
+        return target
+    return TargetResolver().resolve(
+        str(getattr(task, "target", "")), mission_type=task.metadata.get("mission_type")
+    )
+
+
+def search_target_repositories(
+    intelligence, target: Target, *, max_results: int, fetch_readme: bool = False,
+):
+    """Search a named project first and use its category only as fallback."""
+    if target.requested_name:
+        named_search = getattr(intelligence, "search_named_target", None)
+        if named_search is not None:
+            repos = named_search(
+                target.requested_name,
+                max_results=max_results,
+                fetch_readme=fetch_readme,
+            )
+            if repos:
+                return repos, target.requested_name
+    category = target.category_hint or "ai agent"
+    search_kwargs = {"max_results": max_results}
+    if fetch_readme:
+        search_kwargs["fetch_readme"] = True
+    repos = intelligence.search(category, **search_kwargs)
+    # Category search is discovery, not evidence by itself.  Apply the same
+    # semantic relevance model used by Evaluation so a high-star but
+    # off-domain repository cannot count as a capability candidate.
+    from src.evaluation.relevance import RELEVANCE_LOW_THRESHOLD, relevance_score
+    repos = [repo for repo in repos if relevance_score(repo) >= RELEVANCE_LOW_THRESHOLD]
+    if target.requested_name:
+        repos = [repo for repo in repos if target_matches_repo(target, repo)]
+    return repos, category
 
 
 class GitHubDepartmentAgent(BaseAgent):
@@ -90,14 +173,58 @@ class GitHubDepartmentAgent(BaseAgent):
         self.intelligence = intelligence or GitHubIntelligence()
 
     def execute(self, task: Task) -> str:
-        category = resolve_search_category(
-            str(getattr(task, "target", "")), mission_type=task.metadata.get("mission_type"),
+        target = _resolve_task_target(task)
+
+        # Sprint 31A: REPOSITORY hedefi -- kategori araması YAPILMAZ,
+        # doğrudan owner/repo üzerinden TEK repo getirilir (bkz. adım 6).
+        if target.kind == TargetKind.REPOSITORY:
+            # Sprint 33B: kullanıcı açıkça TEK bir repo istediğinde (ör.
+            # "github.com/owner/repo"), README de bu tek, deliberate hedef
+            # için ucuz (tek istek) bir ek çağrıyla çekilir.
+            try:
+                repo = self.intelligence.get_repository(target.full_name, fetch_readme=True)
+            except GitHubIntelligenceError as error:
+                task.metadata["report"] = {
+                    "category": None, "target": target.full_name, "total_found": 0, "top": [],
+                    "evidence_repo": None, "readme_summary": None,
+                }
+                return f"GitHubIntelligence.get_repository('{target.full_name}'): {error}"
+
+            quality, risk = self.intelligence.score(repo)
+            scored = [{
+                "repo": repo,
+                "quality_score": quality,
+                "risk_score": risk,
+                "reason": build_reason(repo, quality, risk),
+            }]
+            task.metadata["report"] = {
+                "category": None, "target": target.full_name, "total_found": 1, "top": scored,
+                "evidence_repo": repo.full_name,
+                "readme_summary": summarize_readme(repo.readme_excerpt),
+            }
+            return (
+                f"GitHubIntelligence.get_repository('{target.full_name}') -> "
+                f"{repo.full_name} ({repo.stars}★) {repo.url}"
+            )
+
+        category = target.category_hint or "ai agent"
+        # Sprint 33B: mission genelinde bir "kanıt reposu" belirlendiyse
+        # (bkz. DepartmentOrchestrator._resolve_evidence_repo -- yalnızca
+        # AI Validation Pipeline gerçekten çalışıyorsa dolu gelir), o
+        # adayın README'si de aynı arama isteğiyle (ek istek YAPMADAN)
+        # çekilir; aksi halde (sade GitHub taraması) davranış DEĞİŞMEZ.
+        evidence_repo = task.metadata.get("evidence_repo")
+        repos, search_query = search_target_repositories(
+            self.intelligence, target, max_results=GITHUB_REPORT_SEARCH_LIMIT,
+            fetch_readme=bool(evidence_repo),
         )
-        repos = self.intelligence.search(category, max_results=GITHUB_REPORT_SEARCH_LIMIT)
 
         if not repos:
-            task.metadata["report"] = {"category": category, "total_found": 0, "top": []}
-            return f"GitHubIntelligence.search('{category}'): repo bulunamadı."
+            task.metadata["report"] = {
+                "category": category, "total_found": 0, "top": [],
+                "evidence_repo": evidence_repo, "readme_summary": None,
+            }
+            return f"GitHubIntelligence.search('{search_query}'): repo bulunamadı."
 
         # Sıralama için ZATEN VAR OLAN puanlama (GitHubIntelligence.score,
         # aynen GitHubIntelligence.recommend()'in kendi içinde yaptığı gibi)
@@ -114,13 +241,21 @@ class GitHubDepartmentAgent(BaseAgent):
             })
         scored.sort(key=lambda item: (-item["quality_score"], item["risk_score"]))
 
+        readme_summary = None
+        if evidence_repo:
+            match = next((item for item in scored if item["repo"].full_name == evidence_repo), None)
+            if match is not None:
+                readme_summary = summarize_readme(match["repo"].readme_excerpt)
+
         task.metadata["report"] = {
             "category": category,
             "total_found": len(repos),
             "top": scored[:5],
+            "evidence_repo": evidence_repo,
+            "readme_summary": readme_summary,
         }
 
-        lines = [f"GitHubIntelligence.search('{category}') -> {len(repos)} repo bulundu."]
+        lines = [f"GitHubIntelligence.search('{search_query}') -> {len(repos)} repo bulundu."]
         for item in scored[:5]:
             lines.append(f"- {item['repo'].full_name} ({item['repo'].stars}★) {item['repo'].url}")
         return "\n".join(lines)
@@ -161,14 +296,36 @@ class EvaluationDepartmentAgent(BaseAgent):
         self.planner = planner or IntegrationPlanner()
 
     def execute(self, task: Task) -> str:
-        category = resolve_search_category(
-            str(getattr(task, "target", "")), mission_type=task.metadata.get("mission_type"),
-        )
-        repos = self.intelligence.search(category, max_results=EVALUATION_CANDIDATE_LIMIT)
+        target = _resolve_task_target(task)
 
-        if not repos:
-            task.metadata["report"] = {"category": category, "candidates": [], "summary": None}
-            return f"EvaluationEngine: '{category}' kategorisinde değerlendirilecek repo bulunamadı."
+        # Sprint 31A: REPOSITORY hedefi -- kategori araması YAPILMAZ,
+        # doğrudan owner/repo üzerinden TEK repo değerlendirilir.
+        # Sprint 32: ``fetch_readme=True`` -- EvaluationEngine.evaluate()
+        # -> relevance_score() -> _readme_bonus() ZATEN ``repo.
+        # readme_excerpt``'i puanlamada kullanıyordu (bkz.
+        # src/evaluation/relevance.py) ama hiçbir çağıran bunu
+        # doldurmuyordu (hep ``None``); burada AÇILIYOR -- yeni bir
+        # puanlama/özellik İCAT EDİLMEDİ, zaten var olan bir yol devreye
+        # sokuluyor.
+        if target.kind == TargetKind.REPOSITORY:
+            category = None
+            try:
+                repos = [self.intelligence.get_repository(target.full_name, fetch_readme=True)]
+            except GitHubIntelligenceError as error:
+                task.metadata["report"] = {
+                    "category": None, "candidates": [], "summary": None,
+                }
+                return f"EvaluationEngine: get_repository('{target.full_name}') başarısız: {error}"
+        else:
+            category = target.category_hint or "ai agent"
+            repos, _ = search_target_repositories(
+                self.intelligence, target,
+                max_results=EVALUATION_CANDIDATE_LIMIT, fetch_readme=True,
+            )
+
+            if not repos:
+                task.metadata["report"] = {"category": category, "candidates": [], "summary": None}
+                return f"EvaluationEngine: '{category}' kategorisinde değerlendirilecek repo bulunamadı."
 
         candidates = [self._validate_candidate(repo) for repo in repos]
         summary = self.engine.summary([c["evaluation"] for c in candidates])
@@ -247,12 +404,14 @@ class SandboxDepartmentAgent(BaseAgent):
         self.manager = manager or SandboxManager()
 
     def execute(self, task: Task) -> str:
-        repo, evaluation = self._pick_candidate(task)
+        target = _resolve_task_target(task)
+        evidence_repo = task.metadata.get("evidence_repo")
+        repo, evaluation = self._pick_candidate(target, evidence_repo=evidence_repo)
         if repo is None or evaluation is None:
-            category = resolve_search_category(
-                str(getattr(task, "target", "")), mission_type=task.metadata.get("mission_type"),
-            )
             task.metadata["report"] = {"repo": None, "result": None, "duration_seconds": 0.0}
+            if target.kind == TargetKind.REPOSITORY:
+                return f"SandboxManager: '{target.full_name}' repo'su getirilemedi."
+            category = target.category_hint or "ai agent"
             return f"SandboxManager: '{category}' kategorisinde denenecek repo bulunamadı."
 
         # Gerçek geçen süre -- SandboxManager hiçbir CPU/RAM ölçümü
@@ -277,13 +436,31 @@ class SandboxDepartmentAgent(BaseAgent):
         finally:
             self.manager.cleanup(result)
 
-    def _pick_candidate(self, task: Task):
-        category = resolve_search_category(
-            str(getattr(task, "target", "")), mission_type=task.metadata.get("mission_type"),
-        )
-        repos = self.intelligence.search(category, max_results=5)
+    def _pick_candidate(self, target: Target, evidence_repo: Optional[str] = None):
+        # Sprint 31A: REPOSITORY hedefi -- kategori araması YAPILMAZ,
+        # doğrudan owner/repo üzerinden TEK repo getirilip değerlendirilir.
+        if target.kind == TargetKind.REPOSITORY:
+            try:
+                repo = self.intelligence.get_repository(target.full_name)
+            except GitHubIntelligenceError:
+                return None, None
+            return repo, self.engine.evaluate(repo)
+
+        category = target.category_hint or "ai agent"
+        repos, _ = search_target_repositories(self.intelligence, target, max_results=5)
         if not repos:
             return None, None
+
+        # Sprint 33B: mission genelinde bir "kanıt reposu" belirlendiyse
+        # (bkz. DepartmentOrchestrator._resolve_evidence_repo), Evaluation/
+        # Sandbox/Integration/README'in AYNI repoyu değerlendirmesi için
+        # önce bu arama sonuçları arasında ONU arar -- bulunamazsa (nadir,
+        # farklı bir arama anına denk gelme ihtimali) mevcut top_candidates
+        # mantığına GÜVENLİ şekilde düşer.
+        if evidence_repo:
+            matched = next((r for r in repos if r.full_name == evidence_repo), None)
+            if matched is not None:
+                return matched, self.engine.evaluate(matched)
 
         evaluations = self.engine.evaluate_many(repos)
         candidates = self.engine.top_candidates(evaluations, limit=1, only_suitable=False)
@@ -317,22 +494,43 @@ class IntegrationDepartmentAgent(BaseAgent):
         self.planner = planner or IntegrationPlanner()
 
     def execute(self, task: Task) -> str:
-        category = resolve_search_category(
-            str(getattr(task, "target", "")), mission_type=task.metadata.get("mission_type"),
-        )
-        repos = self.intelligence.search(category, max_results=5)
-        if not repos:
-            task.metadata["report"] = {"repo": None, "plan": None}
-            return f"IntegrationPlanner: '{category}' kategorisinde aday bulunamadı."
+        target = _resolve_task_target(task)
+        evidence_repo = task.metadata.get("evidence_repo")
 
-        evaluations = self.engine.evaluate_many(repos)
-        candidates = self.engine.top_candidates(evaluations, limit=1, only_suitable=False)
-        if not candidates:
-            task.metadata["report"] = {"repo": None, "plan": None}
-            return "IntegrationPlanner: değerlendirme sonrası aday kalmadı."
+        # Sprint 31A: REPOSITORY hedefi -- kategori araması YAPILMAZ,
+        # doğrudan owner/repo üzerinden TEK repo entegrasyon için analiz edilir.
+        if target.kind == TargetKind.REPOSITORY:
+            try:
+                repo = self.intelligence.get_repository(target.full_name)
+            except GitHubIntelligenceError as error:
+                task.metadata["report"] = {"repo": None, "plan": None}
+                return f"IntegrationPlanner: get_repository('{target.full_name}') başarısız: {error}"
+            evaluation = self.engine.evaluate(repo)
+        else:
+            category = target.category_hint or "ai agent"
+            repos, _ = search_target_repositories(self.intelligence, target, max_results=5)
+            if not repos:
+                task.metadata["report"] = {"repo": None, "plan": None}
+                return f"IntegrationPlanner: '{category}' kategorisinde aday bulunamadı."
 
-        evaluation = candidates[0]
-        repo = next((r for r in repos if r.name == evaluation.name), repos[0])
+            # Sprint 33B: mission genelinde bir "kanıt reposu" belirlendiyse,
+            # Evaluation/Sandbox/Integration/README'in AYNI repoyu
+            # değerlendirmesi için önce bu arama sonuçları arasında ONU
+            # arar -- bulunamazsa mevcut top_candidates mantığına düşer.
+            matched = next((r for r in repos if evidence_repo and r.full_name == evidence_repo), None)
+            if matched is not None:
+                repo = matched
+                evaluation = self.engine.evaluate(repo)
+            else:
+                evaluations = self.engine.evaluate_many(repos)
+                candidates = self.engine.top_candidates(evaluations, limit=1, only_suitable=False)
+                if not candidates:
+                    task.metadata["report"] = {"repo": None, "plan": None}
+                    return "IntegrationPlanner: değerlendirme sonrası aday kalmadı."
+
+                evaluation = candidates[0]
+                repo = next((r for r in repos if r.name == evaluation.name), repos[0])
+
         sandbox_result = self.manager.run_pipeline(repo.url, evaluation, repo=repo)
 
         try:
@@ -409,16 +607,23 @@ class DepartmentAdapterRegistry:
         self._agents: dict[str, BaseAgent] = agents or {
             "research": ResearchAgent(),
             "finance": FinanceAgent(),
+            "learning": FinanceLearningAgent(),
             "browser": BrowserAgent(),
             "github": GitHubDepartmentAgent(),
             "evaluation": EvaluationDepartmentAgent(),
             "sandbox": SandboxDepartmentAgent(),
             "integration": IntegrationDepartmentAgent(),
             "ai_discovery": AIDiscoveryDepartmentAgent(),
+            # Sprint 39: "media" (içerik/senaryo/sahne/seslendirme-planı
+            # üretimi, bkz. src.media) ve "automation" (yayın-öncesi
+            # kontrol listesi, bkz. src.automation) artık GERÇEK, bağımsız
+            # alt sistemlere bağlı -- ikisi de yalnızca ÖNERİ/PLAN üretir,
+            # hiçbir dosya/hesap/yayın işlemi ÇALIŞTIRMAZ (bkz. o
+            # modüllerin kendi docstring'leri).
+            "media": MediaAgent(),
+            "automation": AutomationAgent(),
+            "coding": CodingAgent(),
         }
-        # "automation": Sprint 15 itibarıyla arkasında GERÇEK, bağımsız bir
-        # JARVIS alt sistemi (ör. src/automation) YOK -- bu yüzden burada
-        # KASITLI OLARAK bağlanmadı (bkz. rapor: "hâlâ eksik").
 
     def resolve(self, department_name: str) -> Optional[Callable[[Task], object]]:
         agent = self._agents.get(department_name)

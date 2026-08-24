@@ -15,7 +15,7 @@ class BrowserTool(BaseTool):
     ``execute(action=..., **kwargs)`` sözleşmesi korunmuştur (ToolManager
     ve BrowserAgent bunu kullanır); desteklenen eylemler genişletilmiştir:
     open, search, new_tab, switch_tab, close_tab, list_tabs, read_page,
-    click, download, screenshot, close.
+    click, download, screenshot, close, list_elements, click_index.
     """
 
     def __init__(self, session: Optional[PlaywrightSession] = None) -> None:
@@ -53,6 +53,10 @@ class BrowserTool(BaseTool):
                 return self._download(kwargs.get("selector"), kwargs.get("save_path"))
             if action == "screenshot":
                 return self._screenshot(kwargs.get("save_path"))
+            if action == "list_elements":
+                return self._list_elements()
+            if action == "click_index":
+                return self._click_index(kwargs.get("index"))
             if action == "close":
                 self.session.stop()
                 return "Tarayıcı kapatıldı."
@@ -128,6 +132,15 @@ class BrowserTool(BaseTool):
             return "Kayıt yolu ('save_path') belirtilmedi."
         path = self.session.screenshot(save_path)
         return f"Ekran görüntüsü kaydedildi: {path}"
+
+    def _list_elements(self) -> str:
+        return self.session.list_elements()
+
+    def _click_index(self, index) -> str:
+        if index is None:
+            return "Element index'i ('index') belirtilmedi."
+        clicked = self.session.click_index(int(index))
+        return f"Tıklandı [{index}]: {clicked}"
 
     # --- Bilgi -----------------------------------------------------------
 

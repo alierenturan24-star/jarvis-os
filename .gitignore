@@ -22,3 +22,9 @@ Thumbs.db
 workspace/
 data/
 knowledge/
+
+workspace/secrets/
+
+# Local test/runtime artifacts
+.pytest_tmp/
+test_runs/

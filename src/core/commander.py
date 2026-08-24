@@ -1,6 +1,7 @@
 from src.intent.intent_router import IntentRouter
 from src.core.tool_selector import ToolSelector
 from src.providers.router import ModelRouter
+from src.providers.provider_manager import TASK_SHORT_CHAT
 from src.memory.conversation_memory import ConversationMemory
 
 from src.agents.browser_agent import BrowserAgent
@@ -75,10 +76,8 @@ Kullanıcı:
 Cevap:
 """
 
-        response = self.router.generate(
-            prompt=prompt,
-            provider_name="ollama",
-        )
+        self.last_route = self.router.manager.route_and_generate(prompt, task_type=TASK_SHORT_CHAT)
+        response = self.last_route.output
 
         self.memory.add("Jarvis", response)
 

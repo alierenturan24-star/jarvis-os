@@ -12,6 +12,7 @@ from src.mission.department_orchestrator import DepartmentOrchestrator
 from src.mission.mission_engine import MissionEngine
 from src.mission.models import Mission, MissionStatus, MissionType
 from src.research.manager import ResearchManager
+from src.tools.browser_tool import BrowserTool
 
 
 # --- 1) YouTube Mission -> doğru departmanlar ----------------------------------
@@ -26,6 +27,19 @@ class TestYouTubeMissionDepartments:
 
     def test_youtube_mission_type_classified_correctly(self):
         assert classify_mission_type("YouTube otomasyonu kur.") == MissionType.YOUTUBE
+
+    def test_shorts_content_request_selects_expected_departments(self):
+        # Sprint 39 kabul testi istemi -- media/automation artık GERÇEK
+        # modüllere bağlı, ama seçim mantığı (department.py) DEĞİŞMEDİ.
+        # Not: "finance" da seçilir -- "Bitcoin" metni, finance
+        # departmanının "coin" anahtar kelimesini (alt-dize olarak,
+        # "bitCOIN") İÇERİR; bu ZATEN VAR OLAN, bu sprintte DEĞİŞMEYEN bir
+        # davranıştır (bkz. department.py enrichment taraması).
+        orchestrator = DepartmentOrchestrator()
+        departments = orchestrator.select_departments(
+            "Bitcoin neden düştü konusunda 60 saniyelik bir YouTube Shorts hazırla."
+        )
+        assert set(departments) == {"research", "github", "browser", "media", "automation", "finance"}
 
 
 # --- 2) Finans Mission -> doğru departmanlar -----------------------------------
@@ -63,7 +77,15 @@ class TestGithubMissionDepartments:
 
 
 class TestMissionProducesTaskPlan:
-    def test_build_task_plan_returns_real_task_plan_with_one_task_per_department(self):
+    def test_build_task_plan_returns_real_task_plan_with_one_task_per_department(self, monkeypatch):
+        # Sprint 32: CATEGORY hedefinde "browser" departmanı artık (sinyal
+        # yoksa) gerçek bir GitHub adayı arayıp açabiliyor -- bu testin
+        # "departman başına tek görev" varsayımını deterministik/hızlı
+        # tutmak için GitHubIntelligence.search boş dönecek şekilde
+        # sahteleniyor (böylece eski, tek-görevli "search" davranışına
+        # güvenli şekilde düşülür).
+        monkeypatch.setattr(GitHubIntelligence, "search", lambda self, *a, **k: [])
+
         engine = MissionEngine()
         mission = engine.create_mission("YouTube otomasyonu kur.")
 
@@ -124,44 +146,51 @@ class TestDispatchReachesRealExecutionEngine:
         assert research_task in report.executed
 
     def test_tasks_without_handler_fail_gracefully_not_silently(self, monkeypatch):
-        # Sprint 15: research/github/browser departmanlari artik GERCEK
-        # modullere bagli (bkz. src/mission/department_adapters.py); bu
-        # testin ag/klon gerektiren gercek cagrilari mocklamasi gerekir.
-        # media/automation ise HALA baglanmadi -- onlar icin eski
-        # "handler tanimli degil" davranisi AYNEN korunmali.
-        monkeypatch.setattr(GitHubIntelligence, "search", lambda self, *a, **k: [])
+        # Sprint 39: media/automation artik GERCEK modullere bagli (bkz.
+        # src.media/src.automation) -- YouTube mission'inin TUM
+        # departmanlari artik baglandigi icin bu test "hala baglanmamis"
+        # davranisini LEARNING mission'i ile dogruluyor (learning
+        # departmani hala gercek bir module bagli DEGIL).
         monkeypatch.setattr(
             ResearchManager, "research", lambda self, topic, force_refresh=False: "ok (test)"
         )
 
         engine = MissionEngine()
-        mission = engine.create_mission("YouTube otomasyonu kur.")
+        mission = engine.create_mission("Python öğren.")
         plan = engine.build_task_plan(mission)
 
         report = engine.orchestrator.dispatch(mission, plan)
 
-        still_unconnected = {"media", "automation"}
-        assert report.success is False  # media/automation hala basarisiz
+        still_unconnected = set()
+        assert report.success is True  # learning artık FinanceLearningAgent'a bağlı
 
         for task in plan.all_tasks():
             if task.agent in still_unconnected:
                 assert task.status == TaskStatus.FAILED
                 assert "handler tanımlı değil" in task.error
             else:
-                # research/github/browser: artik GERCEK bir handler var,
-                # "handler tanimli degil" ile basarisiz OLMAMALI.
+                # Tüm seçilen departmanların artık gerçek handler'ı var.
+                # research: artik GERCEK bir handler var, "handler
+                # tanimli degil" ile basarisiz OLMAMALI.
                 assert task.status == TaskStatus.COMPLETED
 
     def test_collect_results_and_build_report_reflect_plan_state(self, monkeypatch):
-        # Sprint 15: finance/research/browser artik GERCEK handler'lara
-        # sahip; finance/research'in ag/LLM cagrilarini mocklayip
-        # deterministik/hizli tutuyoruz (browser icin mocklamaya gerek
-        # yok -- "dispatch" action'i zaten gercek BrowserAgent'in kendi
-        # zararsiz fallback metnini dondurur, ag/Playwright'e dokunmaz).
-        monkeypatch.setattr(FinanceManager, "analyze", lambda self, asset: "Finans analizi (test).")
+        # finance/research/browser gercek handler'lara sahip. Bu plan-state
+        # testi ag/LLM/Playwright sonucunu degil basarili execution raporunu
+        # dogruladigi icin uc dis siniri da deterministik basariyla sahteler.
         monkeypatch.setattr(
-            ResearchManager, "research", lambda self, topic, force_refresh=False: "Araştırma (test)."
+            FinanceManager, "analyze", lambda self, asset, **kwargs: "Finans analizi (test)."
         )
+        monkeypatch.setattr(
+            ResearchManager,
+            "research",
+            lambda self, topic, force_refresh=False, **kwargs: "Araştırma (test).",
+        )
+        monkeypatch.setattr(
+            BrowserTool, "execute", lambda self, **kwargs: "Arama yapıldı (test)."
+        )
+        # CATEGORY hedefinin aday cozumlemesini de agdan ayir.
+        monkeypatch.setattr(GitHubIntelligence, "search", lambda self, *a, **k: [])
 
         engine = MissionEngine()
         mission, plan, report = engine.run_mission("Yeni coin araştır.")

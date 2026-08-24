@@ -1,4 +1,5 @@
 from src.providers.router import ModelRouter
+from src.providers.provider_manager import TASK_SHORT_CHAT
 
 
 class Brain:
@@ -16,10 +17,10 @@ class Brain:
         Provider verilmezse varsayılan modeli kullanır.
         """
 
-        return self.router.generate(
-            prompt=prompt,
-            provider_name=provider
+        self.last_route = self.router.manager.route_and_generate(
+            prompt, task_type=TASK_SHORT_CHAT, preferred_provider=provider,
         )
+        return self.last_route.output
 
     def ask_openai(self, prompt):
         return self.think(prompt, "openai")

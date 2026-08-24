@@ -80,6 +80,7 @@ class PlanExecutor:
             if task is None:
                 break
 
+            print(f"[AŞAMA: {task.agent.upper()}]", flush=True)
             self.job_manager.run_task(task)
             executed.append(task)
 

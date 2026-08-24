@@ -30,6 +30,8 @@ class BrowserAgent(BaseAgent):
         "download",
         "screenshot",
         "close",
+        "list_elements",
+        "click_index",
     }
 
     def __init__(self) -> None:
@@ -106,6 +108,15 @@ class BrowserAgent(BaseAgent):
         if action == "screenshot":
             save_path = metadata.get("save_path") or task.target
             return str(self.browser.execute(action="screenshot", save_path=save_path))
+
+        if action == "list_elements":
+            return str(self.browser.execute(action="list_elements"))
+
+        if action == "click_index":
+            index = metadata.get("index")
+            if index is None:
+                index = task.target
+            return str(self.browser.execute(action="click_index", index=index))
 
         if action == "close":
             return str(self.browser.execute(action="close"))

@@ -42,8 +42,8 @@ class ProviderSelector:
         ):
             return self._first_available(
                 [
-                    "claude",
                     "codex",
+                    "claude_code",
                     "qwen",
                     "deepseek",
                     "ollama",

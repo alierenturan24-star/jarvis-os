@@ -14,12 +14,20 @@ class ReportBuilder:
             exist_ok=True,
         )
 
+    # Windows MAX_PATH (260 karakter) sınırını aşan uzun konu başlıkları
+    # (ör. tüm cümleyi konu olarak geçen uzun istekler) "[Errno 22] Invalid
+    # argument" ile dosya yazımını ÇÖKERTİYORDU (Sprint 37 canlı testinde
+    # yakalandı) -- dosya adı burada güvenli bir uzunlukta kesiliyor,
+    # içerik/summary KISALTILMIYOR.
+    _MAX_FILENAME_TOPIC_LENGTH = 80
+
     @staticmethod
     def _safe_filename(topic: str) -> str:
 
         filename = topic.casefold().strip()
         filename = re.sub(r"[^\w\s-]", "", filename)
         filename = re.sub(r"[\s-]+", "_", filename)
+        filename = filename[:ReportBuilder._MAX_FILENAME_TOPIC_LENGTH].rstrip("_")
 
         return filename or "arastirma"
 

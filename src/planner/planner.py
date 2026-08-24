@@ -143,24 +143,12 @@ class Planner:
         if not message:
             return []
 
-        tasks: list[Task] = []
-        seen: set[tuple[str, str]] = set()
-
-        for segment in self._split_message(message):
-            task = self._task_for_segment(segment)
-
-            if task is None:
-                continue
-
-            key = (task.agent, task.target.casefold())
-            if key in seen:
-                continue
-
-            seen.add(key)
-            tasks.append(task)
-
-        if tasks:
-            return tasks
+        # A chat message is one user intent. Internal mission planning may
+        # create sub-tasks later, but punctuation, newlines and conjunctions
+        # must never turn pasted constraints/report headings into new commands.
+        task = self._task_for_segment(message)
+        if task is not None:
+            return [task]
 
         return [
             Task(

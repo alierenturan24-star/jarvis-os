@@ -2,6 +2,7 @@ from src.opportunity.collector import OpportunityCollector
 from src.opportunity.report_builder import OpportunityReportBuilder
 from src.opportunity.scorer import OpportunityScorer
 from src.providers.router import ModelRouter
+from src.providers.provider_manager import TASK_LONG_RESEARCH
 from src.utils.language_policy import TURKISH_OUTPUT_POLICY
 from src.utils.llm_utils import compact_results, is_llm_failure
 
@@ -70,7 +71,8 @@ Görev:
 
 Değerlendirme:
 """
-        answer = self.router.generate(prompt=prompt, provider_name="ollama")
+        self.last_route = self.router.manager.route_and_generate(prompt, task_type=TASK_LONG_RESEARCH)
+        answer = self.last_route.output
         return self._fallback(opportunities) if is_llm_failure(answer) else answer
 
     def scan(self, topic: str = "") -> str:

@@ -4,6 +4,7 @@ from src.evolution.scorer import EvolutionScorer
 from src.experience.experience import Experience
 from src.experience.experience_manager import ExperienceManager
 from src.providers.router import ModelRouter
+from src.providers.provider_manager import TASK_LONG_RESEARCH
 
 
 class EvolutionManager:
@@ -68,10 +69,8 @@ Zorunlu kurallar:
 Değerlendirme:
 """
 
-        answer = self.router.generate(
-            prompt=prompt,
-            provider_name="ollama",
-        )
+        self.last_route = self.router.manager.route_and_generate(prompt, task_type=TASK_LONG_RESEARCH)
+        answer = self.last_route.output
 
         failed_markers = (
             "zaman aşımına uğradı",

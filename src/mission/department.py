@@ -28,7 +28,10 @@ class Department:
 # yansır.
 DEFAULT_DEPARTMENTS: tuple[Department, ...] = (
     Department("research", "Genel web/haber araştırması (src.research)", ["araştır", "incele", "haber", "keşfet", "bul"], maturity=1.0),
-    Department("finance", "Finans/kripto/piyasa analizi (src.finance)", ["coin", "borsa", "finans", "yatırım", "kripto", "trading", "hisse"], maturity=1.0),
+    Department("finance", "Finans/kripto/piyasa analizi (src.finance)", [
+        "coin", "borsa", "finans", "finance engine", "yatırım", "kripto", "trading", "hisse",
+        "stratej", "strategy lab", "backtest", "out-of-sample", "oos", "paper",
+    ], maturity=1.0),
     Department("github", "GitHub Intelligence: repo arama/değerlendirme (src.github)", ["github", "repo", "açık kaynak"], maturity=1.0),
     Department("evaluation", "Repo uygunluk/risk değerlendirmesi (src.evaluation)", ["değerlendir", "evaluation", "puanla"], maturity=1.0),
     Department("sandbox", "İzole statik repo analizi (src.sandbox)", ["sandbox", "izole", "güvenli çalıştır"], maturity=1.0),
@@ -48,9 +51,18 @@ DEFAULT_DEPARTMENTS: tuple[Department, ...] = (
         ],
         maturity=0.8,
     ),
-    Department("coding", "Kod yazma/hata ayıklama (src.agents.coding_agent)", ["kod yaz", "debug", "hata ayıkla", "fonksiyon"], maturity=0.6),
-    Department("automation", "İş akışı/otomasyon kurulumu (henüz özel modül yok)", ["otomasyon kur", "otomatikleştir", "pipeline kur"], maturity=0.3),
-    Department("media", "Video/görsel/ses üretimi (henüz özel modül yok)", ["video üret", "görsel oluştur", "ses oluştur", "içerik üret"], maturity=0.1),
+    Department("coding", "Kod yazma/hata ayıklama (src.agents.coding_agent)", ["kod yaz", "debug", "hata ayıkla", "hatayı bul", "bug fix", "fonksiyon"], maturity=0.8),
+    # Sprint 39: "otomasyon kurulumu" (gerçek zamanlama/hesap/pipeline
+    # kurulumu) hâlâ YOK -- yalnızca yayın-öncesi kontrol listesi ÜRETİR
+    # (src.automation), bu yüzden maturity ORTA düzeyde tutuldu (0.3'ten
+    # yükseltildi ama "tam otomasyon" seviyesine değil).
+    Department("automation", "Yayın-öncesi kontrol listesi üretimi (src.automation) -- gerçek kurulum/zamanlama YAPMAZ", ["otomasyon kur", "otomatikleştir", "pipeline kur"], maturity=0.5),
+    # Sprint 39: gerçek video/ses DOSYASI üretimi hâlâ YOK (bu ortamda
+    # FFmpeg/TTS/görsel aracı kurulu değil) -- yalnızca senaryo/sahne/
+    # seslendirme-planı/görsel-planı/altyazı/thumbnail/başlık ÜRETİR
+    # (src.media, gerçek bir LLM çağrısıyla). maturity bu yüzden 1.0
+    # DEĞİL, kısmi (0.6) -- dürüstçe "planlama var, üretim yok" yansıtır.
+    Department("media", "YouTube içerik planlama ve güvenli yerel video render (src.media)", ["video üret", "görsel oluştur", "ses oluştur", "içerik üret"], maturity=0.8),
     Department("social_media", "Sosyal medya paylaşımı (henüz özel modül yok)", ["sosyal medya", "twitter", "instagram", "tiktok", "paylaşım"], maturity=0.1),
     Department("security", "Güvenlik/risk denetimi (henüz özel modül yok)", ["güvenlik", "zafiyet", "penetrasyon", "audit"], maturity=0.3),
     Department("learning", "Öğrenme/eğitim kaynağı toplama (henüz özel modül yok)", ["öğren", "eğitim al", "kurs", "öğret"], maturity=0.2),
@@ -105,6 +117,10 @@ _MISSION_TYPE_PRIORITY: tuple[MissionType, ...] = (
 # kabul edilmiş bir sınırlamadır (bkz. Sprint 21 raporu).
 _MISSION_TYPE_WORD_KEYWORDS: dict[MissionType, tuple[str, ...]] = {
     MissionType.FINANCE: ("btc", "eth", "sol", "bnb", "xrp", "doge", "link", "avax"),
+    # ``bul`` is an imperative research verb only as a complete word.  A
+    # substring match also catches unrelated inflections such as ``bulunma``
+    # ("do not claim"), routing local runtime/status questions to RESEARCH.
+    MissionType.RESEARCH: ("bul",),
 }
 
 
@@ -112,17 +128,80 @@ def _contains_word(text: str, keywords: tuple[str, ...]) -> bool:
     return any(re.search(rf"\b{re.escape(keyword)}\b", text) for keyword in keywords)
 
 
+# Sprint 42 (NEGATION BUG): Sprint 41 canlı testinde yakalandı -- "internette
+# araştır" anahtar kelimesi, "internette araştırMA yapMA" (kullanıcı AÇIKÇA
+# İNTERNETİ KULLANMA dedi) içindeki "araştır" ön-ekiyle YANLIŞLIKLA eşleşiyordu.
+# Genel bir Türkçe morfoloji çözümleyici İCAT EDİLMEZ -- yalnızca bu somut
+# kalıbı (fiil kökü + "-ma"/"-me" olumsuzluk eki, ardından "yap"/"et" gibi
+# GERÇEK pozitif bir devam kelimesi YOKSA) hedefleyen dar bir kontrol.
+_NEGATION_SUFFIX_PATTERN = re.compile(r"^(ma|me)\b")
+# DİKKAT: "yap" ile başlayan bir kelime olumlu OLMAYABİLİR -- "yapma"
+# (yapMAYIN) da "yap" ile BAŞLAR. Bu yüzden yalnızca TAM kelime eşleşmesi
+# (bir sonraki kelimenin TAMAMI) kontrol edilir, ``startswith`` DEĞİL.
+_POSITIVE_CONTINUATION_WORDS = ("yap", "yapın", "yapalım", "yapıyor", "et", "edin", "edelim", "ediyor")
+_NEGATIVE_CONTINUATION_PREFIXES = ("yapma", "etme")
+_NEGATION_LOOKAHEAD_CHARS = 30
+
+
+def keyword_matches(lowered_text: str, keyword: str) -> bool:
+    """``keyword`` metinde geçiyor mu -- ama HEMEN ardından bir olumsuzluk
+    eki geliyorsa (ör. "araştırma yapMA") ve bunu "yap"/"et" gibi GERÇEK
+    pozitif bir kelime İZLEMİYORSA (ör. "araştırma YAP"), o geçiş
+    reddedilir. Metinde AYNI kelimenin başka (olumsuzlanmamış) bir geçişi
+    varsa YİNE DE ``True`` döner -- yalnızca İLK geçiş kontrol edilip
+    atlanmaz."""
+
+    if keyword not in lowered_text:
+        return False
+
+    for match in re.finditer(re.escape(keyword), lowered_text):
+        remainder = lowered_text[match.end():match.end() + _NEGATION_LOOKAHEAD_CHARS]
+        negation = _NEGATION_SUFFIX_PATTERN.match(remainder)
+        if not negation:
+            return True  # bu geçişte olumsuzluk eki yok -- normal eşleşme
+
+        after_suffix = remainder[negation.end():].lstrip(" .,!?")
+        first_word_match = re.match(r"\w+", after_suffix)
+        first_word = first_word_match.group(0) if first_word_match else ""
+        if first_word.startswith(_NEGATIVE_CONTINUATION_PREFIXES):
+            continue  # "...araştırma yapMA..." -- çifte olumsuzluk, KESİN olumsuz
+        if first_word in _POSITIVE_CONTINUATION_WORDS:
+            return True  # "...araştırma yap..." -- gerçek pozitif kullanım
+
+        # Bu geçiş olumsuzlanmış (ör. "araştırma yapma") -- diğer
+        # geçişlere bak, hiçbiri pozitif değilse en sonunda False dönülür.
+
+    return False
+
+
 _MISSION_TYPE_KEYWORDS: dict[MissionType, tuple[str, ...]] = {
-    MissionType.RESEARCH: ("araştır", "incele", "haber", "keşfet", "bul"),
+    MissionType.RESEARCH: ("araştır", "incele", "haber", "keşfet"),
     MissionType.AI_DISCOVERY: (
         "ai araçları", "ai aracı", "yeni model", "yeni ai modeli", "ai modelleri",
         "ücretsiz ai", "ai agent framework", "mcp server", "browser agent projesi",
         "coding assistant", "yapay zeka aracı", "yapay zeka modeli",
     ),
-    MissionType.FINANCE: ("coin", "borsa", "finans", "yatırım", "kripto", "trading", "hisse", "para"),
-    MissionType.YOUTUBE: ("youtube", "video kanalı", "kanal aç"),
+    # Bare "para" is commonly a safety constraint ("para harcama"), not
+    # a market-analysis goal. Concrete finance domains remain authoritative.
+    MissionType.FINANCE: (
+        "coin", "borsa", "finans", "finance engine", "yatırım", "kripto", "trading", "hisse",
+        "bitcoin", "ethereum", "stratej", "strategy lab", "backtest", "out-of-sample", "oos", "paper",
+    ),
+    # Sprint 35 düzeltmesi: "100 Shorts fikri üret." / "Shorts içerik
+    # fikirleri üret." / "Video fikirleri üret." gibi açık YouTube İÇERİK
+    # ÜRETİMİ istekleri metinde "youtube" kelimesi GEÇMEDİĞİ için
+    # RESEARCH'e düşüyordu (canlı doğrulandı, bkz. Sprint 34 canlı test
+    # raporu). "shorts"/"video fikri"/"video fikirleri" eklendi -- bu üçü,
+    # MEDIA'nın ("video üret") tetiklediği TAM ifadelerle ÇAKIŞMAZ (bkz.
+    # Sprint 34/35 analizi), bu yüzden mevcut MEDIA sınıflandırması
+    # BOZULMAZ. YOUTUBE zaten en yüksek öncelikli tür olduğu için
+    # (bkz. ``_MISSION_TYPE_PRIORITY``) bu ek kesin, dar kapsamlı sinyal
+    # yalnızca gerçekten YouTube içerik fikri isteyen metinleri yakalar.
+    MissionType.YOUTUBE: (
+        "youtube", "video kanalı", "kanal aç", "shorts", "video fikri", "video fikirleri",
+    ),
     MissionType.SOCIAL_MEDIA: ("sosyal medya", "twitter", "instagram", "tiktok", "paylaşım"),
-    MissionType.CODE: ("jarvis'i geliştir", "jarvisi geliştir", "kendini geliştir", "kod yaz", "python", "debug", "geliştir"),
+    MissionType.CODE: ("jarvis'i geliştir", "jarvisi geliştir", "kendini geliştir", "kod yaz", "python", "debug", "geliştir", "hatayı bul", "bug fix"),
     MissionType.GITHUB: ("github", "repo bul", "açık kaynak proje"),
     MissionType.BROWSER: (
         "web sitesi", "tarayıcıda aç", "google'da ara",
@@ -134,6 +213,27 @@ _MISSION_TYPE_KEYWORDS: dict[MissionType, tuple[str, ...]] = {
     MissionType.AUTOMATION: ("otomasyon kur", "otomatikleştir", "pipeline kur"),
     MissionType.MEDIA: ("video üret", "görsel oluştur", "ses oluştur", "içerik üret"),
 }
+
+
+_ROUTING_CONSTRAINT_PATTERNS = (
+    r"\bpara\s+harcama\w*",
+    r"\bücretli\s+(?:api\w*\s+)?(?:kullanma\w*|aktive\s+etme\w*)",
+    r"\b(?:commit|push|commit/push)\s+yapma\w*",
+    r"\b(?:kurma|yükleme|dosya\w*\s+değiştirme)\w*",
+)
+
+
+def routing_text(text: str) -> str:
+    """Remove narrow safety/negative constraints from routing signals only.
+
+    The original prompt remains untouched on Mission/Task; this normalized
+    view is used solely for intent and department selection.
+    """
+
+    lowered = (text or "").casefold()
+    for pattern in _ROUTING_CONSTRAINT_PATTERNS:
+        lowered = re.sub(pattern, " ", lowered, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", lowered).strip()
 
 # "Mission ↓ Doğru departmanlar" — mission türüne göre KANONİK departman
 # demeti. select_departments() bunu taban alır, sonra metindeki ek
@@ -148,7 +248,7 @@ DEFAULT_DEPARTMENTS_BY_MISSION_TYPE: dict[MissionType, tuple[str, ...]] = {
     MissionType.FINANCE: ("finance", "research", "browser"),
     MissionType.YOUTUBE: ("research", "github", "browser", "media", "automation"),
     MissionType.SOCIAL_MEDIA: ("research", "browser", "media", "automation"),
-    MissionType.CODE: ("github", "evaluation", "sandbox", "integration"),
+    MissionType.CODE: ("coding", "github", "evaluation", "sandbox", "integration"),
     MissionType.GITHUB: ("github", "evaluation", "sandbox", "integration"),
     MissionType.BROWSER: ("browser", "research"),
     MissionType.SECURITY: ("security", "sandbox", "research"),
@@ -170,11 +270,11 @@ def detect_mission_type(text: str) -> MissionType | None:
     fonksiyon olarak açığa çıkarıldı.
     """
 
-    lowered = (text or "").strip().lower()
+    lowered = routing_text(text)
 
     for mission_type in _MISSION_TYPE_PRIORITY:
         keywords = _MISSION_TYPE_KEYWORDS.get(mission_type, ())
-        if any(keyword in lowered for keyword in keywords):
+        if any(keyword_matches(lowered, keyword) for keyword in keywords):
             return mission_type
 
         word_keywords = _MISSION_TYPE_WORD_KEYWORDS.get(mission_type, ())
@@ -182,6 +282,39 @@ def detect_mission_type(text: str) -> MissionType | None:
             return mission_type
 
     return None
+
+
+# Sprint 37: AUTONOMOUS RESEARCH & SELF-IMPROVEMENT LOOP -- kullanıcının
+# "araştırma yöntemini kullanıcı tek tek tarif etmek zorunda kalmaması"
+# (bkz. Sprint 37 HEDEF) için, "bu istek tek seferlik bir Mission değil,
+# çok turlu bir kendi kendine geliştirme/araştırma döngüsü olmalı" sinyalini
+# tanıyan DAR bir anahtar kelime kümesi. KASITLI OLARAK dar tutuldu (yalnızca
+# açık "daha iyi ol"/"kendini geliştir" ifadeleri) -- ``detect_mission_type``
+# gibi geniş bir sınıflandırma İCAT ETMEZ; ``detect_mission_type(text) is
+# None`` olduğu sürece (düz sohbet) hiçbir zaman tetiklenmez, bu yüzden
+# mevcut tek-seferlik Mission akışının 297 testi ETKİLENMEZ.
+_RESEARCH_LOOP_CUES = (
+    "daha iyi ol",
+    "kendini geliştir",
+    "kendini nasıl geliştir",
+    "self improvement",
+    "self-improvement",
+)
+
+
+def detect_research_loop_intent(text: str) -> bool:
+    """``True`` ise istek tek bir Mission yerine sınırlı-turlu bir
+    Autonomous Research Loop (bkz. ``src.research_loop``) ile
+    çalıştırılmalı. Düz sohbet ya da bilinen hiçbir Mission sinyali
+    içermeyen metinlerde HER ZAMAN ``False`` -- bu döngü yalnızca ZATEN
+    bir Mission olarak sınıflandırılabilecek isteklere EKLENİR, onların
+    yerine YENİ bir sınıflandırma İCAT ETMEZ."""
+
+    if detect_mission_type(text) is None:
+        return False
+
+    lowered = (text or "").strip().lower()
+    return any(cue in lowered for cue in _RESEARCH_LOOP_CUES)
 
 
 def classify_mission_type(text: str) -> MissionType:

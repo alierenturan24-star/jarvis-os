@@ -5,6 +5,7 @@ import os
 import time
 from datetime import datetime, timezone
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 import requests
 
@@ -31,6 +32,7 @@ class GitHubClient:
         timeout: float = DEFAULT_TIMEOUT,
     ) -> None:
         self.token = token if token is not None else os.getenv("GITHUB_TOKEN", "").strip()
+        self._owns_session = session is None
         self.session = session or requests.Session()
         self.timeout = timeout
 
@@ -100,13 +102,36 @@ class GitHubClient:
         if not full_name:
             return None
 
+        cache_key = full_name.casefold()
+        if self._owns_session and cache_key in self._readme_cache:
+            cached = self._readme_cache[cache_key]
+            return cached[:max_chars] if cached else None
+
         try:
             payload = self.get(f"/repos/{full_name}/readme")
         except GitHubIntelligenceError:
-            return None
+            payload = None
 
         content_b64 = str(payload.get("content", "")) if isinstance(payload, dict) else ""
         if not content_b64:
+            if not self._owns_session:
+                return None
+            # Public raw content is free and does not consume the GitHub REST
+            # API quota.  Try the two conventional default branches once.
+            for branch in ("main", "master"):
+                try:
+                    response = self.session.get(
+                        f"https://raw.githubusercontent.com/{full_name}/{branch}/README.md",
+                        headers={"User-Agent": "jarvis-os-public-readme"},
+                        timeout=min(self.timeout, 5),
+                    )
+                    if 200 <= response.status_code < 300 and response.text.strip():
+                        raw = response.text.strip()
+                        type(self)._readme_cache[cache_key] = raw
+                        return raw[:max_chars]
+                except requests.exceptions.RequestException:
+                    continue
+            type(self)._readme_cache[cache_key] = None
             return None
 
         try:
@@ -115,6 +140,8 @@ class GitHubClient:
             return None
 
         raw = raw.strip()
+        if self._owns_session:
+            type(self)._readme_cache[cache_key] = raw or None
         return raw[:max_chars] if raw else None
 
     # --- Dahili -------------------------------------------------------------
@@ -127,16 +154,25 @@ class GitHubClient:
         fırlatır."""
 
         url = path if path.startswith("http") else f"{GITHUB_API_URL}{path}"
+        parsed = urlparse(url)
+        if parsed.scheme != "https" or parsed.hostname != "api.github.com" or parsed.username or parsed.password or parsed.port:
+            raise GitHubIntelligenceError("GitHub GET hedefi canonical API trust boundary disinda")
+        if self._owns_session and time.time() < type(self)._api_rate_limited_until:
+            remaining = type(self)._api_rate_limited_until - time.time()
+            raise GitHubRateLimitError(
+                f"GitHub API rate limit aktif; aynı çağrı tekrar denenmedi ({remaining:.0f} sn)."
+            )
         last_error: Optional[Exception] = None
 
         for attempt in range(1, MAX_RETRIES + 1):
             try:
-                response = self.session.get(
-                    url,
-                    headers=self._headers(),
-                    params=params,
-                    timeout=self.timeout,
-                )
+                request_options = {"headers": self._headers(), "params": params, "timeout": self.timeout}
+                # requests follows redirects by default. Production traffic must never
+                # leave api.github.com; lightweight injected test transports predate
+                # this option and do not perform redirects themselves.
+                if isinstance(self.session, requests.Session):
+                    request_options["allow_redirects"] = False
+                response = self.session.get(url, **request_options)
             except requests.exceptions.RequestException as error:
                 last_error = error
                 time.sleep(min(2 ** attempt, 10))
@@ -144,6 +180,9 @@ class GitHubClient:
 
             if 200 <= response.status_code < 300:
                 return response
+
+            if 300 <= response.status_code < 400:
+                raise GitHubIntelligenceError("GitHub redirect reddedildi; untrusted hedef takip edilmedi")
 
             if response.status_code in (403, 429) and self._is_rate_limited(response):
                 self._wait_for_rate_limit(response)
@@ -207,9 +246,16 @@ class GitHubClient:
                 wait_seconds = 5.0
 
         if wait_seconds > MAX_RATE_LIMIT_WAIT_SECONDS:
+            if self._owns_session:
+                type(self)._api_rate_limited_until = time.time() + wait_seconds
             raise GitHubRateLimitError(
                 "GitHub API rate limit'e takıldı; bekleme süresi çok uzun "
                 f"({wait_seconds:.0f} sn). Daha sonra tekrar deneyin veya GITHUB_TOKEN tanımlayın."
             )
 
         time.sleep(wait_seconds + 1)
+    # One mission constructs several department clients.  Share the API
+    # circuit state and public README cache so a known rate limit is not hit
+    # again by every department.
+    _api_rate_limited_until: float = 0.0
+    _readme_cache: dict[str, Optional[str]] = {}

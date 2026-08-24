@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -60,16 +62,28 @@ def _make_fixture_repo(tmp_path: Path, **files: str) -> str:
 
 
 class TestRealSmallRepoLifecycle:
-    def test_clone_inspect_report_cleanup(self):
+    def test_clone_inspect_report_cleanup(self, tmp_path, monkeypatch):
+        source = tmp_path / "fixture-source"
+        _make_fixture_repo(source, **{
+            "README.md": "# deterministic repository fixture",
+            "requirements.txt": "requests==2.32.0\n",
+            "LICENSE": "MIT License\n",
+            "src/main.py": "def main():\n    return 'ok'\n",
+        })
+        clone_calls = []
+
+        def fake_git_clone(command, **kwargs):
+            assert command[0] == "git" and "clone" in command and command[-2] == TEST_REPO_URL
+            clone_calls.append(list(command))
+            shutil.copytree(source, Path(command[-1]), dirs_exist_ok=True)
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr("src.sandbox.sandbox_manager.subprocess.run", fake_git_clone)
+        monkeypatch.setattr("socket.create_connection", lambda *a, **k: pytest.fail("network access attempted"))
         manager = SandboxManager(max_repo_size_mb=20.0, max_files=2000, clone_timeout_seconds=60)
         evaluation = _evaluation()
 
         result = manager.run_pipeline(TEST_REPO_URL, evaluation)
-
-        if result.status == SandboxStatus.FAILED and result.error and (
-            "git komutu bulunamadı" in result.error or "zaman aşımına" in result.error
-        ):
-            pytest.skip(f"Ortamda git/ağ erişimi yok: {result.error}")
 
         try:
             assert result.status == SandboxStatus.READY_FOR_REVIEW, result.error
@@ -81,6 +95,7 @@ class TestRealSmallRepoLifecycle:
             assert result.total_size_mb >= 0.0
             assert result.recommended_action
             assert result.findings
+            assert len(clone_calls) == 1
 
             # Ana proje klasörüne dokunulmadığını doğrula.
             sandbox_path = Path(result.sandbox_path).resolve()

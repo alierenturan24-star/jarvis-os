@@ -27,16 +27,10 @@ def main() -> None:
                 print("\n" + runtime.status())
                 continue
 
-            # Çok satırlı görev girişi: kullanıcı boş satır veya "BITIR"
-            # yazana kadar satırlar tek mesajda biriktirilir.
-            lines = [first_line]
-            while True:
-                line = input("... ")
-                if line.strip().upper() == "BITIR" or line.strip() == "":
-                    break
-                lines.append(line)
-
-            prompt = "\n".join(lines).strip()
+            # Terminalde Enter, tek satırlı görevi hemen gönderir. Eski
+            # ikinci input("... ") görevi MissionEngine'e ulaştırmadan,
+            # boş satır/BITIR gelene kadar süresiz bekletiyordu.
+            prompt = first_line.strip()
 
             if not prompt:
                 continue

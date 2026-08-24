@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from src.evaluation.evaluation_engine import EvaluationEngine
 from src.evaluation.models import RepoEvaluation
 from src.evaluation.module_map import CATEGORY_TARGET_MODULE
-from src.github.errors import GitHubIntelligenceError
 from src.github.github_intelligence import GitHubIntelligence
 from src.integration.integration_planner import IntegrationPlanner
 from src.integration.models import Conflict, IntegrationPlan
@@ -79,19 +80,23 @@ def _fixture_repo(tmp_path: Path, **files: str) -> str:
 
 class TestRealRepositoryPlans:
     """GitHubIntelligence → EvaluationEngine → SandboxManager →
-    IntegrationPlanner tam zincirini GERÇEK repolarla çalıştırır. Ağ
-    erişimi yoksa test atlanır (skip), başarısız SAYILMAZ."""
+    IntegrationPlanner zincirini deterministic API/clone fixtures ile çalıştırır."""
 
-    def _first_suitable(self, query: str):
+    def _first_suitable(self, query: str, monkeypatch):
+        slug = "browser-fixture" if "browser" in query else "trading-fixture"
+        deterministic = {"items": [{"name": slug, "full_name": f"fixture/{slug}",
+            "html_url": f"https://github.com/fixture/{slug}",
+            "description": f"Python {query} API framework with browser automation trading strategy tools",
+            "stargazers_count": 10000, "forks_count": 1000, "license": {"spdx_id": "MIT"},
+            "pushed_at": "2026-08-19T00:00:00Z", "language": "Python", "open_issues_count": 1,
+            "archived": False, "topics": query.split()}]}
+        monkeypatch.setattr("src.github.client.GitHubClient.get", lambda self, path, params=None: deterministic)
         gi = GitHubIntelligence(fetch_contributors=False)
         engine = EvaluationEngine()
-        try:
-            payload = gi.client.get(
-                "/search/repositories",
-                params={"q": query, "sort": "stars", "order": "desc", "per_page": 10},
-            )
-        except GitHubIntelligenceError as error:
-            pytest.skip(f"GitHub API'ye ulaşılamadı: {error}")
+        payload = gi.client.get(
+            "/search/repositories",
+            params={"q": query, "sort": "stars", "order": "desc", "per_page": 10},
+        )
 
         items = payload.get("items", [])
         repos = [GitHubIntelligence._to_repo_data(item, category=query) for item in items[:10]]
@@ -101,32 +106,42 @@ class TestRealRepositoryPlans:
             [(r, e) for r, e in zip(repos, evaluations) if e.suitable_for_jarvis],
             key=lambda pair: pair[0].stars,
         )
-        if not candidates:
-            pytest.skip(f"'{query}' için uygun (suitable_for_jarvis=True) repo bulunamadı.")
+        assert candidates, f"deterministic fixture for {query!r} must be suitable"
         return candidates[0]
 
-    def _plan_for_query(self, query: str) -> IntegrationPlan:
-        repo, evaluation = self._first_suitable(query)
+    def _plan_for_query(self, query: str, tmp_path: Path, monkeypatch) -> IntegrationPlan:
+        repo, evaluation = self._first_suitable(query, monkeypatch)
+        source = tmp_path / ("fixture-" + query.split()[0])
+        _fixture_repo(source, **{"README.md": f"# {query}\n", "requirements.txt": "requests==2.32.0\n",
+                                 "LICENSE": "MIT License\n", "src/tool.py": "def run():\n    return True\n"})
+        clone_calls = []
+
+        def fake_git_clone(command, **kwargs):
+            assert command[0] == "git" and "clone" in command and command[-2] == repo.url
+            clone_calls.append(list(command))
+            shutil.copytree(source, Path(command[-1]), dirs_exist_ok=True)
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr("src.sandbox.sandbox_manager.subprocess.run", fake_git_clone)
+        monkeypatch.setattr("socket.create_connection", lambda *a, **k: pytest.fail("network access attempted"))
         manager = SandboxManager(max_repo_size_mb=20.0, max_files=3000, clone_timeout_seconds=60)
         sandbox_result = manager.run_pipeline(repo.url, evaluation, repo=repo)
+        assert len(clone_calls) == 1
 
-        if sandbox_result.status == SandboxStatus.FAILED and sandbox_result.error and (
-            "git komutu bulunamadı" in sandbox_result.error or "zaman aşımına" in sandbox_result.error
-        ):
-            pytest.skip(f"Ortamda git/ağ erişimi yok: {sandbox_result.error}")
-        if sandbox_result.status != SandboxStatus.READY_FOR_REVIEW:
-            pytest.skip(f"Sandbox READY_FOR_REVIEW olmadı: {sandbox_result.status} / {sandbox_result.error}")
+        assert sandbox_result.status == SandboxStatus.READY_FOR_REVIEW, sandbox_result.error
 
         try:
             planner = IntegrationPlanner()
             plan = planner.analyze(sandbox_result, evaluation)
         finally:
-            manager.cleanup(sandbox_result)
+            cleaned = manager.cleanup(sandbox_result)
+            assert cleaned.status == SandboxStatus.CLEANED
+            assert not Path(sandbox_result.sandbox_path).exists()
 
         return plan
 
-    def test_real_browser_repo_produces_plan(self):
-        plan = self._plan_for_query("browser agent python")
+    def test_real_browser_repo_produces_plan(self, tmp_path, monkeypatch):
+        plan = self._plan_for_query("browser agent python", tmp_path, monkeypatch)
         assert isinstance(plan, IntegrationPlan)
         assert plan.repository_name
         assert plan.target_module
@@ -136,8 +151,8 @@ class TestRealRepositoryPlans:
         assert plan.migration_steps
         assert plan.rollback_plan
 
-    def test_real_trading_repo_produces_plan(self):
-        plan = self._plan_for_query("crypto trading bot python")
+    def test_real_trading_repo_produces_plan(self, tmp_path, monkeypatch):
+        plan = self._plan_for_query("crypto trading bot python", tmp_path, monkeypatch)
         assert isinstance(plan, IntegrationPlan)
         assert plan.repository_name
         assert plan.target_module

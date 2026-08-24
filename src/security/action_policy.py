@@ -80,6 +80,14 @@ class ActionPolicy:
         "bypass_captcha",
         "delete_system_files",
         "disable_two_factor_auth",
+        # Destructive/irreversible git actions (Claude Code repo-edit delegation):
+        # never auto-performed regardless of standing permission, same tier as
+        # delete_system_files.
+        "git_reset_hard",
+        "git_clean_force",
+        "git_force_push",
+        "git_branch_delete",
+        "git_history_rewrite",
     }
 
     def evaluate(

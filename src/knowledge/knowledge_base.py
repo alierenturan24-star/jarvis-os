@@ -1,5 +1,7 @@
 import json
 import re
+import hashlib
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -40,6 +42,7 @@ class KnowledgeBase:
 
             data.setdefault("research", [])
             data.setdefault("notes", {})
+            data.setdefault("facts", [])
 
             return data
 
@@ -48,6 +51,7 @@ class KnowledgeBase:
             return {
                 "research": [],
                 "notes": {},
+                "facts": [],
             }
 
     def _save(self, data: dict[str, Any]) -> None:
@@ -76,6 +80,9 @@ class KnowledgeBase:
         summary: str,
         report_path: str,
         source_count: int,
+        sources: list[dict[str, Any]] | None = None,
+        provenance: str = "legacy_unverified",
+        confidence: float | None = None,
     ) -> None:
 
         data = self._load()
@@ -88,7 +95,14 @@ class KnowledgeBase:
             "summary": summary,
             "report_path": report_path,
             "source_count": source_count,
-            "created_at": datetime.now().isoformat(
+            "sources": [
+                {"source": str(item.get("source", "")), "title": str(item.get("title", "")),
+                 "url": str(item.get("url", ""))}
+                for item in (sources or []) if str(item.get("url", "")).strip()
+            ],
+            "provenance": provenance,
+            "confidence": confidence,
+            "created_at": datetime.now().astimezone().isoformat(
                 timespec="seconds"
             ),
         }
@@ -108,6 +122,17 @@ class KnowledgeBase:
 
         self._save(data)
 
+    # Sprint 38 canlı testinde yakalandı: saf alt-dize (substring) eşleşmesi,
+    # KISA bir önbellek kaydının (ör. "güvenlik") çok UZUN, çok konulu yeni
+    # bir istekte (ör. Autonomous Research Loop'un ham hedef cümlesini
+    # AYNEN topic olarak geçtiği, "... güvenlik riskini ..." gibi tek bir
+    # kelimeyi de İÇEREN uzun bir paragraf) alakasız şekilde EŞLEŞMESİNE yol
+    # açıyordu -- eski, tamamen alakasız bir "güvenlik" araştırması geri
+    # dönüyordu. Artık alt-dize eşleşmesi yalnızca KISA olan metin, UZUN
+    # olanın en az bu ORANI kadar uzunluktaysa kabul edilir; tam eşleşme
+    # (``stored_topic == normalized_topic``) her zaman geçerli kalır.
+    _MIN_CONTAINMENT_RATIO = 0.4
+
     def find_research(
         self,
         topic: str,
@@ -122,11 +147,17 @@ class KnowledgeBase:
                 "",
             )
 
-            if (
-                stored_topic == normalized_topic
-                or normalized_topic in stored_topic
-                or stored_topic in normalized_topic
-            ):
+            if stored_topic == normalized_topic:
+                return item
+
+            if not stored_topic or not normalized_topic:
+                continue
+
+            shorter, longer = sorted(
+                (stored_topic, normalized_topic), key=len,
+            )
+
+            if shorter in longer and len(shorter) >= len(longer) * self._MIN_CONTAINMENT_RATIO:
                 return item
 
         return None
@@ -164,3 +195,45 @@ class KnowledgeBase:
     def all(self) -> dict[str, Any]:
 
         return self._load()
+
+    def facts(self, topic_id: str | None = None) -> list[dict[str, Any]]:
+        rows = self._load().get("facts", [])
+        return [item for item in rows if topic_id is None or item.get("topic_id") == topic_id]
+
+    @classmethod
+    def fact_identity(cls, subject: str, predicate: str) -> str:
+        raw = f"{cls.normalize(subject)}|{cls.normalize(predicate)}"
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def persist_fact(self, finding: dict[str, Any], decision: str) -> dict[str, Any] | None:
+        """Persist a gated external fact while preserving supersession/conflict history."""
+        if decision not in {"ACCEPT_NEW", "UPDATE_EXISTING", "CONFLICT"}:
+            return None
+        provenance = finding.get("provenance") or {}
+        # Defense in depth: callers cannot turn unverified external search text
+        # into durable ACTIVE knowledge merely by supplying an accept decision.
+        if (not provenance.get("durable_eligible") or provenance.get("source_quality_rejected")
+                or provenance.get("verification_state") == "UNVERIFIED"):
+            return None
+        data = self._load()
+        facts = data.setdefault("facts", [])
+        identity = self.fact_identity(str(finding["subject"]), str(finding["predicate"]))
+        now = datetime.now().astimezone().isoformat(timespec="seconds")
+        record = {
+            "id": uuid.uuid4().hex, "topic_id": finding.get("topic_id"),
+            "subject": finding["subject"], "predicate": finding["predicate"], "value": finding["value"],
+            "normalized_value": self.normalize(str(finding["value"])), "fact_identity": identity,
+            "status": "CONFLICT" if decision == "CONFLICT" else "ACTIVE", "superseded_by": None,
+            "provenance": dict(finding["provenance"]), "confidence": float(finding.get("confidence", 0)),
+            "created_at": now, "updated_at": now,
+        }
+        active = [row for row in facts if row.get("fact_identity") == identity and row.get("status") == "ACTIVE"]
+        if decision == "UPDATE_EXISTING":
+            for old in active:
+                old.update(status="SUPERSEDED", superseded_by=record["id"], updated_at=now)
+        elif decision == "CONFLICT":
+            for old in active:
+                old.update(status="CONFLICT", updated_at=now)
+        facts.append(record)
+        self._save(data)
+        return record

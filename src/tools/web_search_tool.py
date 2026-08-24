@@ -2,7 +2,14 @@ from typing import Any
 
 from ddgs import DDGS
 
+from src.config.settings import Settings
 from src.tools.base_tool import BaseTool
+
+# Sprint: research/production pipeline audit -- now configurable/bounded via
+# Settings.RESEARCH_PROVIDER_TIMEOUT_SECONDS (same fail-closed _env_float
+# pattern as CLAUDE_CODE_TIMEOUT_SECONDS); this alias is kept so existing
+# callers importing the module-level constant keep working.
+WEB_SEARCH_TIMEOUT_SECONDS = Settings.RESEARCH_PROVIDER_TIMEOUT_SECONDS
 
 
 class WebSearchTool(BaseTool):
@@ -28,7 +35,11 @@ class WebSearchTool(BaseTool):
             }
 
         try:
-            raw_results = DDGS().text(
+            # DDGS'nin istemci timeout'u verilmezse DNS/ağ katmanında
+            # sınırsız bekleyebilir. Hata mevcut güvenli sonuç yoluna düşer.
+            requested_timeout = float(kwargs.get("timeout_seconds", WEB_SEARCH_TIMEOUT_SECONDS))
+            timeout = max(0.01, min(WEB_SEARCH_TIMEOUT_SECONDS, requested_timeout))
+            raw_results = DDGS(timeout=timeout).text(
                 query,
                 region="tr-tr",
                 safesearch="moderate",
@@ -81,9 +92,11 @@ class WebSearchTool(BaseTool):
         self,
         query: str,
         max_results: int = 5,
+        timeout_seconds: float = WEB_SEARCH_TIMEOUT_SECONDS,
     ) -> dict:
 
         return self.execute(
             query=query,
             max_results=max_results,
+            timeout_seconds=timeout_seconds,
         )

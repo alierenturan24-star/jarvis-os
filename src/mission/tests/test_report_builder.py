@@ -20,7 +20,8 @@ def _repo(name: str = "octocat/sample-agent", stars: int = 4200) -> RepoData:
         name=name.split("/")[-1],
         full_name=name,
         url=f"https://github.com/{name}",
-        description="A sample AI agent repo used for report builder tests.",
+        description="An autonomous LLM agent orchestration workflow with task agents.",
+        topics=["ai-agent", "llm", "orchestration", "workflow"],
         stars=stars,
         forks=10,
         license="mit",
@@ -59,6 +60,35 @@ class TestSectionsHandleMissingOrIncompleteDepartments:
         report = build_ceo_report(mission)
         assert "Tamamlanmadı" in report
         assert "boom" in report
+
+
+class TestMediaSection:
+    """Sprint 39: ``MediaManager``'ın (zaten var olan) çıktısı CEO
+    raporunda kendi bölümünde gösterilmeli -- ``_research_section`` ile
+    AYNI desen."""
+
+    def test_media_not_selected_omits_section(self):
+        mission = Mission(title="t", mission_type=MissionType.CODE, departments=["github"])
+        mission.tasks = []
+        report = build_ceo_report(mission)
+        assert "Media" not in report
+
+    def test_media_output_shown_in_its_own_section(self):
+        from src.jobs.task_result import TaskResult
+
+        mission = _mission_with_task("media")
+        mission.tasks[0].result = TaskResult(output="SENARYO\nBitcoin düştü...", success=True)
+        report = build_ceo_report(mission)
+        assert "Media" in report
+        assert "SENARYO" in report
+
+    def test_media_not_duplicated_in_other_departments_section(self):
+        from src.jobs.task_result import TaskResult
+
+        mission = _mission_with_task("media")
+        mission.tasks[0].result = TaskResult(output="SENARYO\n...", success=True)
+        report = build_ceo_report(mission)
+        assert "Diğer departmanlar" not in report
 
 
 class TestReportSurfacesRealAdapterData:
@@ -178,3 +208,142 @@ class TestCeoReportEndToEndWithRealHandlersNetworkMocked:
         assert "Sandbox" in report and "PASS" in report
         assert "Integration" in report
         assert "CEO" in report
+
+
+class TestAiStrategySectionShowsPerDepartmentRouting:
+    """Sprint 40: mission özeti ("Seçilen provider:") DEĞİŞMEDEN, LLM
+    çağıran her departman için AYRI bir satır da gösterilmeli."""
+
+    @staticmethod
+    def _strategy_plan(department_ai_choices):
+        from src.strategy.models import AIChoice, AIStrategyPlan, TaskCategory
+
+        return AIStrategyPlan(
+            request="test",
+            category=TaskCategory.YOUTUBE,
+            category_reason="test",
+            departments=(),
+            tools=(),
+            ai_choice=AIChoice(
+                provider="ollama", model="llama3.2", tier="1-yerel-ücretsiz",
+                reason="mission özeti", estimated_cost=0.0, confidence=80,
+            ),
+            free_sufficient=True, free_sufficient_reason="t",
+            local_sufficient=True, local_sufficient_reason="t",
+            paid_required=False, paid_required_reason="t",
+            department_ai_choices=department_ai_choices,
+        )
+
+    def test_department_breakdown_shown_when_present(self):
+        from src.strategy.models import AIChoice
+
+        mission = Mission(title="t", mission_type=MissionType.YOUTUBE, departments=["research", "finance"])
+        mission.tasks = []
+        mission.ai_strategy = self._strategy_plan({
+            "research": AIChoice(provider="gemini", model="gemini-2.5-flash", tier="3-ücretsiz-servis", reason="research gerekçesi", estimated_cost=0.0, confidence=88),
+            "finance": AIChoice(provider="ollama", model="llama3.2", tier="1-yerel-ücretsiz", reason="finance gerekçesi", estimated_cost=0.0, confidence=65),
+        })
+
+        report = build_ceo_report(mission)
+
+        assert "Departman başına provider kararı:" in report
+        assert "research: gemini" in report
+        assert "finance: ollama" in report
+        # Mission özeti satırı DEĞİŞMEDEN kalmalı.
+        assert "Seçilen provider: ollama" in report
+
+    def test_no_breakdown_section_when_map_is_empty(self):
+        mission = Mission(title="t", mission_type=MissionType.CODE, departments=["github"])
+        mission.tasks = []
+        mission.ai_strategy = self._strategy_plan({})
+
+        report = build_ceo_report(mission)
+
+        assert "Departman başına provider kararı:" not in report
+
+
+class TestRecoverySection:
+    """Sprint 42 (AUTONOMOUS GOAL EXECUTION): ``mission.recovery`` (bkz.
+    ``src.mission.recovery``) CEO raporunda okunabilir bir bölüme
+    dönüşmeli -- yeni bir değerlendirme İCAT ETMEZ, yalnızca ZATEN
+    hesaplanmış ``MissionRecoveryReport``'u okur."""
+
+    def test_no_recovery_shows_never_triggered_note(self):
+        mission = Mission(title="t", mission_type=MissionType.CODE, departments=["github"])
+        mission.tasks = []
+
+        report = build_ceo_report(mission)
+
+        assert "RECOVERY (HEDEF KORUMA)" in report
+        assert "kurtarma hiç tetiklenmedi" in report
+
+    def test_recovery_report_renders_goal_preservation_questions_and_attempts(self):
+        from src.mission.failure_classification import FailureClass
+        from src.mission.recovery import MissionRecoveryReport, RecoveryAttempt, RecoveryStep
+
+        t1 = Task(title="[github] adım1", agent="github", handler=lambda t: "ok")
+        t1.status = TaskStatus.COMPLETED
+        t2 = Task(title="[media] adım2", agent="media", handler=lambda t: "ok")
+        t2.status = TaskStatus.COMPLETED
+
+        mission = Mission(title="YouTube videosu üret", mission_type=MissionType.YOUTUBE, departments=["github", "media"])
+        mission.tasks = [t1, t2]
+        mission.recovery = MissionRecoveryReport(
+            goal="YouTube videosu üret",
+            ran=True,
+            attempts=[
+                RecoveryAttempt(
+                    task_id=t2.id, department="media", failure_class=FailureClass.TIMEOUT,
+                    step=RecoveryStep.SAME_METHOD_RETRY, provider_tried="__same_method_retry__",
+                    succeeded=False, note="Aynı yöntemle tekrar denendi.",
+                ),
+                RecoveryAttempt(
+                    task_id=t2.id, department="media", failure_class=FailureClass.TIMEOUT,
+                    step=RecoveryStep.ANOTHER_FREE_PROVIDER, provider_tried="gemini",
+                    succeeded=True, note='Alternatif ücretsiz sağlayıcı denendi: "gemini".',
+                ),
+            ],
+            resolved_task_ids=[t2.id],
+        )
+
+        report = build_ceo_report(mission)
+
+        assert "ORİJİNAL HEDEF NE? YouTube videosu üret" in report
+        assert "NE KALDI? hiçbir şey (tümü kurtarıldı)" in report
+        assert "NEYİN BAŞARISIZ OLMASI BENİ DURDURDU? timeout" in report
+        assert "gemini" in report
+        assert "Kurtarılan görev sayısı: 1" in report
+
+    def test_approval_required_section_never_implies_a_paid_call_was_made(self):
+        from src.mission.failure_classification import FailureClass
+        from src.mission.recovery import MissionRecoveryReport, RecoveryAttempt, RecoveryStep
+
+        t1 = Task(title="[finance] analiz", agent="finance", handler=lambda t: "ok")
+        t1.status = TaskStatus.FAILED
+
+        mission = Mission(title="bitcoin analiz et", mission_type=MissionType.FINANCE, departments=["finance"])
+        mission.tasks = [t1]
+        mission.recovery = MissionRecoveryReport(
+            goal="bitcoin analiz et",
+            ran=True,
+            attempts=[
+                RecoveryAttempt(
+                    task_id=t1.id, department="finance", failure_class=FailureClass.RATE_LIMIT,
+                    step=RecoveryStep.PAID_APPROVAL_REQUIRED, provider_tried="__ladder_exhausted__",
+                    succeeded=False, note="Tüm ücretsiz seçenekler tükendi.",
+                ),
+            ],
+            still_failed_task_ids=[t1.id],
+            approval_required=[{
+                "task_id": t1.id, "department": "finance",
+                "need": '"finance" görevi için ücretli bir sağlayıcı gerekiyor.',
+                "why": "429 Too Many Requests",
+                "why_free_insufficient": "Tüm ücretsiz/yerel seçenekler denendi ve tükendi.",
+            }],
+        )
+
+        report = build_ceo_report(mission)
+
+        assert "KULLANICI ONAYI GEREKİYOR" in report
+        assert "NEYE İHTİYAÇ VAR" in report
+        assert "ÜCRETSİZ ALTERNATİFLER NEDEN YETMEDİ" in report

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 from src.config.settings import Settings
 from src.providers.provider_manager import ProviderManager
@@ -41,6 +42,11 @@ COMPLEX_TASK_CLASSES = {
 # yapılan bir yaklaşıklamadır (gerçek zamanlı kota takibi bu sprintin
 # kapsamı dışındadır).
 FREE_TIER_PROVIDERS = {"gemini", "groq", "openrouter"}
+
+# API billing değildir: kullanıcının önceden giriş yaptığı CLI abonelik
+# kaynaklarıdır. Yalnız coding için aday yapılır ve raporda "ücretsiz API"
+# diye etiketlenmez.
+PLAN_CLI_PROVIDERS = {"codex", "claude_code"}
 
 # Görev tipine göre metin sınıflandırması için anahtar kelimeler.
 # Sıra önemlidir: daha spesifik sınıflar önce kontrol edilir.
@@ -89,6 +95,17 @@ _PAID_COST_PER_1K: dict[str, float] = {
     "aiml": 0.003,
 }
 
+# Doğrulanabilir ücret sınıfları (raporlama/Control Center için). "free"
+# yalnızca gerçek ücretsiz kota/yerel çalışma için kullanılır -- CLI
+# abonelik worker'ları (PLAN_CLI_PROVIDERS) kasıtlı olarak "free" DEĞİL,
+# ayrı "plan" sınıfındadır (bkz. yukarıdaki not: "ücretsiz API" diye
+# etiketlenmez). Tabloda yer almayan bir sağlayıcı için asla uydurulmaz --
+# "unknown" döner.
+COST_CLASS_FREE = "free"
+COST_CLASS_PLAN = "plan"
+COST_CLASS_PAID = "paid"
+COST_CLASS_UNKNOWN = "unknown"
+
 
 @dataclass(frozen=True)
 class TaskCostProfile:
@@ -116,9 +133,9 @@ TASK_COST_PROFILES: dict[str, TaskCostProfile] = {
     ),
     TASK_CODING: TaskCostProfile(
         task_type=TASK_CODING,
-        priority_provider="deepseek",
-        fallback_provider="anthropic",
-        estimated_cost=0.002,
+        priority_provider="codex",
+        fallback_provider="claude_code",
+        estimated_cost=0.0,
         quality_score=86,
         speed_score=70,
     ),
@@ -199,6 +216,22 @@ class CostOptimizer:
     def is_free(provider_name: str) -> bool:
         return ProviderManager.normalize(provider_name) in FREE_TIER_PROVIDERS
 
+    @staticmethod
+    def cost_class(provider_name: str) -> str:
+        """Sağlayıcının doğrulanabilir ücret sınıfı. Yalnızca güvenilir
+        şekilde bilinen sağlayıcılar için "free"/"plan"/"paid" döner;
+        tabloda yer almayan bir sağlayıcı için maliyet UYDURULMAZ --
+        "unknown" döner."""
+
+        normalized = ProviderManager.normalize(provider_name)
+        if normalized == "ollama" or normalized in FREE_TIER_PROVIDERS:
+            return COST_CLASS_FREE
+        if normalized in PLAN_CLI_PROVIDERS:
+            return COST_CLASS_PLAN
+        if normalized in _PAID_COST_PER_1K:
+            return COST_CLASS_PAID
+        return COST_CLASS_UNKNOWN
+
     def _is_available(self, provider_name: str) -> bool:
         provider = self.provider_manager.get(provider_name)
         return bool(provider) and provider.is_available()
@@ -217,6 +250,9 @@ class CostOptimizer:
 
         if normalized == "ollama" or self.is_free(normalized):
             return 0.0
+
+        if normalized in PLAN_CLI_PROVIDERS:
+            return 0.0  # API billing yok; mevcut plan kullanımı ayrı semantiktir.
 
         return _PAID_COST_PER_1K.get(normalized, profile.estimated_cost or 0.001)
 
@@ -254,7 +290,11 @@ class CostOptimizer:
         text = (message or "").casefold()
 
         for task_type, keywords in _TASK_KEYWORDS.items():
-            if any(keyword in text for keyword in keywords):
+            if any(
+                re.search(rf"(?<!\w){re.escape(keyword)}(?!\w)", text)
+                if keyword == "bug" else keyword in text
+                for keyword in keywords
+            ):
                 return task_type
 
         return TASK_CHAT
@@ -267,6 +307,25 @@ class CostOptimizer:
         is_complex = normalized_task in COMPLEX_TASK_CLASSES
 
         local_available = self._is_available("ollama")
+
+        # Coding worker'ları yalnız coding görevinde kullanılır. Codex hedefli
+        # implementation/debug için, Claude Code ise fallback olarak mimari/
+        # geniş inceleme için mevcut profile sırasıyla değerlendirilir.
+        if normalized_task == TASK_CODING:
+            for candidate in (profile.priority_provider, profile.fallback_provider):
+                if self._is_available(candidate):
+                    return self._decision(
+                        provider=candidate,
+                        profile=profile,
+                        reason=(
+                            f'Coding görevi için mevcut abonelik CLI worker kaynağı '
+                            f'({ProviderManager.normalize(candidate)}) seçildi; OpenAI/Anthropic '
+                            "API billing kullanılmaz."
+                        ),
+                        estimated_cost=0.0,
+                        confidence=profile.quality_score,
+                        fallback=self._other(profile, candidate),
+                    )
 
         # 1) Basit görevlerde yerel model maliyetsiz ve yeterlidir.
         if local_available and not is_complex:

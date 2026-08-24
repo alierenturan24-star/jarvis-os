@@ -9,9 +9,16 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 # Planner'ın taramaya YETKİLİ olduğu tek klasör kümesi. Bunların dışına
 # ASLA çıkılmaz ve hiçbir dosya bu taramada DEĞİŞTİRİLMEZ — yalnızca
 # okunur (AST ile ayrıştırma, import/çalıştırma YOK).
+#
+# Sprint 41 (LOCAL CODE INTELLIGENCE): "src/strategy" (AIStrategyEngine/
+# CostOptimizer'ın tier mantığı) ve "src/mission" (Mission/Department
+# orchestration) eklendi -- bu iki paket Sprint 34-40'ta oluşturuldu,
+# önceki liste bunlardan HABERSİZDİ. Yeni bir tarayıcı İCAT EDİLMEDİ,
+# yalnızca ZATEN VAR OLAN taramanın yetki alanı genişletildi.
 JARVIS_SCAN_FOLDERS = (
     "src/core", "src/providers", "src/tools", "src/agents",
     "src/github", "src/evaluation", "src/sandbox",
+    "src/strategy", "src/mission",
 )
 
 

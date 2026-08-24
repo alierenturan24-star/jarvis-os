@@ -8,7 +8,7 @@ from src.council.models import (
 from src.council.selector import CouncilSelector
 from src.context.prompt_builder import PromptBuilder
 from src.providers.cost_optimizer import ModelDecision
-from src.providers.provider_manager import ProviderManager
+from src.providers.provider_manager import ProviderManager, TASK_LONG_RESEARCH
 
 
 class AICouncil:
@@ -53,11 +53,11 @@ class AICouncil:
 
         try:
 
-            answer = self.provider_manager.generate(
-                prompt,
-                profile.provider,
-                profile.model,
+            route = self.provider_manager.route_and_generate(
+                prompt, task_type=TASK_LONG_RESEARCH,
+                preferred_provider=profile.provider, model_name=profile.model,
             )
+            answer = route.output
 
             failed_messages = [
                 "zaman aşımına uğradı",
@@ -66,7 +66,7 @@ class AICouncil:
                 "model cevap üretmedi",
             ]
 
-            success = not any(
+            success = route.success and not any(
                 text in answer.casefold()
                 for text in failed_messages
             )

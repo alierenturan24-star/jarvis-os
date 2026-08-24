@@ -1,6 +1,7 @@
 from src.agents.base_agent import BaseAgent
 from src.planner.task import Task
 from src.providers.router import ModelRouter
+from src.providers.provider_manager import TASK_PLANNING
 
 
 class PlanningAgent(BaseAgent):
@@ -24,4 +25,5 @@ Gereksiz ayrıntı verme.
 
 Görev: {task.target}
 """
-        return self.router.generate(prompt=prompt, provider_name="ollama")
+        self.last_route = self.router.manager.route_and_generate(prompt, task_type=TASK_PLANNING)
+        return self.last_route.output

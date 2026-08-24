@@ -13,7 +13,7 @@ class Summarizer:
         # için.
         self.last_route = None
 
-    def summarize(self, topic: str, results: list[dict]) -> str:
+    def summarize(self, topic: str, results: list[dict], preferred_provider: str | None = None) -> str:
         if not results:
             return "Özetlenecek güvenilir araştırma sonucu bulunamadı."
 
@@ -52,8 +52,11 @@ Araştırma raporu:
         # Provider artık ProviderManager'ın görev-türü karar tablosuna göre
         # seçiliyor (araştırma/uzun sentez -> AIMLAPI, başarısız olursa
         # OTOMATİK olarak Ollama'ya düşer -- bkz. route_and_generate).
+        # Sprint 35: ``preferred_provider`` doluysa (AI Strategy Engine bir
+        # karar verdiyse) route_and_generate buna öncelik verir; boşsa
+        # davranış BİREBİR eskisi gibidir.
         self.last_route = self.router.manager.route_and_generate(
-            prompt=prompt, task_type=TASK_LONG_RESEARCH,
+            prompt=prompt, task_type=TASK_LONG_RESEARCH, preferred_provider=preferred_provider,
         )
         answer = self.last_route.output
         return source_fallback(topic, selected, limit=6) if is_llm_failure(answer) else answer

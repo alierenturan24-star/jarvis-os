@@ -5,6 +5,13 @@ import re
 
 class FinanceReportBuilder:
 
+    # Sprint 38'de research/report_builder.py'de yakalanan Windows MAX_PATH
+    # (260 karakter) hatasının AYNISI ("[Errno 22] Invalid argument") --
+    # Sprint 39 canlı testinde finance için de tetiklendi (uzun bir istek
+    # metni ham "asset" olarak dosya adına geçince). Aynı, kanıtlanmış
+    # düzeltme: dosya adı burada da güvenli bir uzunlukta kesiliyor.
+    _MAX_FILENAME_TOPIC_LENGTH = 80
+
     def __init__(self) -> None:
 
         self.folder = Path("workspace") / "finance"
@@ -20,6 +27,7 @@ class FinanceReportBuilder:
         filename = text.casefold().strip()
         filename = re.sub(r"[^\w\s-]", "", filename)
         filename = re.sub(r"[\s-]+", "_", filename)
+        filename = filename[:FinanceReportBuilder._MAX_FILENAME_TOPIC_LENGTH].rstrip("_")
 
         return filename or "finance"
 

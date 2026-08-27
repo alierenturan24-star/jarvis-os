@@ -86,6 +86,20 @@ class ProviderExecutionHistory:
     def recent(self, limit: int = 20) -> list[dict[str, Any]]:
         return list(reversed(self._load()))[:limit]
 
+    def recent_for(self, provider: str, task_type: Optional[str] = None, limit: int = 10) -> list[dict[str, Any]]:
+        """Most-recent-first entries for one provider (optionally narrowed
+        to a task_type/capability) -- used by
+        ``src.media.provider_selection.provider_health`` for bounded,
+        auto-recovering cooldown detection. Same store, no second read
+        path."""
+        entries = [
+            entry
+            for entry in self._load()
+            if entry.get("provider") == provider
+            and (task_type is None or entry.get("task_type") == task_type)
+        ]
+        return list(reversed(entries))[:limit]
+
     def success_rate(self, provider: str, task_type: Optional[str] = None) -> Optional[float]:
         """``provider``'ın (isteğe bağlı ``task_type`` ile daraltılmış)
         geçmiş başarı oranı -- veri yoksa ``None`` (uydurma bir sayı

@@ -2,9 +2,30 @@ import json
 import shutil
 from pathlib import Path
 
+import pytest
+
+from src.config.settings import Settings
 from src.media.production import GeneralProductionBuilder, PRODUCTION_CAPABILITIES, parse_plan_text
 from src.media.quality import validate_media_goal_artifact
 from src.media.renderer import LocalVideoRenderer, find_goal_production_package, has_production_media_capability
+
+# Sprint: safety fix -- this file predates GeneralProductionBuilder's dynamic
+# media-provider wiring (src.media.provider_selection) and never mocked
+# provider availability. Every test here exercises the LOCAL/legacy authored
+# asset path (real storyboard images, "Windows System.Speech" narration) --
+# none of them intends to exercise a REAL NVIDIA/fal/LTX network call. In an
+# environment with real keys configured, the dynamic-provider fallback in
+# production.py could otherwise genuinely invoke those remote endpoints
+# during a plain test run. Forcing the keys empty here reuses the SAME
+# technique src/media/tests/test_dynamic_provider_production.py already uses
+# to assert "no provider available" -- no new isolation mechanism invented.
+
+
+@pytest.fixture(autouse=True)
+def _no_real_media_provider_calls(monkeypatch):
+    monkeypatch.setattr(Settings, "NVIDIA_API_KEY", "")
+    monkeypatch.setattr(Settings, "FAL_API_KEY", "")
+    monkeypatch.setattr(Settings, "LTX_API_KEY", "")
 
 # Sprint: research/production pipeline audit. These tests used to assert
 # GeneralProductionBuilder always returns hardcoded German "Leni" story

@@ -149,6 +149,78 @@ class ControlCenterReadModel:
             })
         return rows
 
+    def media_providers(self) -> list[dict[str, Any]]:
+        """Sprint: multi-provider media capability foundation -- read-only
+        status for image/video/tts-capable providers (NVIDIA NIM, fal FLUX,
+        LTX-Video), distinct from ``providers()`` above (which is the
+        existing TEXT LLM provider status). Never exposes a key/token:
+        MediaModelProfile never stores one, and every field here is derived
+        from it plus the shared ProviderExecutionHistory -- ``sanitize()``
+        is applied anyway as a second layer, matching the rest of this read
+        model's posture.
+
+        ``status`` reflects configured auth/hardware state only (can a call
+        even be attempted). ``health_status``/``health_reason`` is the
+        SEPARATE, bounded/auto-recovering operational-health signal from
+        recent real execution history (see
+        ``src.media.provider_selection.provider_health``) -- a provider can
+        be AVAILABLE (valid key) yet in COOLDOWN (recent timeouts/500s),
+        and Control Center must be able to show both, not conflate them."""
+        from src.media.provider_selection import _PROVIDERS, provider_health
+
+        history = ProviderExecutionHistory()
+        entries = history.recent(500)
+        rows: list[dict[str, Any]] = []
+        for provider in _PROVIDERS:
+            for profile in provider.profiles():
+                matching = [entry for entry in entries if entry.get("provider") == profile.provider_id]
+                if profile.availability:
+                    status = "AVAILABLE"
+                elif profile.auth_required:
+                    status = "AUTH_REQUIRED"
+                elif "quota" in profile.unavailable_reason.casefold():
+                    status = "QUOTA_BLOCKED"
+                else:
+                    status = "UNAVAILABLE"
+                primary_capability = profile.capabilities[0] if profile.capabilities else ""
+                health = provider_health(profile.provider_id, primary_capability, history)
+                rows.append(sanitize({
+                    "provider": profile.provider_id, "model": profile.model_id,
+                    "capabilities": list(profile.capabilities), "status": status,
+                    "local_or_remote": profile.local_or_remote,
+                    "cost_class": profile.cost_class, "free_tier": profile.free_tier,
+                    "subscription_cli": profile.subscription_cli,
+                    "quality_tier": profile.quality_tier, "speed_tier": profile.speed_tier,
+                    "unavailable_reason": profile.unavailable_reason,
+                    "health_status": health.status, "health_reason": health.reason,
+                    "cooldown_until": health.cooldown_until,
+                    "last_used_at": matching[0].get("recorded_at") if matching else None,
+                    "successful_calls": sum(bool(entry.get("success")) for entry in matching),
+                    "failed_calls": sum(not bool(entry.get("success")) for entry in matching),
+                }))
+        return rows
+
+    def capability_resolutions(self) -> list[dict[str, Any]]:
+        """Sprint: generic capability-requirement resolution -- per fine-
+        grained capability (e.g. ``text_to_image``, ``web_research``, not
+        just department-level), why JARVIS resolved it the way it did (see
+        ``src.capabilities.resolution``). Reflects the current/last live
+        mission only (same ``jarvis.last_mission`` source ``tasks()`` reads
+        above) -- historical missions in ``self.state['missions']`` are
+        plain summary dicts and do not carry this detail."""
+        mission = getattr(getattr(self.service.runtime, "jarvis", None), "last_mission", None)
+        requirements = {row.get("name"): row for row in (getattr(mission, "capability_requirements", None) or ())}
+        rows: list[dict[str, Any]] = []
+        for resolution in (getattr(mission, "capability_resolutions", None) or ()):
+            requirement = requirements.get(resolution.get("capability"), {})
+            rows.append(sanitize({
+                "capability": resolution.get("capability"), "necessity": requirement.get("necessity"),
+                "status": resolution.get("status"), "resolved_by": resolution.get("resolved_by"),
+                "cost_class": resolution.get("cost_class"), "health": resolution.get("health"),
+                "source": resolution.get("source"), "reason": resolution.get("reason"),
+            }))
+        return rows
+
     def approvals(self) -> list[dict[str, Any]]:
         allowed = {"id", "type", "status", "what", "why", "risk", "mission_id", "worker_id", "created_at", "decided_at", "decision_reason"}
         return [sanitize({key: value for key, value in item.items() if key in allowed}) for item in reversed(self.state.get("approvals", []))]
@@ -218,6 +290,11 @@ class ControlCenterReadModel:
         unavailable = sum(not row["available"] for row in providers)
         runtime_state = self.service.runtime.state
         status = "OFFLINE" if runtime_state == "STOPPED" else "DEGRADED" if unavailable or self.service.runtime.last_error else "ONLINE"
+        # Media providers (NVIDIA/LTX) are opt-in foundations, not core text
+        # LLM routing -- their being unconfigured is an expected default
+        # state and must NOT flip overall system_status to DEGRADED.
+        media_providers = self.media_providers()
+        media_available = sum(row["status"] == "AVAILABLE" for row in media_providers)
         return {"system_status": status, "runtime_state": runtime_state,
                 "metrics": {"active_workers": sum(row["status"] == "working" for row in workers),
                             "running_tasks": counts["running"] + counts["in_progress"],
@@ -225,5 +302,7 @@ class ControlCenterReadModel:
                             "pending_approvals": sum(row.get("status") == "PENDING" for row in approvals),
                             "active_departments": len({row["department"] for row in workers if row["status"] == "working"})},
                 "provider_health": {"total": len(providers), "available": len(providers) - unavailable, "unavailable": unavailable},
+                "media_provider_health": {"total": len(media_providers), "available": media_available,
+                                          "unavailable": len(media_providers) - media_available},
                 "recent_events": self.logs()[:10], "usage": {"records": len(ProviderExecutionHistory().recent(500))},
                 "costs": self.costs()}

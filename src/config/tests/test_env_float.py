@@ -59,3 +59,39 @@ class TestD_ClaudeCodeTimeoutSettingIsBoundedByConstruction:
 
     def test_resolved_setting_is_more_realistic_than_the_old_60s_default(self):
         assert Settings.CLAUDE_CODE_TIMEOUT_SECONDS > 60.0
+
+
+class TestE_NvidiaTimeoutSettingsAreBoundedByConstruction:
+    """2026-08-26: a real hosted flux.1-schnell call exceeded the old flat,
+    unbounded ``NVIDIA_TIMEOUT = int(os.getenv(...))``. Replaced with two
+    _env_float-bounded settings -- same fail-closed convention as
+    CLAUDE_CODE_TIMEOUT_SECONDS above, never a parallel parsing scheme."""
+
+    def test_connect_timeout_resolved_setting_is_within_its_own_bounds(self):
+        assert 3.0 <= Settings.NVIDIA_CONNECT_TIMEOUT_SECONDS <= 30.0
+
+    def test_read_timeout_resolved_setting_is_within_its_own_bounds(self):
+        assert 20.0 <= Settings.NVIDIA_READ_TIMEOUT_SECONDS <= 300.0
+
+    def test_read_timeout_default_is_more_realistic_than_the_old_60s_default(self):
+        assert Settings.NVIDIA_READ_TIMEOUT_SECONDS > 60.0
+
+    def test_malformed_connect_timeout_env_falls_back_to_default(self, monkeypatch):
+        monkeypatch.setenv("NVIDIA_CONNECT_TIMEOUT_SECONDS", "not-a-number")
+        assert _env_float("NVIDIA_CONNECT_TIMEOUT_SECONDS", 10.0, minimum=3.0, maximum=30.0) == 10.0
+
+    def test_out_of_range_connect_timeout_env_falls_back_to_default(self, monkeypatch):
+        monkeypatch.setenv("NVIDIA_CONNECT_TIMEOUT_SECONDS", "999")
+        assert _env_float("NVIDIA_CONNECT_TIMEOUT_SECONDS", 10.0, minimum=3.0, maximum=30.0) == 10.0
+
+    def test_malformed_read_timeout_env_falls_back_to_default(self, monkeypatch):
+        monkeypatch.setenv("NVIDIA_READ_TIMEOUT_SECONDS", "inf")
+        assert _env_float("NVIDIA_READ_TIMEOUT_SECONDS", 120.0, minimum=20.0, maximum=300.0) == 120.0
+
+    def test_out_of_range_read_timeout_env_falls_back_to_default_never_unbounded(self, monkeypatch):
+        monkeypatch.setenv("NVIDIA_READ_TIMEOUT_SECONDS", "999999999")
+        assert _env_float("NVIDIA_READ_TIMEOUT_SECONDS", 120.0, minimum=20.0, maximum=300.0) == 120.0
+
+    def test_valid_read_timeout_env_within_bounds_is_honored(self, monkeypatch):
+        monkeypatch.setenv("NVIDIA_READ_TIMEOUT_SECONDS", "90")
+        assert _env_float("NVIDIA_READ_TIMEOUT_SECONDS", 120.0, minimum=20.0, maximum=300.0) == 90.0

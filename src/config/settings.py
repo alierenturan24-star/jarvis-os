@@ -114,6 +114,83 @@ class Settings:
     OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
     OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4.1-mini")
 
+    # NVIDIA NIM (media capability foundation -- image/video generation).
+    # No key embedded/required at import time: NvidiaMediaProvider.is_available()
+    # is simply False until the user sets NVIDIA_API_KEY locally (see
+    # docs/nvidia_media_setup in the final capability-foundation report).
+    NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "").strip()
+    NVIDIA_BASE_URL = os.getenv("NVIDIA_BASE_URL", "https://ai.api.nvidia.com/v1/genai").rstrip("/")
+    NVIDIA_IMAGE_MODEL = os.getenv("NVIDIA_IMAGE_MODEL", "black-forest-labs/flux.1-schnell")
+
+    # 2026-08-26 live smoke test: a real hosted flux.1-schnell generation
+    # call exceeded the old flat 60s `NVIDIA_TIMEOUT = int(...)` (which also
+    # had no bounds -- a malformed/huge env value would have applied
+    # unbounded). Split like requests' own (connect, read) timeout tuple --
+    # connect should fail fast, but a real remote image generation needs a
+    # much longer read budget. Bounded and fail-closed like
+    # CLAUDE_CODE_TIMEOUT_SECONDS above: never unbounded, never so small a
+    # genuine generation can't finish.
+    NVIDIA_CONNECT_TIMEOUT_SECONDS = _env_float(
+        "NVIDIA_CONNECT_TIMEOUT_SECONDS", 10.0, minimum=3.0, maximum=30.0,
+    )
+    NVIDIA_READ_TIMEOUT_SECONDS = _env_float(
+        "NVIDIA_READ_TIMEOUT_SECONDS", 120.0, minimum=20.0, maximum=300.0,
+    )
+
+    # fal.ai (media capability foundation -- FLUX text-to-image). fal.ai
+    # issues ONE account-wide API key valid for every fal-hosted model --
+    # FLUX included -- and LTX_API_KEY below is already a real fal.ai key
+    # (LTX-2.5 is fal-hosted too). FAL_API_KEY is the primary name going
+    # forward; when unset, FalMediaProvider falls back to LTX_API_KEY AT
+    # CALL TIME (never baked in here at import time, so monkeypatching
+    # either attribute independently in tests/ops still works correctly).
+    # No .env edit required to unlock fal FLUX.
+    FAL_API_KEY = os.getenv("FAL_API_KEY", "").strip()
+    FAL_BASE_URL = os.getenv("FAL_BASE_URL", "https://fal.run").rstrip("/")
+    FAL_IMAGE_MODEL = os.getenv("FAL_IMAGE_MODEL", "fal-ai/flux/schnell")
+    FAL_CONNECT_TIMEOUT_SECONDS = _env_float("FAL_CONNECT_TIMEOUT_SECONDS", 10.0, minimum=3.0, maximum=30.0)
+    FAL_READ_TIMEOUT_SECONDS = _env_float("FAL_READ_TIMEOUT_SECONDS", 60.0, minimum=10.0, maximum=180.0)
+
+    # LTX-Video (media capability foundation -- motion/video generation).
+    # Local capability is deliberately NOT auto-enabled: no weights are
+    # downloaded by JARVIS, and availability additionally requires a
+    # detected CUDA-capable GPU (see LTXMediaProvider.local_available()).
+    # Remote/API capability is opt-in via LTX_API_KEY (a fal.ai key).
+    #
+    # 2026-08-26: verified directly against fal.ai's own model pages --
+    # the current hosted model ids are lightricks/ltx-2.5/{text-to-video,
+    # image-to-video}/fast (the prior fal-ai/ltx-2/... ids were stale).
+    # Long-running video generation now uses fal's documented queue
+    # workflow (submit -> request_id -> bounded status polling -> result)
+    # instead of one long-held synchronous HTTP request -- LTX_CALL_TIMEOUT_
+    # SECONDS bounds each individual submit/status/result/download call,
+    # LTX_QUEUE_DEADLINE_SECONDS bounds the total wall-clock wait across all
+    # polls, LTX_POLL_INTERVAL_SECONDS bounds the wait between polls. All
+    # fail-closed/bounded via the same _env_float convention as
+    # CLAUDE_CODE_TIMEOUT_SECONDS above -- never unbounded.
+    LTX_API_KEY = os.getenv("LTX_API_KEY", "").strip()
+    LTX_QUEUE_BASE_URL = os.getenv("LTX_QUEUE_BASE_URL", "https://queue.fal.run").rstrip("/")
+    LTX_TEXT_TO_VIDEO_MODEL = os.getenv("LTX_TEXT_TO_VIDEO_MODEL", "lightricks/ltx-2.5/text-to-video/fast")
+    LTX_IMAGE_TO_VIDEO_MODEL = os.getenv("LTX_IMAGE_TO_VIDEO_MODEL", "lightricks/ltx-2.5/image-to-video/fast")
+    LTX_LOCAL_WEIGHTS_DIR = os.getenv("LTX_LOCAL_WEIGHTS_DIR", "").strip()
+    LTX_CONNECT_TIMEOUT_SECONDS = _env_float("LTX_CONNECT_TIMEOUT_SECONDS", 10.0, minimum=3.0, maximum=30.0)
+    LTX_CALL_TIMEOUT_SECONDS = _env_float("LTX_CALL_TIMEOUT_SECONDS", 30.0, minimum=5.0, maximum=120.0)
+    LTX_POLL_INTERVAL_SECONDS = _env_float("LTX_POLL_INTERVAL_SECONDS", 3.0, minimum=1.0, maximum=15.0)
+    LTX_QUEUE_DEADLINE_SECONDS = _env_float("LTX_QUEUE_DEADLINE_SECONDS", 240.0, minimum=30.0, maximum=600.0)
+
+    # Media provider health/cooldown (bounded, auto-recovering
+    # deprioritization of a provider+capability after recent consecutive
+    # execution failures -- see src.media.provider_selection.provider_
+    # health). Never a permanent blacklist: a single subsequent success, or
+    # this window elapsing, restores normal ranking. Real-world motivation:
+    # NVIDIA can have a valid key (genuinely "available") while its hosted
+    # endpoint is returning timeouts/500s -- this lets a healthy compatible
+    # provider win for a bounded period instead of every scene retrying the
+    # same currently-broken service.
+    MEDIA_PROVIDER_COOLDOWN_SECONDS = _env_float(
+        "MEDIA_PROVIDER_COOLDOWN_SECONDS", 600.0, minimum=60.0, maximum=3600.0,
+    )
+
     REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "120"))
     MEMORY_FILE = os.getenv("MEMORY_FILE", str(PROJECT_ROOT / "memory.json"))
     MAX_MEMORY = int(os.getenv("MAX_MEMORY", "20"))

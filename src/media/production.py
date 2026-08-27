@@ -5,12 +5,16 @@ import json
 import re
 import shutil
 import subprocess
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+from src.media.capability_model import IMAGE_TO_VIDEO, SceneProvenance, TEXT_TO_IMAGE
+from src.media.provider_selection import rank_available_providers
 from src.media.quality import REQUIRED_SECTIONS
 from src.media.renderer import _write_sapi_wav, find_ffmpeg, find_ffprobe
+from src.providers.execution_history import ProviderExecutionHistory
 
 
 PRODUCTION_CAPABILITIES = {
@@ -273,7 +277,8 @@ class GeneralProductionBuilder:
               channel_id: str = "default", channel_market: str = "Germany",
               channel_language: str = "de-DE", research_grounded: bool = False,
               research_evidence_ref: dict | None = None,
-              allow_legacy_authored_series: bool = False) -> PackageBuildResult:
+              allow_legacy_authored_series: bool = False,
+              enable_scene_motion: bool = False) -> PackageBuildResult:
         video_render_available = bool(find_ffmpeg())
         narration_available = bool(shutil.which("edge-tts") or shutil.which("powershell.exe") or shutil.which("powershell"))
         matching = self._matching_visual_assets(allow_legacy_authored_series)
@@ -293,12 +298,20 @@ class GeneralProductionBuilder:
                                        missing_capabilities=missing)
 
         if not matching:
-            return PackageBuildResult(False, error="CAPABILITY_GAP: no genuine image/video-generation "
-                                       "capability available for this goal (the pre-authored legacy art "
-                                       "series was not explicitly requested; no unrelated/placeholder asset "
-                                       "was substituted)",
-                                       required_capabilities=required, available_capabilities=available,
-                                       missing_capabilities=missing)
+            # Sprint: multi-provider media capability foundation. Before
+            # declaring CAPABILITY_GAP, check whether a genuinely configured
+            # and available dynamic provider (e.g. NVIDIA NIM text_to_image)
+            # can fulfill this goal for real -- never the legacy authored
+            # series (that stays explicit-opt-in only), never a fabricated
+            # result. Always evaluated (PHASE 9): every compatible provider
+            # considered, and why each was/wasn't usable, is cited in the
+            # returned PackageBuildResult.error either way.
+            return self._build_via_dynamic_provider(
+                goal=goal, parsed=parsed, memory=memory, channel_id=channel_id,
+                channel_market=channel_market, channel_language=channel_language,
+                research_grounded=research_grounded, research_evidence_ref=research_evidence_ref,
+                required=required, available=available, missing=missing,
+                enable_scene_motion=enable_scene_motion)
 
         previous = list(memory.get("productions", []))
         used = {row.get("visual", {}).get("source_generation_fingerprint") for row in previous}
@@ -446,6 +459,258 @@ class GeneralProductionBuilder:
         except (OSError, subprocess.SubprocessError) as error:
             self._checkpoint(checkpoint, production_id, "PACKAGE", "failed", str(error))
             return PackageBuildResult(False, error=f"production package build failed: {error}", production_id=production_id)
+
+    def _build_via_dynamic_provider(self, *, goal: str, parsed: ParsedProductionPlan, memory: dict,
+                                     channel_id: str, channel_market: str, channel_language: str,
+                                     research_grounded: bool, research_evidence_ref: dict | None,
+                                     required: tuple[str, ...], available: tuple[str, ...],
+                                     missing: tuple[str, ...],
+                                     enable_scene_motion: bool = False) -> PackageBuildResult:
+        """Real per-scene generation via whichever genuinely available,
+        ranked text_to_image provider exists (see
+        ``src.media.provider_selection``) -- e.g. NVIDIA NIM once
+        NVIDIA_API_KEY is configured. Returns an honest CAPABILITY_GAP
+        (never a fabricated result), citing every compatible provider
+        considered and why, when none is genuinely available. This path
+        never touches the legacy authored-art series and never claims a
+        fixed character identity -- content and provenance are entirely
+        goal/provider-driven.
+        """
+        ranked, considered = rank_available_providers(TEXT_TO_IMAGE)
+        if not ranked:
+            evidence = "; ".join(f"{c.profile.provider_id}/{c.profile.model_id}: {c.reason}" for c in considered) \
+                or "no media provider is registered for text_to_image"
+            return PackageBuildResult(
+                False, error="CAPABILITY_GAP: no genuine image/video-generation capability available for "
+                             "this goal (the pre-authored legacy art series was not explicitly requested; "
+                             f"no unrelated/placeholder asset was substituted). Providers considered: {evidence}",
+                required_capabilities=required, available_capabilities=available, missing_capabilities=missing)
+
+        production_id = uuid.uuid4().hex
+        root = self.output_root / channel_id / production_id
+        root.mkdir(parents=True, exist_ok=False)
+        checkpoint = root / "checkpoint.json"
+        self._checkpoint(checkpoint, production_id, "BRIEF", "completed")
+
+        scene_files: list[Path] = []
+        provenance: list[dict] = []
+        for index, scene in enumerate(parsed.scenes, 1):
+            image_path, entry = self._generate_scene_image(
+                ranked, scene, index, root, enable_motion=enable_scene_motion)
+            provenance.append(entry.as_dict())
+            if image_path is None:
+                self._checkpoint(checkpoint, production_id, "SCENES_AND_MOTION", "failed", entry.quality_evidence.get("reason", ""))
+                return PackageBuildResult(
+                    False, error=f"CAPABILITY_GAP: dynamic provider scene generation failed for scene "
+                                 f"{index}: {entry.quality_evidence.get('reason', 'unknown error')}",
+                    production_id=production_id, required_capabilities=required,
+                    available_capabilities=(), missing_capabilities=missing)
+            scene_files.append(image_path)
+        self._checkpoint(checkpoint, production_id, "SCENES_AND_MOTION", "completed")
+
+        script = parsed.script
+        audio = root / "narration.wav"
+        narration_provider = "Windows System.Speech"
+        voice = _resolve_tts_voice(channel_language)
+        edge_tts = shutil.which("edge-tts")
+        if edge_tts:
+            audio = root / "narration.mp3"
+            spoken = subprocess.run(
+                [edge_tts, "--voice", voice, "--text", script, "--write-media", str(audio)],
+                capture_output=True, text=True, timeout=60, check=False,
+            )
+            audio_ok = spoken.returncode == 0 and audio.is_file() and audio.stat().st_size > 1024
+            narration_provider = f"edge-tts {voice}"
+        else:
+            audio_ok = _write_sapi_wav(audio, script)
+        if not audio_ok:
+            return PackageBuildResult(False, error="CAPABILITY_GAP: real narration generation unavailable",
+                                       production_id=production_id, required_capabilities=required,
+                                       missing_capabilities=("narration_generation",))
+        self._checkpoint(checkpoint, production_id, "AUDIO", "completed")
+
+        narration_seconds = None
+        ffprobe = find_ffprobe()
+        if ffprobe:
+            try:
+                probe = subprocess.run(
+                    [ffprobe, "-v", "error", "-show_entries", "format=duration",
+                     "-of", "default=nw=1:nk=1", str(audio)],
+                    capture_output=True, text=True, timeout=15, check=False,
+                )
+                narration_seconds = float(probe.stdout.strip())
+            except (OSError, ValueError, subprocess.TimeoutExpired):
+                narration_seconds = None
+
+        thumbnail = root / "thumbnail-final.png"
+        shutil.copy2(self._thumbnail_source(scene_files, root), thumbnail)
+
+        scene_plan = [{
+            "scene_id": s.scene_id, "script_beat_id": s.script_beat_id, "purpose": s.purpose,
+            "narration_segment": s.narration_segment, "visual_description": s.visual_description,
+            "duration_seconds": s.duration_seconds, "transition": s.transition,
+        } for s in parsed.scenes]
+
+        used_providers = sorted({row["provider"] for row in provenance if row.get("success")})
+        fingerprint = hashlib.sha256(b"".join(path.read_bytes() for path in scene_files)).hexdigest()
+
+        manifest = {
+            "schema_version": 4, "production_id": production_id,
+            "channel_id": channel_id, "channel_market": channel_market, "channel_language": channel_language,
+            "series_id": "", "story_state": "NEW",
+            "goal": goal, "topic": parsed.title,
+            "target_audience": "general", "target_country_language": f"{channel_market} / {channel_language}",
+            "video_type": "generated_short",
+            "production_backend": f"dynamic_provider:{'+'.join(used_providers) or 'unknown'}",
+            "image_provider": "+".join(sorted({f"{row['provider']}/{row['model']}" for row in provenance if row.get("success")})),
+            "narration_provider": narration_provider, "narration_language": channel_language,
+            "narration_seconds": narration_seconds,
+            "fallback": False, "placeholder": False, "resolution": "1080x1920", "fps": 25,
+            "story_concept": f"{parsed.title}: {parsed.hook}"[:280],
+            "hook": parsed.hook, "script": script, "ending": parsed.ending,
+            "cta": "", "characters": [], "main_character_identity": "",
+            "character_consistency_method": "", "character_consistency_score": 0,
+            "character_identity": {},
+            "scene_files": [path.name for path in scene_files],
+            "scene_descriptions": [s.visual_description for s in parsed.scenes],
+            "story_beats": [s.script_beat_id for s in parsed.scenes],
+            "scene_plan": scene_plan,
+            # No character_motion entries (that spec is the legacy authored-
+            # pose-sheet path only). Provider-generated stills rely on
+            # LocalVideoRenderer's zoompan branch; when enable_scene_motion
+            # produced a real .mp4 for a scene, LocalVideoRenderer.
+            # _render_production_package's mp4-passthrough branch
+            # (scene.suffix == ".mp4") scales/crops/trims it directly
+            # instead of running zoompan on a still.
+            "character_motion": [], "successful_poses": [], "failed_poses": [],
+            "audio_file": audio.name,
+            "thumbnail_path": str(thumbnail.resolve()),
+            "thumbnail_concepts": [parsed.thumbnail_concept], "selected_thumbnail": parsed.thumbnail_concept,
+            "thumbnail_selection_reason": "final generated scene reused as thumbnail",
+            "title_candidates": [parsed.title], "selected_title": parsed.title,
+            "description": parsed.description, "tags": list(parsed.tags),
+            "opportunity_selection": {"bounded": True, "trend_claim": False,
+                "candidates": [parsed.title], "selected": parsed.title,
+                "basis": ("research-grounded opportunity" if research_grounded else
+                          "channel fit, novelty, feasibility "
+                          "(NO stored research/opportunity evidence found for the requested goal)")},
+            "selected_opportunity": parsed.title,
+            "selection_reason": ("derived from stored research evidence for this goal" if research_grounded
+                                 else "no stored research evidence; derived from goal text and channel context only"),
+            "source_refs": [research_evidence_ref] if research_evidence_ref else [],
+            "creative_angle": parsed.hook,
+            "research_grounded": research_grounded,
+            "research_status": "grounded" if research_grounded else "no_stored_research_evidence",
+            "research_evidence_ref": research_evidence_ref,
+            "visual_configuration": {"source_generation_fingerprint": fingerprint,
+                "crop_order": [], "production_id": production_id},
+            "source_generation_fingerprint": fingerprint,
+            "tested_variation": f"goal-driven script ({len(scene_files)} scenes) via dynamic provider "
+                                 f"({'+'.join(used_providers) or 'unknown'})",
+            "music": None, "publish_used": False,
+            "scene_provenance": provenance,
+        }
+        manifest_path = root / "production.json"
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        self._checkpoint(checkpoint, production_id, "PACKAGE", "completed")
+        return PackageBuildResult(True, str(manifest_path.resolve()), production_id=production_id,
+                                   required_capabilities=required, available_capabilities=required,
+                                   missing_capabilities=())
+
+    @staticmethod
+    def _generate_scene_image(ranked, scene: ScenePlan, index: int, root: Path,
+                               *, enable_motion: bool = False) -> tuple[Path | None, SceneProvenance]:
+        """Try the ranked candidates in order (bounded to the top 2 -- same
+        bounded-retry spirit as the existing repair loop, never unbounded)
+        so one candidate's real execution failure triggers the existing
+        fallback chain (Phase 8) instead of failing the whole scene
+        immediately.
+
+        When ``enable_motion`` is set AND the winning image provider
+        returned a real hosted URL for its own output (e.g. fal FLUX --
+        NVIDIA returns base64 only, no URL), this OPTIONALLY chains a
+        ranked image_to_video provider to turn that still into real scene
+        motion instead of the renderer's deterministic zoompan fallback.
+        Bounded to the single top-ranked video candidate, never retried,
+        and any failure/unavailability silently keeps the still image --
+        motion is a bonus, never a build-blocking requirement (task: "do
+        not force video generation for every scene")."""
+        history = ProviderExecutionHistory()
+        attempted: list[str] = []
+        for profile, provider in ranked[:2]:
+            if not hasattr(provider, "generate_image"):
+                continue
+            fallback_used = bool(attempted)
+            attempted.append(profile.provider_id)
+            result = provider.generate_image(scene.visual_description, width=1024, height=1344)
+            history.record(task_type=TEXT_TO_IMAGE, provider=profile.provider_id, success=result.success,
+                            fallback_used=fallback_used, duration_seconds=result.duration_seconds or 0.0,
+                            cost_class=result.cost_class)
+            if result.success and result.content_bytes and len(result.content_bytes) > 1000:
+                if enable_motion and result.content_url:
+                    motion_path, motion_entry = GeneralProductionBuilder._maybe_generate_scene_motion(
+                        scene, result.content_url, index, root, history)
+                    if motion_path is not None:
+                        return motion_path, motion_entry
+                path = root / f"scene-{index:02d}.png"
+                path.write_bytes(result.content_bytes)
+                return path, SceneProvenance(
+                    scene_id=scene.scene_id, capability=TEXT_TO_IMAGE, provider=profile.provider_id,
+                    model=profile.model_id, generation_type=TEXT_TO_IMAGE, output_path=str(path.resolve()),
+                    success=True, fallback_used=fallback_used, cost_class=result.cost_class,
+                    input_reference=scene.visual_description[:200], duration_seconds=result.duration_seconds)
+        return None, SceneProvenance(
+            scene_id=scene.scene_id, capability=TEXT_TO_IMAGE, provider=attempted[-1] if attempted else "",
+            model="", generation_type=TEXT_TO_IMAGE, output_path="", success=False, fallback_used=len(attempted) > 1,
+            input_reference=scene.visual_description[:200],
+            quality_evidence={"reason": f"all candidate providers failed for scene {index}: {attempted or 'none eligible'}"})
+
+    @staticmethod
+    def _maybe_generate_scene_motion(scene: ScenePlan, image_url: str, index: int, root: Path,
+                                      history: ProviderExecutionHistory) -> tuple[Path | None, SceneProvenance | None]:
+        """Bounded, best-effort image_to_video chain for one scene -- ONLY
+        the single top-ranked compatible candidate is tried (never
+        retried), and any failure returns ``(None, None)`` so the caller
+        keeps the already-generated still image and the renderer's
+        deterministic zoompan path (never blocks/fails the build for an
+        optional enhancement)."""
+        ranked_video, _ = rank_available_providers(IMAGE_TO_VIDEO)
+        for profile, provider in ranked_video[:1]:
+            if not hasattr(provider, "generate_video_from_image"):
+                continue
+            result = provider.generate_video_from_image(scene.visual_description, image_url)
+            history.record(task_type=IMAGE_TO_VIDEO, provider=profile.provider_id, success=result.success,
+                            fallback_used=False, duration_seconds=result.duration_seconds or 0.0,
+                            cost_class=result.cost_class)
+            if result.success and result.content_bytes and len(result.content_bytes) > 10_000:
+                path = root / f"scene-{index:02d}.mp4"
+                path.write_bytes(result.content_bytes)
+                return path, SceneProvenance(
+                    scene_id=scene.scene_id, capability=IMAGE_TO_VIDEO, provider=profile.provider_id,
+                    model=profile.model_id, generation_type=IMAGE_TO_VIDEO, output_path=str(path.resolve()),
+                    success=True, fallback_used=False, cost_class=result.cost_class,
+                    input_reference=scene.visual_description[:200], duration_seconds=result.duration_seconds)
+        return None, None
+
+    @staticmethod
+    def _thumbnail_source(scene_files: list[Path], root: Path) -> Path:
+        """The final thumbnail must be a real still image. When motion
+        generation (``enable_scene_motion``) turned the LAST scene into an
+        .mp4, a plain ``shutil.copy2`` of it into ``thumbnail-final.png``
+        would silently write raw video bytes into a .png file -- prefer any
+        still-image scene file, and otherwise extract one real frame from
+        the video via ffmpeg."""
+        last = scene_files[-1]
+        if last.suffix.casefold() != ".mp4":
+            return last
+        stills = [path for path in scene_files if path.suffix.casefold() != ".mp4"]
+        if stills:
+            return stills[-1]
+        frame = root / "thumbnail-source-frame.png"
+        command = [find_ffmpeg(), "-y", "-hide_banner", "-loglevel", "error",
+                   "-i", str(last), "-frames:v", "1", str(frame)]
+        subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
+        return frame if frame.is_file() else last
 
     def _split_storyboard(self, source: Path, root: Path, scene_count: int) -> list[Path]:
         width, height = self._dimensions(source)

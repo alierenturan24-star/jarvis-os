@@ -18,6 +18,8 @@ from src.strategy.strategy_engine import AIStrategyEngine
 from src.providers.provider_manager import ProviderManager
 from src.media.renderer import has_production_media_capability
 from src.capabilities.capability_registry import CapabilityRegistry
+from src.capabilities.requirement import plan_capability_requirements
+from src.capabilities.resolution import resolve_capability_plan
 
 
 class MissionEngine:
@@ -107,6 +109,32 @@ class MissionEngine:
         current_capabilities = tuple(dict.fromkeys(current_capability_names))
         capability_gaps = tuple(name for name in required_capabilities if name not in current_capabilities)
 
+        # Sprint: generic capability-requirement resolution -- a finer-
+        # grained view alongside the coarse department-level gap tracking
+        # above. Best-effort, same pattern as ai_strategy below: never
+        # blocks mission creation. allow_discovery_topic=False here keeps
+        # mission creation free of file/network side effects -- this
+        # ``self.capability_registry`` instance has no backing store (same
+        # as the ``current_capability_names`` lookup above), so it would be
+        # a no-op anyway; a store-backed registry is an explicit opt-in for
+        # callers that want live discovery-topic registration.
+        capability_requirements: tuple = ()
+        capability_resolutions: tuple = ()
+        try:
+            capability_requirements = plan_capability_requirements(mission_type, departments, semantic_goal)
+            capability_resolutions = tuple(
+                r.as_dict() for r in resolve_capability_plan(
+                    capability_requirements, capability_registry=self.capability_registry,
+                    allow_discovery_topic=False,
+                )
+            )
+            capability_requirements = tuple(
+                {"name": r.name, "necessity": r.necessity, "alternatives": list(r.alternatives), "reason": r.reason}
+                for r in capability_requirements
+            )
+        except Exception:
+            capability_requirements, capability_resolutions = (), ()
+
         mission = Mission(
             title=request,
             # Preserve the complete user message for audit/reporting. Routing
@@ -127,6 +155,8 @@ class MissionEngine:
             capability_gaps=capability_gaps,
             discovery_required=bool(capability_gaps),
             capability_candidates=registry_candidates,
+            capability_requirements=capability_requirements,
+            capability_resolutions=capability_resolutions,
             execution_hints=dict(execution_hints) if execution_hints else {},
         )
 

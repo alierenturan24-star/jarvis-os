@@ -154,6 +154,18 @@ class Mission:
     # lost) during recovery.
     capability_candidates: list[dict] = field(default_factory=list)
 
+    # Sprint: generic capability-requirement resolution (src.capabilities.
+    # requirement/resolution). A finer-grained, REQUIRED/OPTIONAL/ALTERNATIVE
+    # -aware view computed ALONGSIDE the coarse department-level
+    # required_capabilities/capability_gaps above -- neither replaces the
+    # other, and recover_mission's reactive ladder is unchanged. Empty tuples
+    # = a mission type with no fine-grained table entry yet (honest
+    # "not modeled"), or MissionEngine computed it without a matching
+    # mission type. Stored as plain dicts (dataclasses.asdict-style),
+    # matching how capability_candidates is already stored.
+    capability_requirements: tuple[dict, ...] = ()
+    capability_resolutions: tuple[dict, ...] = ()
+
     # JARVIS PRIORITY (Control Center explicit delegation hints): optional,
     # ALLOWLISTED execution hints threaded from the HTTP layer
     # (``ControlCenterService.submit_command`` -> ``JarvisRuntime.execute``

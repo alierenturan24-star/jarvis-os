@@ -88,11 +88,23 @@ _DEFAULT_MODELS: dict[str, str] = {
 # Ücretli sağlayıcılar için 1K token başına kaba/göreli nominal maliyet
 # birimi (0.0 = ücretsiz). Gerçek faturalandırma değildir; sağlayıcılar
 # arası göreli maliyet sıralamasını yansıtır.
+#
+# "nvidia"/"ltx"/"fal" (Sprint: multi-provider media capability foundation)
+# are media generation providers, not TEXT_CLASSES members -- they are NOT
+# registered in ProviderManager/TASK_COST_PROFILES (see
+# src.providers.media_provider_base's module docstring for why) and never
+# participate in text-task routing. Their cost_class() is still sourced from
+# THIS one table (no second cost model) because src.media.provider_selection
+# reuses CostOptimizer.cost_class() for the same free/local-preferred
+# ranking policy the text-task router already uses.
 _PAID_COST_PER_1K: dict[str, float] = {
     "openai": 0.005,
     "anthropic": 0.006,
     "deepseek": 0.002,
     "aiml": 0.003,
+    "nvidia": 0.004,
+    "ltx": 0.01,
+    "fal": 0.003,
 }
 
 # Doğrulanabilir ücret sınıfları (raporlama/Control Center için). "free"

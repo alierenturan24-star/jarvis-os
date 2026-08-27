@@ -169,6 +169,21 @@ class LocalVideoRenderer:
                     "end_seconds": sum(segment_durations[:index + 1]),
                     "pose_count": len(poses),
                 })
+            elif scene.suffix.casefold() == ".mp4":
+                # Sprint: multi-provider media capability foundation --
+                # image_to_video pipeline integration. A scene file is
+                # already a real generated video (see
+                # GeneralProductionBuilder._maybe_generate_scene_motion,
+                # enable_scene_motion) -- scale/crop/trim it directly
+                # instead of animating a still with zoompan. Audio is
+                # stripped here too (-an); the final composition step below
+                # applies the single narration track over every segment.
+                command = [
+                    ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-i", str(scene),
+                    "-vf", f"scale={VERTICAL_WIDTH}:{VERTICAL_HEIGHT}:force_original_aspect_ratio=increase,"
+                           f"crop={VERTICAL_WIDTH}:{VERTICAL_HEIGHT},fps=25,format=yuv420p",
+                    "-t", f"{segment_seconds:.3f}", "-an", "-c:v", "libx264", "-preset", "veryfast", str(segment),
+                ]
             else:
                 frames = max(1, round(segment_seconds * 25))
                 zoom = "min(zoom+0.00045,1.08)" if index % 2 == 0 else "if(lte(zoom,1.0),1.08,max(1.0,zoom-0.00045))"

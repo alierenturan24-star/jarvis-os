@@ -292,6 +292,8 @@ class ControlCenterHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/tasks": return self._json(self.server.service.read_model.tasks())
         if parsed.path == "/api/approvals": return self._json(self.server.service.read_model.approvals())
         if parsed.path == "/api/providers": return self._json(self.server.service.read_model.providers())
+        if parsed.path == "/api/media-providers": return self._json(self.server.service.read_model.media_providers())
+        if parsed.path == "/api/capability-resolutions": return self._json(self.server.service.read_model.capability_resolutions())
         if parsed.path == "/api/costs": return self._json(self.server.service.read_model.costs())
         if parsed.path == "/api/youtube": return self._json(self.server.service.read_model.youtube())
         if parsed.path == "/api/finance": return self._json(self.server.service.read_model.finance())

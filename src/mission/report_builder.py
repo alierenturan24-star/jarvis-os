@@ -407,7 +407,26 @@ def _research_section(task: Optional[Task]) -> str:
         return f"{header}\n{note}"
 
     output = task.result.output if task.result else ""
-    return f"{header}\n{output}"
+    # Mission repair (real Swiss-Insider-Shorts follow-up evidence, item 3/4):
+    # this is RAW LLM research prose -- a real run's research text called a
+    # tool "free"/"accessible"/"suitable" without that ever being checked
+    # against an actual capability adapter/health-check. That claim was
+    # never itself capable of promoting anything to an operational
+    # capability (research output never reaches src.capabilities.resolution
+    # or mission.completion's evidence checks -- see
+    # test_swiss_insider_mission_repair.py's
+    # TestResearchClaimsCannotSelfPromoteToCapability) -- but the report
+    # text alone could still read as an operational recommendation to a
+    # human. This disclaimer makes that boundary explicit at the point of
+    # display, without changing what research actually produces.
+    disclaimer = (
+        "(Bu, DOĞRULANMAMIŞ ham araştırma metnidir -- burada adı geçen bir araç/site/sağlayıcı "
+        "hakkındaki \"ücretsiz\"/\"erişilebilir\"/\"uygun\" gibi iddialar KENDİ BAŞINA hiçbir "
+        "capability/provider'ı operasyonel yapmaz. Yalnızca Evaluation -> Sandbox -> Integration "
+        "-> onay zincirinden geçmiş adaylar, ya da GERÇEKTEN çalıştırılıp doğrulanmış bir handler, "
+        "kullanılabilir kabul edilir.)"
+    )
+    return f"{header}\n{output}\n\n{disclaimer}"
 
 
 def _media_section(task: Optional[Task]) -> str:

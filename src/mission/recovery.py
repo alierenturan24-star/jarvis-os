@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -75,6 +76,50 @@ def _media_failure_is_text_recoverable(task: Task) -> bool:
     if not last_stage:
         return True
     return last_stage in _MEDIA_TEXT_RECOVERABLE_STAGES
+
+
+# Mission repair (real Swiss-Insider-Shorts follow-up evidence): parses the
+# provider/model identity out of a fine-grained stage marker such as
+# "text_to_image_scene_1_via_nvidia/sdxl-turbo" (see
+# ``src.media.production.GeneralProductionBuilder._generate_scene_image``/
+# ``_maybe_generate_scene_motion``). Returns ``None`` for a coarser/older
+# marker (e.g. plain "text_to_image_scene_1_of_4", "render", "planning") --
+# the capability-specific cooldown/retry below is a no-op without a
+# specific provider to cool down.
+_MEDIA_STAGE_PROVIDER_PATTERN = re.compile(
+    r"^(?P<capability>text_to_image|image_to_video)_scene_\d+(?:_of_\d+)?_via_"
+    r"(?P<provider>[^/]+)/(?P<model>.+)$"
+)
+_MEDIA_CAPABILITY_RETRY_MARKER = "__media_capability_cooldown_retry__"
+
+
+def _parse_media_stage_provider(last_stage: str) -> tuple[str, str] | None:
+    match = _MEDIA_STAGE_PROVIDER_PATTERN.match(last_stage)
+    if not match:
+        return None
+    return match.group("capability"), match.group("provider")
+
+
+def _cooldown_stalled_media_provider(task: Task) -> None:
+    """An outer ``JobManager`` timeout abandons the background thread
+    BEFORE ``ProviderExecutionHistory.record()`` ever runs for the stalled
+    provider call -- so ``src.media.provider_selection.provider_health``'s
+    EXISTING, already-persistent cooldown mechanism never learns this
+    provider just failed, and would rank the SAME provider first again on
+    a bare retry. This records the missing failure entry directly into
+    that SAME store (no second tracking system) so the next
+    ``rank_available_providers`` call naturally deprioritizes it."""
+
+    last_stage = str((task.metadata or {}).get("last_stage") or "")
+    parsed = _parse_media_stage_provider(last_stage)
+    if parsed is None:
+        return
+    capability, provider_id = parsed
+    from src.providers.execution_history import ProviderExecutionHistory
+    ProviderExecutionHistory().record(
+        task_type=capability, provider=provider_id, success=False, fallback_used=False,
+        duration_seconds=float(task.timeout_seconds or 0.0),
+    )
 
 
 class RecoveryStep(str, Enum):
@@ -329,23 +374,6 @@ def recover_task(
     if not is_recoverable_via_different_provider(failure_class):
         return attempts
 
-    if task.agent == "media" and not _media_failure_is_text_recoverable(task):
-        last_stage = str((task.metadata or {}).get("last_stage") or "bilinmiyor")
-        attempt = RecoveryAttempt(
-            task_id=task.id, department=task.agent, failure_class=failure_class,
-            step=RecoveryStep.NON_TEXT_MEDIA_CAPABILITY_GAP, provider_tried=None, succeeded=False,
-            note=(
-                f'Metin sağlayıcı (ollama/gemini/claude_code/codex) merdiveni ATLANDI -- '
-                f'başarısızlık text-planning DIŞINDA bir aşamada ("{last_stage}") oluştu; '
-                "bu aşama ayrı, yeteneğe-özel media provider'lar (bkz. "
-                "src.media.provider_selection) gerektirir, genel bir metin sağlayıcı değişimi "
-                "onu düzeltemez."
-            ),
-        )
-        history.record(attempt)
-        attempts.append(attempt)
-        return attempts
-
     def _rerun() -> None:
         original_timeout = task.timeout_seconds
         # Sprint: research/production pipeline audit -- a real Swiss Insider
@@ -371,6 +399,63 @@ def recover_task(
             job_manager.run_task(task)
         finally:
             task.timeout_seconds = original_timeout
+
+    if task.agent == "media" and not _media_failure_is_text_recoverable(task):
+        last_stage = str((task.metadata or {}).get("last_stage") or "bilinmiyor")
+        base_note = (
+            f'Metin sağlayıcı (ollama/gemini/claude_code/codex) merdiveni ATLANDI -- '
+            f'başarısızlık text-planning DIŞINDA bir aşamada ("{last_stage}") oluştu; '
+            "bu aşama ayrı, yeteneğe-özel media provider'lar (bkz. "
+            "src.media.provider_selection) gerektirir, genel bir metin sağlayıcı değişimi "
+            "onu düzeltemez."
+        )
+
+        # Mission repair (real Swiss-Insider-Shorts follow-up evidence): a
+        # bounded, CAPABILITY-specific fallback -- reuses the EXISTING
+        # ``rank_available_providers``/``provider_health`` cooldown
+        # mechanism (never invents a new provider). An outer JobManager
+        # timeout abandons the stalled provider call's thread before it can
+        # record its own failure, so that mechanism would otherwise stay
+        # unaware and rank the SAME stalled provider first again -- fixed
+        # by recording the missing failure entry directly, from the
+        # provider/model identity now carried in ``last_stage`` (see
+        # ``src.media.production._generate_scene_image``).
+        if history.already_tried(task.id, _MEDIA_CAPABILITY_RETRY_MARKER):
+            attempt = RecoveryAttempt(
+                task_id=task.id, department=task.agent, failure_class=failure_class,
+                step=RecoveryStep.NON_TEXT_MEDIA_CAPABILITY_GAP, provider_tried=None, succeeded=False,
+                note=base_note + " Yeteneğe-özel sınırlı (1 kez) yeniden deneme zaten tüketildi.",
+            )
+            history.record(attempt)
+            attempts.append(attempt)
+            return attempts
+
+        _cooldown_stalled_media_provider(task)
+        _rerun()
+        succeeded = _task_genuinely_succeeded(task)
+        attempt = RecoveryAttempt(
+            task_id=task.id, department=task.agent, failure_class=failure_class,
+            step=RecoveryStep.NON_TEXT_MEDIA_CAPABILITY_GAP, provider_tried=_MEDIA_CAPABILITY_RETRY_MARKER,
+            succeeded=succeeded,
+            note=base_note + (
+                " Sağlayıcı sağlık geçmişine bu zaman aşımı BAŞARISIZLIK olarak kaydedildi (bkz. "
+                "ProviderExecutionHistory/provider_health); ZATEN sıralı media provider'lar arasından "
+                "SINIRLI (1 kez) bir yeniden deneme yapıldı -- "
+                + ("BAŞARILI." if succeeded else "yine başarısız.")
+            ),
+        )
+        history.record(attempt)
+        attempts.append(attempt)
+        if succeeded or not _media_failure_is_text_recoverable(task):
+            # Either fixed, or still failing on a non-text stage -- either
+            # way, the generic text-provider ladder below must not run.
+            return attempts
+        failure_class = classify_failure(_failure_text(task))
+        if not is_recoverable_via_different_provider(failure_class):
+            return attempts
+        # Falls through only if the bounded retry now fails at the TEXT
+        # planning stage instead -- a genuinely different, text-recoverable
+        # failure, where the normal ladder below is the correct next step.
 
     # Basamak 1: AYNI yöntemle GÜVENLİ bir kez daha dene. Task Engine'in
     # kendi ``max_retries``'ı GERÇEK mission akışında hiçbir yerde

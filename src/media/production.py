@@ -505,9 +505,13 @@ class GeneralProductionBuilder:
         for index, scene in enumerate(parsed.scenes, 1):
             if stage_sink is not None:
                 capability_label = "image_to_video" if enable_scene_motion else "text_to_image"
+                # Coarse marker BEFORE the provider is even known -- overwritten
+                # with the real provider/model below (see ``_generate_scene_image``)
+                # as soon as a specific candidate is actually attempted. Kept as
+                # a fallback in case the loop below throws before recording one.
                 stage_sink["last_stage"] = f"{capability_label}_scene_{index}_of_{len(parsed.scenes)}"
             image_path, entry = self._generate_scene_image(
-                ranked, scene, index, root, enable_motion=enable_scene_motion)
+                ranked, scene, index, root, enable_motion=enable_scene_motion, stage_sink=stage_sink)
             provenance.append(entry.as_dict())
             if image_path is None:
                 self._checkpoint(checkpoint, production_id, "SCENES_AND_MOTION", "failed", entry.quality_evidence.get("reason", ""))
@@ -634,7 +638,8 @@ class GeneralProductionBuilder:
 
     @staticmethod
     def _generate_scene_image(ranked, scene: ScenePlan, index: int, root: Path,
-                               *, enable_motion: bool = False) -> tuple[Path | None, SceneProvenance]:
+                               *, enable_motion: bool = False,
+                               stage_sink: dict | None = None) -> tuple[Path | None, SceneProvenance]:
         """Try the ranked candidates in order (bounded to the top 2 -- same
         bounded-retry spirit as the existing repair loop, never unbounded)
         so one candidate's real execution failure triggers the existing
@@ -657,6 +662,15 @@ class GeneralProductionBuilder:
                 continue
             fallback_used = bool(attempted)
             attempted.append(profile.provider_id)
+            if stage_sink is not None:
+                # Mission repair (real Swiss-Insider-Shorts failure, follow-up
+                # evidence): a timeout at this point used to only report
+                # "text_to_image_scene_1_of_4" -- not WHICH media provider/
+                # model was actually attempted. Written immediately BEFORE
+                # the blocking network call, into the SAME dict object the
+                # (possibly outer-timed-out) background thread keeps
+                # mutating, so it survives even if this call never returns.
+                stage_sink["last_stage"] = f"{TEXT_TO_IMAGE}_scene_{index}_via_{profile.provider_id}/{profile.model_id}"
             result = provider.generate_image(scene.visual_description, width=1024, height=1344)
             history.record(task_type=TEXT_TO_IMAGE, provider=profile.provider_id, success=result.success,
                             fallback_used=fallback_used, duration_seconds=result.duration_seconds or 0.0,
@@ -664,7 +678,7 @@ class GeneralProductionBuilder:
             if result.success and result.content_bytes and len(result.content_bytes) > 1000:
                 if enable_motion and result.content_url:
                     motion_path, motion_entry = GeneralProductionBuilder._maybe_generate_scene_motion(
-                        scene, result.content_url, index, root, history)
+                        scene, result.content_url, index, root, history, stage_sink=stage_sink)
                     if motion_path is not None:
                         return motion_path, motion_entry
                 path = root / f"scene-{index:02d}.png"
@@ -682,7 +696,9 @@ class GeneralProductionBuilder:
 
     @staticmethod
     def _maybe_generate_scene_motion(scene: ScenePlan, image_url: str, index: int, root: Path,
-                                      history: ProviderExecutionHistory) -> tuple[Path | None, SceneProvenance | None]:
+                                      history: ProviderExecutionHistory,
+                                      *, stage_sink: dict | None = None,
+                                      ) -> tuple[Path | None, SceneProvenance | None]:
         """Bounded, best-effort image_to_video chain for one scene -- ONLY
         the single top-ranked compatible candidate is tried (never
         retried), and any failure returns ``(None, None)`` so the caller
@@ -693,6 +709,8 @@ class GeneralProductionBuilder:
         for profile, provider in ranked_video[:1]:
             if not hasattr(provider, "generate_video_from_image"):
                 continue
+            if stage_sink is not None:
+                stage_sink["last_stage"] = f"{IMAGE_TO_VIDEO}_scene_{index}_via_{profile.provider_id}/{profile.model_id}"
             result = provider.generate_video_from_image(scene.visual_description, image_url)
             history.record(task_type=IMAGE_TO_VIDEO, provider=profile.provider_id, success=result.success,
                             fallback_used=False, duration_seconds=result.duration_seconds or 0.0,

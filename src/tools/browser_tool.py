@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Optional
 
 from src.tools.base_tool import BaseTool
@@ -7,6 +8,36 @@ from src.tools.browser.playwright_session import (
     PlaywrightNotAvailable,
     PlaywrightSession,
 )
+
+# Mission repair (real Swiss-Insider-Shorts follow-up evidence, item 6): a
+# real mission's browser search landed on a Google anti-bot interstitial
+# ("/sorry/...") and it was accepted as if it were a normal search result --
+# neither ``search()``/``goto()`` (bare URL) nor ``read_page()`` (bare
+# title/text) checked for this. Generic (not Google-specific wording only --
+# also covers the common "unusual traffic"/captcha phrasing other engines
+# use) so a blocked page is reported as a FAILURE (``BaseAgent.verify()``
+# already treats a "Hata:"-prefixed string as failed, see
+# ``src.agents.base_agent``), never silently returned as usable evidence.
+_ANTI_BOT_URL_PATTERN = re.compile(r"/sorry/|/sorry\b", re.IGNORECASE)
+_ANTI_BOT_TEXT_MARKERS = (
+    "unusual traffic", "our systems have detected unusual traffic",
+    "captcha", "recaptcha", "isn't a robot", "i'm not a robot",
+    "before you continue to google search",
+)
+
+
+def _anti_bot_block_reason(url: str, title: str = "", text: str = "") -> Optional[str]:
+    """``None`` if nothing looks like an anti-bot interstitial; otherwise a
+    short reason string suitable for a "Hata: ..." failure message."""
+
+    lowered_url = (url or "").casefold()
+    if _ANTI_BOT_URL_PATTERN.search(lowered_url):
+        return f"anti-bot/doğrulama sayfasına yönlendirildi (URL: {url})"
+    haystack = f"{title} {text}".casefold()
+    for marker in _ANTI_BOT_TEXT_MARKERS:
+        if marker in haystack:
+            return f'anti-bot/doğrulama sayfası tespit edildi ("{marker}" ibaresi)'
+    return None
 
 
 class BrowserTool(BaseTool):
@@ -74,12 +105,18 @@ class BrowserTool(BaseTool):
         if not url:
             return "URL belirtilmedi."
         final_url = self.session.goto(url)
+        block_reason = _anti_bot_block_reason(final_url)
+        if block_reason:
+            return f"Hata: sayfa açılamadı -- {block_reason}"
         return f"Sayfa açıldı: {final_url}"
 
     def _search(self, query, engine) -> str:
         if not query:
             return "Arama metni belirtilmedi."
         final_url = self.session.search(query, engine=engine)
+        block_reason = _anti_bot_block_reason(final_url)
+        if block_reason:
+            return f"Hata: arama sonucu alınamadı -- {block_reason}"
         return f"Arama yapıldı: {final_url}"
 
     def _new_tab(self) -> str:
@@ -113,6 +150,12 @@ class BrowserTool(BaseTool):
     def _read_page(self) -> str:
         page = self.session.read_page()
         preview = page["text"].strip()[:2000]
+        block_reason = _anti_bot_block_reason(page["url"], page["title"], preview)
+        if block_reason:
+            return (
+                f"Hata: sayfa içeriği güvenilir araştırma kanıtı olarak kabul edilmedi -- {block_reason}"
+                f"\nURL: {page['url']}"
+            )
         return f"Başlık: {page['title']}\nURL: {page['url']}\n\n{preview}"
 
     def _click(self, selector) -> str:

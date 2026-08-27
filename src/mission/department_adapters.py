@@ -15,7 +15,7 @@ from src.agents.research_agent import ResearchAgent
 from src.evaluation.evaluation_engine import EvaluationEngine
 from src.evolution.collector import EvolutionCollector
 from src.evolution.scorer import EvolutionScorer
-from src.github.errors import GitHubIntelligenceError
+from src.github.errors import GitHubIntelligenceError, GitHubRateLimitError
 from src.github.github_intelligence import GitHubIntelligence
 from src.github.scoring import build_reason
 from src.integration.integration_planner import IntegrationPlanner
@@ -183,6 +183,19 @@ class GitHubDepartmentAgent(BaseAgent):
             # için ucuz (tek istek) bir ek çağrıyla çekilir.
             try:
                 repo = self.intelligence.get_repository(target.full_name, fetch_readme=True)
+            except GitHubRateLimitError as error:
+                # Mission repair (real Swiss-Insider-Shorts follow-up
+                # evidence, item 7): a rate limit is a BOUNDED SOURCE
+                # LIMITATION, not "0 results" -- must be reported as an
+                # honest task FAILURE (the leading "Hata: " makes
+                # BaseAgent.verify() correctly fail this task instead of
+                # silently marking it COMPLETED with an empty report that
+                # renders identically to a genuine empty result).
+                task.metadata["report"] = {
+                    "category": None, "target": target.full_name, "total_found": 0, "top": [],
+                    "evidence_repo": None, "readme_summary": None, "rate_limited": True,
+                }
+                return f"Hata: GitHub API rate limit -- {error}"
             except GitHubIntelligenceError as error:
                 task.metadata["report"] = {
                     "category": None, "target": target.full_name, "total_found": 0, "top": [],
@@ -311,6 +324,11 @@ class EvaluationDepartmentAgent(BaseAgent):
             category = None
             try:
                 repos = [self.intelligence.get_repository(target.full_name, fetch_readme=True)]
+            except GitHubRateLimitError as error:
+                task.metadata["report"] = {
+                    "category": None, "candidates": [], "summary": None, "rate_limited": True,
+                }
+                return f"Hata: GitHub API rate limit -- {error}"
             except GitHubIntelligenceError as error:
                 task.metadata["report"] = {
                     "category": None, "candidates": [], "summary": None,
@@ -406,7 +424,11 @@ class SandboxDepartmentAgent(BaseAgent):
     def execute(self, task: Task) -> str:
         target = _resolve_task_target(task)
         evidence_repo = task.metadata.get("evidence_repo")
-        repo, evaluation = self._pick_candidate(target, evidence_repo=evidence_repo)
+        try:
+            repo, evaluation = self._pick_candidate(target, evidence_repo=evidence_repo)
+        except GitHubRateLimitError as error:
+            task.metadata["report"] = {"repo": None, "result": None, "duration_seconds": 0.0, "rate_limited": True}
+            return f"Hata: GitHub API rate limit -- {error}"
         if repo is None or evaluation is None:
             task.metadata["report"] = {"repo": None, "result": None, "duration_seconds": 0.0}
             if target.kind == TargetKind.REPOSITORY:
@@ -442,6 +464,12 @@ class SandboxDepartmentAgent(BaseAgent):
         if target.kind == TargetKind.REPOSITORY:
             try:
                 repo = self.intelligence.get_repository(target.full_name)
+            except GitHubRateLimitError:
+                # Mission repair (item 7): a rate limit is a bounded SOURCE
+                # limitation, not "repo not found" -- let it propagate so
+                # ``execute()`` reports it as an honest task failure instead
+                # of a silently-empty-but-COMPLETED sandbox result.
+                raise
             except GitHubIntelligenceError:
                 return None, None
             return repo, self.engine.evaluate(repo)
@@ -502,6 +530,9 @@ class IntegrationDepartmentAgent(BaseAgent):
         if target.kind == TargetKind.REPOSITORY:
             try:
                 repo = self.intelligence.get_repository(target.full_name)
+            except GitHubRateLimitError as error:
+                task.metadata["report"] = {"repo": None, "plan": None, "rate_limited": True}
+                return f"Hata: GitHub API rate limit -- {error}"
             except GitHubIntelligenceError as error:
                 task.metadata["report"] = {"repo": None, "plan": None}
                 return f"IntegrationPlanner: get_repository('{target.full_name}') başarısız: {error}"

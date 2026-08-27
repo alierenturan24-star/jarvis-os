@@ -279,9 +279,12 @@ class TestRootCauseB_MediaCapabilityAwareFallback:
             job_manager=JobManager(), history=RecoveryAttemptHistory(),
         )
 
+        # A bounded (1x) capability-specific retry now runs (real-mission
+        # follow-up evidence, item 2) -- but it is NEVER a text-provider
+        # swap: ``provider_tried`` is the capability-cooldown marker, never
+        # one of the text providers.
         assert len(attempts) == 1
         assert attempts[0].step == RecoveryStep.NON_TEXT_MEDIA_CAPABILITY_GAP
-        assert attempts[0].provider_tried is None
         assert not any(
             a.provider_tried in {"ollama", "gemini", "codex", "claude_code"} for a in attempts
         )
@@ -327,6 +330,100 @@ class TestRootCauseB_MediaCapabilityAwareFallback:
             job_manager=JobManager(), history=RecoveryAttemptHistory(),
         )
         assert any(a.provider_tried == "gemini" and a.succeeded for a in attempts)
+
+
+class TestBoundedCapabilitySpecificMediaFallback:
+    """Real-mission follow-up evidence (item 2): recovery correctly SKIPPED
+    the generic text-provider ladder for a text_to_image timeout, but never
+    attempted any capability-specific fallback either. A bounded (1x) retry
+    now runs, reusing the EXISTING provider health/cooldown mechanism
+    (``src.media.provider_selection.provider_health`` /
+    ``src.providers.execution_history.ProviderExecutionHistory``) so the
+    stalled provider is deprioritized on retry -- never a new provider."""
+
+    def test_stalled_provider_is_cooled_down_and_a_bounded_retry_runs(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        from src.media.capability_model import TEXT_TO_IMAGE
+        from src.media.provider_selection import provider_health
+        from src.mission.recovery import _MEDIA_CAPABILITY_RETRY_MARKER
+        from src.providers.execution_history import ProviderExecutionHistory
+
+        # 2 prior REAL failures already on record for "nvidia" -- the
+        # cooldown mechanism trips at 3 consecutive failures.
+        history_store = ProviderExecutionHistory()
+        for _ in range(2):
+            history_store.record(
+                task_type=TEXT_TO_IMAGE, provider="nvidia", success=False,
+                fallback_used=False, duration_seconds=1.0,
+            )
+        assert provider_health("nvidia", TEXT_TO_IMAGE, ProviderExecutionHistory()).status == "HEALTHY"
+
+        calls: list[str] = []
+
+        def handler(task: Task):
+            calls.append("called")
+            return "ok"
+
+        task = Task(
+            title="t", agent="media", handler=handler,
+            metadata={
+                "preferred_ai_provider": "ollama",
+                "last_stage": "text_to_image_scene_1_via_nvidia/sdxl-turbo",
+            },
+        )
+        task.status = TaskStatus.FAILED
+        task.error = "Görev zaman aşımına uğradı (75.0 sn)."
+
+        manager = _provider_manager(ollama=True)
+        attempts = recover_task(
+            task, _mission(), provider_manager=manager,
+            job_manager=JobManager(), history=RecoveryAttemptHistory(),
+        )
+
+        assert len(calls) == 1  # the bounded (1x) retry actually ran the handler
+        assert len(attempts) == 1
+        assert attempts[0].step == RecoveryStep.NON_TEXT_MEDIA_CAPABILITY_GAP
+        assert attempts[0].provider_tried == _MEDIA_CAPABILITY_RETRY_MARKER
+        assert attempts[0].succeeded is True
+
+        # The timeout is now recorded as nvidia's 3rd consecutive failure --
+        # the EXISTING cooldown mechanism has genuinely learned from it.
+        health = provider_health("nvidia", TEXT_TO_IMAGE, ProviderExecutionHistory())
+        assert health.status == "COOLDOWN"
+
+    def test_bounded_retry_only_ever_happens_once_per_task(self):
+        task = Task(
+            title="t", agent="media", handler=lambda t: "unused",
+            metadata={"preferred_ai_provider": "ollama", "last_stage": "text_to_image_scene_1_of_4"},
+        )
+        task.status = TaskStatus.FAILED
+        task.error = "Görev zaman aşımına uğradı (75.0 sn)."
+        manager = _provider_manager(ollama=True)
+        history = RecoveryAttemptHistory()
+
+        first = recover_task(
+            task, _mission(), provider_manager=manager, job_manager=JobManager(), history=history,
+        )
+        # Simulate: the task failed again on a later pass.
+        task.status = TaskStatus.FAILED
+        task.error = "Görev zaman aşımına uğradı (75.0 sn)."
+        second = recover_task(
+            task, _mission(), provider_manager=manager, job_manager=JobManager(), history=history,
+        )
+
+        assert len(first) == 1
+        assert len(second) == 1
+        assert "zaten tüketildi" in second[0].note
+
+    def test_no_provider_identity_in_stage_is_a_safe_no_op_for_cooldown(self, tmp_path, monkeypatch):
+        # A coarser/older stage marker (no "_via_provider/model" suffix)
+        # must not crash the cooldown lookup -- it's simply skipped.
+        monkeypatch.chdir(tmp_path)
+        from src.mission.recovery import _cooldown_stalled_media_provider
+
+        task = Task(title="t", agent="media", handler=lambda t: "ok",
+                    metadata={"last_stage": "render"})
+        _cooldown_stalled_media_provider(task)  # must not raise
 
 
 # --- TEST I/J/L: candidate lifecycle is evidence-preserving ---------------------

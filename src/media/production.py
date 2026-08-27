@@ -278,7 +278,8 @@ class GeneralProductionBuilder:
               channel_language: str = "de-DE", research_grounded: bool = False,
               research_evidence_ref: dict | None = None,
               allow_legacy_authored_series: bool = False,
-              enable_scene_motion: bool = False) -> PackageBuildResult:
+              enable_scene_motion: bool = False,
+              stage_sink: dict | None = None) -> PackageBuildResult:
         video_render_available = bool(find_ffmpeg())
         narration_available = bool(shutil.which("edge-tts") or shutil.which("powershell.exe") or shutil.which("powershell"))
         matching = self._matching_visual_assets(allow_legacy_authored_series)
@@ -311,7 +312,7 @@ class GeneralProductionBuilder:
                 channel_market=channel_market, channel_language=channel_language,
                 research_grounded=research_grounded, research_evidence_ref=research_evidence_ref,
                 required=required, available=available, missing=missing,
-                enable_scene_motion=enable_scene_motion)
+                enable_scene_motion=enable_scene_motion, stage_sink=stage_sink)
 
         previous = list(memory.get("productions", []))
         used = {row.get("visual", {}).get("source_generation_fingerprint") for row in previous}
@@ -333,6 +334,8 @@ class GeneralProductionBuilder:
         self._checkpoint(checkpoint, production_id, "BRIEF", "completed")
 
         try:
+            if stage_sink is not None:
+                stage_sink["last_stage"] = "scenes_and_motion"
             scenes = self._split_storyboard(storyboard, root, len(parsed.scenes))
             pose_files = self._split_poses(poses, root)
             self._checkpoint(checkpoint, production_id, "SCENES_AND_MOTION", "completed")
@@ -350,6 +353,8 @@ class GeneralProductionBuilder:
             narration_provider = "Windows System.Speech"
             voice = _resolve_tts_voice(channel_language)
             edge_tts = shutil.which("edge-tts")
+            if stage_sink is not None:
+                stage_sink["last_stage"] = "audio_narration"
             if edge_tts:
                 audio = root / "narration.mp3"
                 spoken = subprocess.run(
@@ -450,6 +455,8 @@ class GeneralProductionBuilder:
                 "tested_variation": f"goal-driven script ({len(scenes)} scenes) over authored '{prefix}' visual asset",
                 "music": None, "publish_used": False,
             }
+            if stage_sink is not None:
+                stage_sink["last_stage"] = "package"
             manifest_path = root / "production.json"
             manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
             self._checkpoint(checkpoint, production_id, "PACKAGE", "completed")
@@ -465,7 +472,8 @@ class GeneralProductionBuilder:
                                      research_grounded: bool, research_evidence_ref: dict | None,
                                      required: tuple[str, ...], available: tuple[str, ...],
                                      missing: tuple[str, ...],
-                                     enable_scene_motion: bool = False) -> PackageBuildResult:
+                                     enable_scene_motion: bool = False,
+                                     stage_sink: dict | None = None) -> PackageBuildResult:
         """Real per-scene generation via whichever genuinely available,
         ranked text_to_image provider exists (see
         ``src.media.provider_selection``) -- e.g. NVIDIA NIM once
@@ -495,6 +503,9 @@ class GeneralProductionBuilder:
         scene_files: list[Path] = []
         provenance: list[dict] = []
         for index, scene in enumerate(parsed.scenes, 1):
+            if stage_sink is not None:
+                capability_label = "image_to_video" if enable_scene_motion else "text_to_image"
+                stage_sink["last_stage"] = f"{capability_label}_scene_{index}_of_{len(parsed.scenes)}"
             image_path, entry = self._generate_scene_image(
                 ranked, scene, index, root, enable_motion=enable_scene_motion)
             provenance.append(entry.as_dict())
@@ -513,6 +524,8 @@ class GeneralProductionBuilder:
         narration_provider = "Windows System.Speech"
         voice = _resolve_tts_voice(channel_language)
         edge_tts = shutil.which("edge-tts")
+        if stage_sink is not None:
+            stage_sink["last_stage"] = "audio_narration"
         if edge_tts:
             audio = root / "narration.mp3"
             spoken = subprocess.run(
@@ -610,6 +623,8 @@ class GeneralProductionBuilder:
             "music": None, "publish_used": False,
             "scene_provenance": provenance,
         }
+        if stage_sink is not None:
+            stage_sink["last_stage"] = "package"
         manifest_path = root / "production.json"
         manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
         self._checkpoint(checkpoint, production_id, "PACKAGE", "completed")

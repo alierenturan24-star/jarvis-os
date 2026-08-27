@@ -58,6 +58,14 @@ class MediaAgent(BaseAgent):
             self.manager.set_channel_scope(channel_match.group(1))
             task.metadata["channel_id"] = channel_match.group(1)
 
+        # Mission repair (MEDIA 75S TIMEOUT): ``task.metadata`` is the SAME
+        # dict object the (possibly outer-timed-out) background thread keeps
+        # mutating -- writing "last_stage" markers directly into it (instead
+        # of only returning a summary at the end) means a timed-out caller
+        # can still read the last stage reached, even though this call
+        # itself never returns. See ``report_builder._task_note``.
+        task.metadata["last_stage"] = "planning"
+
         produce_artifact = has_youtube_production_intent(command)
         plan_kwargs = {
             "topic": topic,
@@ -66,6 +74,8 @@ class MediaAgent(BaseAgent):
         }
         if produce_artifact and "produce_artifact" in inspect.signature(self.manager.plan).parameters:
             plan_kwargs["produce_artifact"] = True
+        if "stage_sink" in inspect.signature(self.manager.plan).parameters:
+            plan_kwargs["stage_sink"] = task.metadata
         result = self.manager.plan(**plan_kwargs)
         if "SENARYO" in result and "SAHNELER" in result:
             task.metadata["youtube_content_plan"] = True

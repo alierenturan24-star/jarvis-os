@@ -74,6 +74,7 @@ class MediaManager:
         duration_seconds: int = 60,
         preferred_provider: str | None = None,
         produce_artifact: bool = False,
+        stage_sink: dict | None = None,
     ) -> str:
         topic = topic.strip()
         self.last_capability_gap = None
@@ -182,6 +183,9 @@ Kurallar:
 - Var olmayan bir aracı kurulu/kullanılabilirmiş gibi anlatma.
 """
 
+        if stage_sink is not None:
+            stage_sink["last_stage"] = "planning"
+
         provider_name = self._resolve_provider(preferred_provider)
 
         # Sprint 40: Research'ün (Summarizer) zaten kullandığı
@@ -231,6 +235,8 @@ Kurallar:
             )
 
             def _build_production():
+                if stage_sink is not None:
+                    stage_sink["last_stage"] = "production_build"
                 return self.production_builder.build(
                     goal=topic, plan_text=plan_text,
                     memory=self.learning.store.snapshot().get("youtube_learning", {}),
@@ -240,6 +246,7 @@ Kurallar:
                     channel_language=self.channel_language,
                     research_grounded=prior is not None,
                     research_evidence_ref=research_evidence_ref,
+                    stage_sink=stage_sink,
                 )
 
             if find_goal_production_package(topic) is None:
@@ -262,7 +269,9 @@ Kurallar:
                         "Yeni artifact üretilmedi; hiçbir video yayınlanmadı."
                     )
 
-            artifact_block = self._produce_with_bounded_repair(topic, plan_text, duration_seconds, _build_production)
+            artifact_block = self._produce_with_bounded_repair(
+                topic, plan_text, duration_seconds, _build_production, stage_sink=stage_sink,
+            )
 
         production_note = (
             "Gerçek video taslağı yerel olarak üretildi; YouTube'a yüklenmedi."
@@ -277,7 +286,9 @@ Kurallar:
             f"Rapor kaydedildi:\n{report_path}{artifact_block}"
         )
 
-    def _produce_with_bounded_repair(self, topic: str, plan_text: str, duration_seconds: int, rebuild) -> str:
+    def _produce_with_bounded_repair(
+        self, topic: str, plan_text: str, duration_seconds: int, rebuild, *, stage_sink: dict | None = None,
+    ) -> str:
         """Render, self-check against the real quality gates, and bounded-retry
         the *repairable* failures (Sprint: real-production quality-gate audit,
         Phase 8 -- "repair loop"). A repairable gate failure (audio/timing/
@@ -296,11 +307,15 @@ Kurallar:
         attempts = 0
         repair_log: list[str] = []
         while True:
+            if stage_sink is not None:
+                stage_sink["last_stage"] = "render"
             render = self.renderer.render(topic, plan_text, duration_seconds)
             if not render.success:
                 self.last_artifact_path = ""
                 return f"\n\nVIDEO RENDER: BLOCKED\n{render.error}"
 
+            if stage_sink is not None:
+                stage_sink["last_stage"] = "quality_check"
             check = validate_media_goal_artifact(Path(render.artifact_path), topic)
             failing = [name for name in check.critical_failures if name != "publication_readiness"]
             self.last_artifact_path = render.artifact_path

@@ -188,6 +188,14 @@ class TestSprint40TaskLevelRouting:
     def test_llm_free_departments_fall_back_to_flat_mission_choice(self, monkeypatch):
         # github/browser gibi departman_ai_choices'ta hiç YOKTUR -- eski
         # (mission-seviyesi) davranışa güvenli bir şekilde düşerler.
+        #
+        # Mission repair (ROOT CAUSE A): bu metin artık "github"
+        # departmanını dispatch ETMİYOR (saf içerik/konu araştırması,
+        # hiçbir repo/araç edinme sinyali yok -- bkz.
+        # test_mission_engine.py::test_shorts_content_request_selects_
+        # expected_departments). "automation" AYNI LLM-free-fallback
+        # davranışını kanıtlamak için hâlâ bundle'da (department_ai_choices
+        # yalnızca research/finance/media/coding için hesaplanır).
         monkeypatch.setattr(GitHubIntelligence, "search", lambda self, *a, **k: [])
         engine = _mission_engine(available={"ollama"})
         mission = engine.create_mission(
@@ -195,8 +203,8 @@ class TestSprint40TaskLevelRouting:
         )
         plan = engine.build_task_plan(mission)
 
-        github_task = next(t for t in plan.all_tasks() if t.agent == "github")
-        assert github_task.metadata.get("preferred_ai_provider") == mission.ai_strategy.ai_choice.provider
+        automation_task = next(t for t in plan.all_tasks() if t.agent == "automation")
+        assert automation_task.metadata.get("preferred_ai_provider") == mission.ai_strategy.ai_choice.provider
 
 
 # --- 3) Provider seçimi gerçekten ProviderManager/CostOptimizer üzerinden ---------

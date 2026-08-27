@@ -21,7 +21,9 @@ from src.mission.department_adapters import (
     search_target_repositories,
 )
 from src.mission.models import Mission, MissionStatus, MissionType
-from src.mission.target_resolver import Target, TargetKind, TargetResolver, target_matches_repo
+from src.mission.target_resolver import (
+    Target, TargetKind, TargetResolver, has_acquisition_signal, target_matches_repo,
+)
 # Sprint 45: yalnızca "coding" departmanının dış görev timeout'unu, bu iki
 # CLI worker'ın GERÇEK iç timeout'larına göre hesaplamak için (bkz. aşağıdaki
 # ``CODING_DEPARTMENT_TASK_TIMEOUT_SECONDS``). Döngüsel import riski YOK --
@@ -290,6 +292,27 @@ def _narrow_pure_generation_youtube(
     return [name for name in bundle if name not in removable]
 
 
+# Mission repair (real Swiss-Insider-Shorts failure, ROOT CAUSE A): a plain
+# YouTube content/topic-research goal ("bugünün en güçlü fırsatını
+# araştır"/"research today's highest-potential opportunity") was ALWAYS
+# dispatching github/evaluation/sandbox/integration purely because
+# ``DEFAULT_DEPARTMENTS_BY_MISSION_TYPE[YOUTUBE]`` includes "github"
+# unconditionally -- there was no distinction between DOMAIN/CONTENT
+# research and CAPABILITY/ACQUISITION research. This narrows the bundle
+# back down UNLESS the text carries an explicit acquisition signal (repo/
+# github/kur/tool/provider/..., see ``has_acquisition_signal`` -- the same
+# generic vocabulary check used by ``TargetResolver`` for its own GitHub-
+# category fallback, so department selection and target resolution agree).
+# An explicit repo/tool ask (handled earlier by ``_required_goal_
+# departments``/keyword enrichment) always contains one of these cues, so
+# nothing genuinely requested by the user is removed here.
+def _narrow_pure_content_research_youtube(lowered_text: str, bundle: list[str]) -> list[str]:
+    if has_acquisition_signal(lowered_text):
+        return bundle
+    removable = {"github", *_VALIDATION_DEPARTMENTS}
+    return [name for name in bundle if name not in removable]
+
+
 def _plan_browser_steps(text: str, target: Target) -> list[tuple[str, dict]]:
     """"browser" departmanı için, ham metni KOŞULSUZ search sorgusu
     yapmak yerine, metindeki AÇIK sinyallere göre sıralı
@@ -412,13 +435,46 @@ class DepartmentOrchestrator:
                 if name not in bundle:
                     bundle.append(name)
 
-        # Learning is a required persisted outcome for combined Finance /
-        # YouTube autonomy goals even when the user says English "learning"
-        # or Turkish "hafıza" instead of the legacy "öğren" keyword.
-        if ("finance" in bundle or "media" in bundle) and any(
+        # Learning is a required persisted outcome for Finance autonomy
+        # goals even when the user says English "learning" or Turkish
+        # "hafıza" instead of the legacy "öğren" keyword.
+        #
+        # Mission repair (real Swiss-Insider-Shorts failure, ROOT CAUSE --
+        # FINANCE LEARNING IN YOUTUBE REPORT): this used to ALSO fire for
+        # "media" alone (any YouTube mission whose text merely contained
+        # "learning"/"memory"/"hafıza" -- e.g. "Kalıcı YouTube learning
+        # planını uygula") -- but the ONLY implementation ever wired to the
+        # "learning" department is ``FinanceLearningAgent`` (see
+        # ``department_adapters.DepartmentAdapterRegistry``), which reads/
+        # reports the FINANCE-only ``finance_exploration`` store bucket.
+        # Dispatching it for a pure-YouTube mission produced a truthful-
+        # looking but completely unrelated "Finance learning persisted: N
+        # candidates..." line in a YouTube report. YouTube's OWN learning
+        # persistence is already handled inside the "media" task itself
+        # (``YouTubeLearningAgent``, scoped to the ``youtube_learning``
+        # store bucket -- see ``src.media.manager``/``src.agents.media_
+        # agent``'s ``learning_persisted`` metadata flag) -- a separate
+        # "learning" department task is only meaningful when "finance" is
+        # ALSO present (combined Finance+YouTube autonomy goals).
+        if "finance" in bundle and any(
             cue in lowered for cue in ("learning", "hafıza", "memory", "öğrendik")
         ) and "learning" not in bundle:
             bundle.append("learning")
+
+        # Safety net: the keyword-enrichment loop above can ALSO add
+        # "learning" independent of the finance-gated block just above --
+        # the "learning" ``Department`` entry's own keywords
+        # ("öğren"/"öğret"/"kurs"/"eğitim al") match e.g. a plain YouTube
+        # "öğretici bir video üret" (educational-video) request with no
+        # finance signal at all. Since "learning" only ever resolves to the
+        # FINANCE-only ``FinanceLearningAgent`` (see the docstring above),
+        # it must not be dispatched for a mission that isn't genuinely
+        # about finance. ``MissionType.LEARNING`` itself is EXCLUDED from
+        # this guard -- its canonical default bundle already includes
+        # "learning" unconditionally (a separate, pre-existing design, out
+        # of scope for this fix).
+        if "learning" in bundle and "finance" not in bundle and mission_type != MissionType.LEARNING:
+            bundle = [name for name in bundle if name != "learning"]
 
         # Finance Strategy Lab is itself the bounded candidate discovery,
         # comparative backtest, OOS and qualification worker. The generic
@@ -439,6 +495,7 @@ class DepartmentOrchestrator:
         # AYNEN eskisi gibi kalır).
         if mission_type == MissionType.YOUTUBE:
             bundle = _narrow_pure_generation_youtube(lowered, bundle, enriched_additions)
+            bundle = _narrow_pure_content_research_youtube(lowered, bundle)
 
         # Sprint 33B: repo seçme/karşılaştırma niyeti + GitHub zaten
         # seçiliyse, AI Validation Pipeline'ın tamamı eksiksiz çalışsın.

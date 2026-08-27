@@ -35,11 +35,19 @@ class TestYouTubeMissionDepartments:
         # departmanının "coin" anahtar kelimesini (alt-dize olarak,
         # "bitCOIN") İÇERİR; bu ZATEN VAR OLAN, bu sprintte DEĞİŞMEYEN bir
         # davranıştır (bkz. department.py enrichment taraması).
+        #
+        # Mission repair (ROOT CAUSE A): "github" KASITLI olarak beklenen
+        # kümeden ÇIKARILDI -- bu istek bir içerik/konu araştırmasıdır
+        # ("Bitcoin neden düştü" HABERİNİ Shorts'a çevir), hiçbir repo/
+        # araç/sağlayıcı EDİNME sinyali içermez (bkz. ``has_acquisition_
+        # signal``); bu yüzden artık GitHub Intelligence dispatch
+        # EDİLMİYOR (gerçek Swiss-Insider-Shorts arızasının kök sebebi --
+        # bkz. mission repair raporu ROOT CAUSE A).
         orchestrator = DepartmentOrchestrator()
         departments = orchestrator.select_departments(
             "Bitcoin neden düştü konusunda 60 saniyelik bir YouTube Shorts hazırla."
         )
-        assert set(departments) == {"research", "github", "browser", "media", "automation", "finance"}
+        assert set(departments) == {"research", "browser", "media", "automation", "finance"}
 
 
 # --- 2) Finans Mission -> doğru departmanlar -----------------------------------

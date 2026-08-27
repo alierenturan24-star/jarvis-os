@@ -104,7 +104,19 @@ def _task_note(task: Optional[Task]) -> Optional[str]:
     if task.handler is None:
         return "Bağlı değil: handler tanımlı değil (bu departman henüz gerçek bir modüle bağlanmadı)."
     if task.status != TaskStatus.COMPLETED:
-        return f"Tamamlanmadı (durum: {task.status.value}). Hata: {task.error or '-'}"
+        note = f"Tamamlanmadı (durum: {task.status.value}). Hata: {task.error or '-'}"
+        # Mission repair (real Swiss-Insider-Shorts failure, ROOT CAUSE --
+        # MEDIA 75S TIMEOUT): a flat "Görev zaman aşımına uğradı (75.0 sn)."
+        # gave no evidence of WHICH internal stage was running. Departments
+        # that track their own progress (currently: media, see
+        # ``src.media.manager``/``src.media.production``) write a plain
+        # ``task.metadata["last_stage"]`` marker as they go -- generic
+        # (not media-specific) so any other multi-stage department can
+        # adopt the same convention later.
+        last_stage = (task.metadata or {}).get("last_stage")
+        if last_stage:
+            note += f" (son aşama: {last_stage})"
+        return note
     return None
 
 
@@ -775,6 +787,27 @@ def _recovery_section(mission: Mission) -> str:
             f"  - SAFE INTEGRATION: {len(recovery.integrated_candidates)} aday",
             f"  - SAFE USE / ORIGINAL GOAL RESUME: {len(recovery.used_candidates)} aday",
         ])
+
+    # Mission repair (ROOT CAUSE C): the counts above alone cannot explain
+    # why a candidate count SHRANK between stages (real Swiss-Insider-Shorts
+    # failure: "3 candidates found -> Evaluation 1 -> Sandbox 0 -> ... 0",
+    # with no evidence for the other 2). Every discovered candidate keeps an
+    # explicit terminal status (see ``src.mission.recovery`` CANDIDATE_*
+    # constants) -- list every one, not just the ones that survived.
+    if mission.capability_candidates:
+        lines.append("")
+        lines.append("Capability candidate evidence (her aday, düşürülmeden):")
+        for candidate in mission.capability_candidates:
+            label = str(
+                candidate.get("title") or candidate.get("url")
+                or candidate.get("repository_url") or "(bilinmeyen aday)"
+            )
+            status = str(candidate.get("status") or "DISCOVERED")
+            reason = candidate.get("status_reason")
+            line = f"  - {label}: {status}"
+            if reason:
+                line += f" -- {reason}"
+            lines.append(line)
 
     if recovery.approval_required:
         lines.append("")

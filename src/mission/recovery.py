@@ -8,6 +8,7 @@ from src.core.plan_executor import PlanExecutor
 from src.core.task_plan import TaskPlan
 from src.evolution.collector import EvolutionCollector
 from src.evaluation.evaluation_engine import EvaluationEngine
+from src.evaluation.relevance import RELEVANCE_LOW_THRESHOLD
 from src.github.github_intelligence import GitHubIntelligence
 from src.github.models import RepoData
 from src.integration.integration_planner import IntegrationPlanner
@@ -45,6 +46,36 @@ AUTO_SAFE_PROVIDERS = frozenset({
 # tekrar çalıştırmak aynı ağ timeout'unu gereksiz yere yineliyordu.
 PROVIDER_BACKED_DEPARTMENTS = frozenset({"research", "finance", "media", "coding"})
 
+# Mission repair (real Swiss-Insider-Shorts failure, ROOT CAUSE B): "media"
+# is NOT a single text-LLM-backed capability the way research/finance/coding
+# are -- ``MediaManager.plan()`` makes exactly ONE text-LLM call (the
+# SENARYO/SAHNELER script/planning prompt), then hands off to entirely
+# separate, capability-scoped media providers (NVIDIA/fal/LTX, selected via
+# ``src.media.provider_selection.rank_available_providers`` -- see
+# ``src.providers.media_provider_base`` for why those are deliberately NOT
+# registered in ``ProviderManager``). Swapping ``preferred_ai_provider``
+# among AUTO_SAFE_PROVIDERS only ever changes which TEXT provider runs the
+# planning call -- it has NO effect on text_to_image/image_to_video/TTS/
+# render. ``task.metadata["last_stage"]`` (written live by MediaAgent/
+# MediaManager/GeneralProductionBuilder as they progress, see
+# ``report_builder._task_note``) is the evidence used to tell these apart.
+_MEDIA_TEXT_RECOVERABLE_STAGES = frozenset({"starting", "planning"})
+
+
+def _media_failure_is_text_recoverable(task: Task) -> bool:
+    """``True`` only when the recorded failure point is the text/script
+    planning call (or no stage evidence was ever recorded, e.g. a legacy
+    task/test predating this tracking -- fails open to the prior behavior
+    rather than silently blocking recovery for a genuinely text-only
+    failure). ``False`` for any recorded non-text stage (text_to_image/
+    image_to_video/audio_narration/render/quality_check/package/...) --
+    those need a genuine media-capability route, not a text-provider swap."""
+
+    last_stage = str((task.metadata or {}).get("last_stage") or "")
+    if not last_stage:
+        return True
+    return last_stage in _MEDIA_TEXT_RECOVERABLE_STAGES
+
 
 class RecoveryStep(str, Enum):
     """Sprint 42 KURTARMA MERDİVENİ -- spesifikasyondaki 11 basamak, aynı
@@ -53,6 +84,13 @@ class RecoveryStep(str, Enum):
     karşılığı olmadığı için raporlarda dürüstçe "uygulanamaz" notuyla
     geçilir -- var olmayan bir yetenek TAKLİT EDİLMEZ."""
 
+    # Mission repair (ROOT CAUSE B -- provider vs. capability fallback):
+    # recorded INSTEAD OF the provider ladder when a media task failed on a
+    # non-text capability (text_to_image/image_to_video/render/audio/...) --
+    # swapping the TEXT ``preferred_ai_provider`` (ollama/gemini/claude_code/
+    # codex) cannot fix that, so the ladder is skipped, evidenced, not
+    # silently dropped.
+    NON_TEXT_MEDIA_CAPABILITY_GAP = "0_non_text_media_capability_gap"
     SAME_METHOD_RETRY = "1_same_method_retry"
     ANOTHER_LOCAL_MODEL = "2_another_local_model"
     ANOTHER_FREE_PROVIDER = "3_another_free_provider"
@@ -291,6 +329,23 @@ def recover_task(
     if not is_recoverable_via_different_provider(failure_class):
         return attempts
 
+    if task.agent == "media" and not _media_failure_is_text_recoverable(task):
+        last_stage = str((task.metadata or {}).get("last_stage") or "bilinmiyor")
+        attempt = RecoveryAttempt(
+            task_id=task.id, department=task.agent, failure_class=failure_class,
+            step=RecoveryStep.NON_TEXT_MEDIA_CAPABILITY_GAP, provider_tried=None, succeeded=False,
+            note=(
+                f'Metin sağlayıcı (ollama/gemini/claude_code/codex) merdiveni ATLANDI -- '
+                f'başarısızlık text-planning DIŞINDA bir aşamada ("{last_stage}") oluştu; '
+                "bu aşama ayrı, yeteneğe-özel media provider'lar (bkz. "
+                "src.media.provider_selection) gerektirir, genel bir metin sağlayıcı değişimi "
+                "onu düzeltemez."
+            ),
+        )
+        history.record(attempt)
+        attempts.append(attempt)
+        return attempts
+
     def _rerun() -> None:
         original_timeout = task.timeout_seconds
         # Sprint: research/production pipeline audit -- a real Swiss Insider
@@ -492,6 +547,23 @@ def _existing_mission_candidates(mission: Mission, plan: TaskPlan) -> list[dict]
     return found
 
 
+# Mission repair (real Swiss-Insider-Shorts failure, ROOT CAUSE C): the
+# candidate list used to shrink silently (3 found -> 1 evaluated -> 0
+# sandboxed -> 0 integrated) with no record of WHY a candidate dropped out
+# at each stage. Every candidate now keeps an explicit terminal
+# ``candidate["status"]``/``candidate["status_reason"]`` -- nothing is
+# removed from ``mission.capability_candidates``, only annotated in place,
+# so the mission report can explain every candidate instead of just
+# printing shrinking list lengths (see ``report_builder``).
+CANDIDATE_DISCOVERED = "DISCOVERED"
+CANDIDATE_UNRESOLVED = "UNRESOLVED_NOT_A_REPOSITORY"
+CANDIDATE_REJECTED_RELEVANCE = "REJECTED_RELEVANCE"
+CANDIDATE_EVALUATION_FAILED = "EVALUATION_FAILED"
+CANDIDATE_SANDBOX_FAILED = "SANDBOX_FAILED"
+CANDIDATE_INTEGRATION_APPROVAL_REQUIRED = "INTEGRATION_APPROVAL_REQUIRED"
+CANDIDATE_DISCOVERY_ERROR = "DISCOVERY_ERROR"
+
+
 def _repo_for_candidate(candidate: dict, github: GitHubIntelligence) -> RepoData | None:
     repo = candidate.get("repo")
     if isinstance(repo, RepoData):
@@ -539,29 +611,52 @@ def _continue_capability_gaps(
     policy = ActionPolicy()
 
     for candidate in mission.capability_candidates:
+        candidate.setdefault("status", CANDIDATE_DISCOVERED)
         try:
             repo = _repo_for_candidate(candidate, github)
             if repo is None:
+                candidate["status"] = CANDIDATE_UNRESOLVED
+                candidate["status_reason"] = (
+                    "Aday bir GitHub repo URL'sine çözümlenemedi (uzak API/sağlayıcı adayı "
+                    "olabilir -- bu döngü yalnızca GitHub repo edinme yolunu değerlendirir)."
+                )
                 continue
             evaluation = evaluator.evaluate(repo)
             candidate["evaluation"] = evaluation
             report.evaluated_candidates.append({"url": repo.url, "suitable": evaluation.suitable_for_jarvis})
             if not evaluation.suitable_for_jarvis or evaluation.risk_level == "HIGH":
+                if evaluation.relevance_score < RELEVANCE_LOW_THRESHOLD:
+                    candidate["status"] = CANDIDATE_REJECTED_RELEVANCE
+                else:
+                    candidate["status"] = CANDIDATE_EVALUATION_FAILED
+                candidate["status_reason"] = evaluation.recommendation
                 continue
             sandbox_result = sandbox.run_pipeline(repo.url, evaluation, repo=repo)
             candidate["sandbox_status"] = sandbox_result.status.value
             report.sandboxed_candidates.append({"url": repo.url, "status": sandbox_result.status.value})
             try:
                 if sandbox_result.status != SandboxStatus.READY_FOR_REVIEW:
+                    candidate["status"] = CANDIDATE_SANDBOX_FAILED
+                    candidate["status_reason"] = (
+                        "; ".join(sandbox_result.findings) if sandbox_result.findings
+                        else sandbox_result.recommended_action or sandbox_result.status.value
+                    )
                     continue
                 integration_plan = integrator.analyze(sandbox_result, evaluation)
                 candidate["integration"] = integration_plan
+                candidate["status"] = CANDIDATE_INTEGRATION_APPROVAL_REQUIRED
+                candidate["status_reason"] = (
+                    "Sandbox PASS + Integration planı hazır; kod kurulumu/entegrasyonu ActionPolicy "
+                    "onayı olmadan OTOMATİK yapılmaz (bkz. mevcut approval kapısı)."
+                )
                 report.integrated_candidates.append({"url": repo.url, "merge_ready": integration_plan.merge_ready})
             finally:
                 sandbox.cleanup(sandbox_result)
         except Exception as error:
             # One bad candidate must not discard the rest of the mission's
             # candidate pool or skip the original-goal resume attempt.
+            candidate["status"] = CANDIDATE_DISCOVERY_ERROR
+            candidate["status_reason"] = str(error)
             candidate["continuation_error"] = str(error)
             continue
 

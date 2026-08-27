@@ -69,6 +69,48 @@ MISSION_TYPE_TO_GITHUB_CATEGORY: dict[MissionType, str] = {
     MissionType.RESEARCH: "ai agent",
 }
 
+# Mission repair (real Swiss-Insider-Shorts failure): a content/production
+# mission type (make a video/post ABOUT a topic) is not, by itself, a
+# request to find/install a GitHub tool. Mapping these types to a GitHub
+# search category UNCONDITIONALLY (as the table above does) is what made
+# every YOUTUBE mission's default Target a "youtube automation" GitHub
+# category search -- even a pure domain/content-research goal with no
+# tooling need at all -- which is how an unrelated repo ended up being
+# opened as the mission's "target". For these types the GitHub-category
+# fallback now requires an explicit ACQUISITION signal in the text (see
+# ``has_acquisition_signal``); domain/content research on its own falls
+# through to FREE_TEXT instead. Mission types that are fundamentally ABOUT
+# finding/evaluating a tool or repo (AI_DISCOVERY, CODE, GITHUB, FINANCE's
+# trading-bot search, ...) are UNCHANGED -- this table entry still applies
+# unconditionally for those.
+_CONTENT_MISSION_TYPES = frozenset({
+    MissionType.YOUTUBE, MissionType.SOCIAL_MEDIA, MissionType.MEDIA,
+})
+
+# Generic capability/acquisition vocabulary: a content-mission goal must
+# contain one of these before it's treated as ALSO needing a GitHub/tool
+# search. Deliberately generic (no "Swiss"/"Bongetis"/topic-specific
+# words) -- this is a vocabulary check, not a per-mission special case.
+_ACQUISITION_SIGNAL_SUBSTRINGS = (
+    "repo", "github", "gitlab", "açık kaynak", "acik kaynak",
+    "kurulum", "install", "sağlayıcı", "saglayici", "provider",
+    "capability", "yetenek", "araç", "arac", "tool", "model",
+)
+# Short/common fragments checked as whole words only, to avoid matching
+# inside unrelated words (e.g. "kur" inside "kurtarma"/"kurgu").
+_ACQUISITION_SIGNAL_WORDS = ("kur",)
+
+
+def has_acquisition_signal(text: str) -> bool:
+    """``True`` yalnızca metin GERÇEKTEN bir araç/repo/sağlayıcı EDİNME
+    sinyali içeriyorsa (bkz. yukarıdaki sabitler) -- düz bir konu/içerik
+    araştırması (ör. "en güçlü fırsatı araştır") ASLA eşleşmez."""
+
+    lowered = (text or "").casefold()
+    if any(cue in lowered for cue in _ACQUISITION_SIGNAL_SUBSTRINGS):
+        return True
+    return any(re.search(rf"\b{re.escape(word)}\b", lowered) for word in _ACQUISITION_SIGNAL_WORDS)
+
 
 def _category_hint_from_text_and_mission_type(
     text: str, mission_type: Optional[MissionType]
@@ -96,7 +138,10 @@ def _category_hint_from_text_and_mission_type(
     )):
         return "trading bot"
     if mission_type is not None:
-        return MISSION_TYPE_TO_GITHUB_CATEGORY.get(mission_type)
+        mapped = MISSION_TYPE_TO_GITHUB_CATEGORY.get(mission_type)
+        if mapped is not None and mission_type in _CONTENT_MISSION_TYPES and not has_acquisition_signal(text):
+            return None
+        return mapped
     return None
 
 
@@ -144,6 +189,13 @@ _NAMED_PROJECT_PATTERNS = (
     re.compile(r"\b([A-Za-z0-9][A-Za-z0-9_.-]{1,80})\s+(?:repo(?:su|sunu)?|proje(?:si|sini)?)\b", re.IGNORECASE),
 )
 _GENERIC_TARGET_NAMES = {"github", "gitlab", "bu", "bir", "açık", "kaynak"}
+# Mission repair (real Swiss-Insider-Shorts failure): the bare hyphenated-
+# token fallback below is meant to catch a slug-shaped project name (e.g.
+# "jarvis-os", "gpt-4"). It must NOT catch a numeric list/range artifact
+# (e.g. "1-2", "10-20") -- those routinely appear in ranked-list/step text
+# ("top 1-2 opportunities", "adım 3-4") and are never a project name. Real
+# project slugs always contain at least one letter.
+_NUMERIC_RANGE_PATTERN = re.compile(r"^\d+(?:-\d+)+$")
 
 
 def _extract_requested_name(text: str) -> Optional[str]:
@@ -151,9 +203,10 @@ def _extract_requested_name(text: str) -> Optional[str]:
         match = pattern.search(text or "")
         if match and match.group(1).casefold() not in _GENERIC_TARGET_NAMES:
             return match.group(1)
-    hyphenated = re.search(r"\b([A-Za-z0-9]+-[A-Za-z0-9-]+)\b", text or "")
-    if hyphenated:
-        return hyphenated.group(1)
+    for hyphenated in re.finditer(r"\b([A-Za-z0-9]+-[A-Za-z0-9-]+)\b", text or ""):
+        candidate = hyphenated.group(1)
+        if not _NUMERIC_RANGE_PATTERN.match(candidate):
+            return candidate
     object_match = re.match(
         r'^\s*["“]?([A-Z][A-Za-z0-9_.-]*(?:\s+[A-Z][A-Za-z0-9_.-]*){0,3})'
         r"(?:['’](?:yi|yı|yu|yü|i|ı|u|ü))?\s+"

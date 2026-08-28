@@ -267,6 +267,55 @@ _FINANCE_STRATEGY_LAB_CUES = (
 )
 
 
+# Mission repair (real "Jarvis İsviçre için video üret." failure, FIX 4):
+# a bare MEDIA production command (market/context given, no concrete
+# topic) needs CONTENT/TOPIC research first -- but "Bu hazır videoya
+# altyazı ekle." (edit an asset that already exists) does NOT. Generic,
+# no hardcoded market/topic -- the presence of an "existing asset" cue is
+# what turns research OFF, not the presence/absence of any specific place
+# name.
+_EXISTING_ASSET_EDIT_CUES = (
+    "bu video", "bu hazır video", "bu hazir video", "mevcut video", "var olan video",
+    "bu görsele", "bu sese", "bu klibe", "bu kliple", "altyazı ekle", "altyazi ekle",
+    "seslendirme ekle", "to this video", "add subtitles", "existing video",
+)
+
+
+def _media_needs_topic_research(lowered_text: str) -> bool:
+    return not any(cue in lowered_text for cue in _EXISTING_ASSET_EDIT_CUES)
+
+
+def _narrow_media_topic_research(lowered_text: str, bundle: list[str]) -> list[str]:
+    if "research" in bundle or not _media_needs_topic_research(lowered_text):
+        return bundle
+    return [*bundle, "research"]
+
+
+# FIX 2 (real "Jarvis İsviçre için video üret." failure): the raw command
+# used to be sent to research/web-search VERBATIM (research task's
+# ``target`` is normally the shared, unmodified mission text, same as
+# every other department). Generic transform, no hardcoded search phrase:
+# strip the bot address ("Jarvis,") and the recognized production-verb
+# phrase ("video üret"/"video hazırla"/...), keep WHATEVER context/market
+# text remains (never hardcoded), then append a generic freshness+purpose
+# qualifier so the query reads as a content-opportunity research request,
+# not a video-production command.
+_MEDIA_ADDRESS_PREFIX_PATTERN = re.compile(r"^\s*jarvi?s[,:]?\s*", re.IGNORECASE)
+_MEDIA_PRODUCTION_VERB_PATTERN = re.compile(
+    r"\b(?:video|içerik|short|shorts)\w*\s+(?:üret\w*|hazırla\w*|oluştur\w*)\b"
+    r"|\b(?:üret\w*|hazırla\w*|oluştur\w*)\b",
+    re.IGNORECASE,
+)
+
+
+def _media_research_query(source_text: str) -> str:
+    stripped = _MEDIA_ADDRESS_PREFIX_PATTERN.sub("", source_text or "")
+    stripped = _MEDIA_PRODUCTION_VERB_PATTERN.sub("", stripped)
+    stripped = re.sub(r"\s+", " ", stripped).strip(" .,:;-")
+    context = stripped or "genel"
+    return f"{context} güncel YouTube Shorts içerik fırsatı araştır"
+
+
 def _narrow_pure_generation_youtube(
     lowered_text: str, bundle: list[str], enriched_additions: list[str],
 ) -> list[str]:
@@ -497,6 +546,15 @@ class DepartmentOrchestrator:
             bundle = _narrow_pure_generation_youtube(lowered, bundle, enriched_additions)
             bundle = _narrow_pure_content_research_youtube(lowered, bundle)
 
+        # FIX 4 (see helper docstring above): MEDIA's canonical bundle is
+        # just ("media",) -- add "research" when the goal needs topic/
+        # content discovery. "browser"/"automation" are NOT added here;
+        # they remain available only via their own existing keyword
+        # enrichment (e.g. an explicit "web'de araştır"/"otomasyon kur"
+        # ask), never automatically for a plain produce_video request.
+        if mission_type == MissionType.MEDIA:
+            bundle = _narrow_media_topic_research(lowered, bundle)
+
         # Sprint 33B: repo seçme/karşılaştırma niyeti + GitHub zaten
         # seçiliyse, AI Validation Pipeline'ın tamamı eksiksiz çalışsın.
         if "github" in bundle and _wants_repo_validation_pipeline(lowered):
@@ -658,12 +716,26 @@ class DepartmentOrchestrator:
                         "safe_use_action": "video_draft",
                     })
 
+            task_target = source_text
+            if department_name == "research" and mission.mission_type == MissionType.MEDIA:
+                research_department = self.departments.get("research")
+                explicit_research_ask = research_department is not None and any(
+                    keyword_matches(routing_text(source_text), keyword)
+                    for keyword in research_department.keywords
+                )
+                if not explicit_research_ask:
+                    # Research was added FOR the user (topic discovery,
+                    # see ``_narrow_media_topic_research``), not explicitly
+                    # asked for -- an explicit ask keeps its own wording
+                    # (existing ResearchAgent._clean_query behavior).
+                    task_target = _media_research_query(source_text)
+
             department_timeout = _DEPARTMENT_TASK_TIMEOUTS.get(department_name, DEPARTMENT_TASK_TIMEOUT_SECONDS)
             tasks.append(Task(
                 title=f"[{department_name}] {mission.title}",
                 agent=department_name,
                 action=DEPARTMENT_ACTIONS.get(department_name, DEFAULT_DEPARTMENT_ACTION),
-                target=source_text,
+                target=task_target,
                 priority=mission.priority,
                 handler=handler,
                 timeout_seconds=department_timeout if handler is not None else None,

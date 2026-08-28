@@ -184,7 +184,7 @@ class TestBoundedRepairLoop:
         render_calls: list[int] = []
         monkeypatch.setattr(
             LocalVideoRenderer, "render",
-            lambda self, topic, narration, duration_seconds: (render_calls.append(1),
+            lambda self, topic, narration, duration_seconds, **kw: (render_calls.append(1),
                 RenderResult(True, str(tmp_path / f"artifact-{len(render_calls)}.mp4"),
                              audio_used=True, production_ready=True))[1],
         )
@@ -205,7 +205,7 @@ class TestBoundedRepairLoop:
         render_calls: list[int] = []
         monkeypatch.setattr(
             LocalVideoRenderer, "render",
-            lambda self, topic, narration, duration_seconds: (render_calls.append(1),
+            lambda self, topic, narration, duration_seconds, **kw: (render_calls.append(1),
                 RenderResult(True, str(tmp_path / f"artifact-{len(render_calls)}.mp4"),
                              audio_used=True, production_ready=True))[1],
         )
@@ -226,7 +226,7 @@ class TestBoundedRepairLoop:
         render_calls: list[int] = []
         monkeypatch.setattr(
             LocalVideoRenderer, "render",
-            lambda self, topic, narration, duration_seconds: (render_calls.append(1),
+            lambda self, topic, narration, duration_seconds, **kw: (render_calls.append(1),
                 RenderResult(True, str(tmp_path / "artifact.mp4"), audio_used=True, production_ready=True))[1],
         )
         monkeypatch.setattr("src.media.manager.validate_media_goal_artifact",

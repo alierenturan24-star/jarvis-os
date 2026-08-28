@@ -72,7 +72,21 @@ class LocalVideoRenderer:
     def available(self) -> bool:
         return find_ffmpeg() is not None
 
-    def render(self, topic: str, narration: str, duration_seconds: int = 60) -> RenderResult:
+    def render(
+        self, topic: str, narration: str, duration_seconds: int = 60,
+        *, stage_sink: dict | None = None,
+    ) -> RenderResult:
+        # Mission repair (real "Jarvis İsviçre için video üret." failure,
+        # FIX 5): a real render timeout only ever showed the single coarse
+        # marker "render" -- this whole method can run several REAL
+        # ffmpeg subprocess calls in sequence (one per scene, plus a final
+        # composition pass), each individually bounded (see below) but
+        # with no visibility into which one was actually running. Finer
+        # markers are written into the SAME shared ``stage_sink`` dict
+        # used elsewhere (see ``report_builder._task_note``) -- no new
+        # renderer, no change to the existing per-subprocess timeouts.
+        if stage_sink is not None:
+            stage_sink["last_stage"] = "render_prepare"
         ffmpeg = find_ffmpeg()
         if not ffmpeg:
             return RenderResult(
@@ -94,10 +108,11 @@ class LocalVideoRenderer:
                 ),
                 ffmpeg_path=ffmpeg,
             )
-        return self._render_production_package(package, topic, duration_seconds, ffmpeg)
+        return self._render_production_package(package, topic, duration_seconds, ffmpeg, stage_sink=stage_sink)
 
     def _render_production_package(
         self, package: Path, topic: str, duration_seconds: int, ffmpeg: str,
+        *, stage_sink: dict | None = None,
     ) -> RenderResult:
         try:
             manifest = json.loads(package.read_text(encoding="utf-8"))
@@ -139,6 +154,8 @@ class LocalVideoRenderer:
         segment_paths: list[Path] = []
         rendered_motion: list[dict] = []
         for index, scene in enumerate(scenes):
+            if stage_sink is not None:
+                stage_sink["last_stage"] = f"render_ffmpeg_scene_{index + 1}_of_{len(scenes)}"
             segment_seconds = segment_durations[index]
             segment = job_dir / f"production-scene-{index + 1:02d}.mp4"
             motion = _motion_spec_for_scene(manifest, scene.name)
@@ -207,9 +224,16 @@ class LocalVideoRenderer:
             "-af", "atempo=1.07,loudnorm=I=-16:TP=-1.5:LRA=11", "-c:a", "aac", "-b:a", "128k",
             "-movflags", "+faststart", output_path.name,
         ]
+        if stage_sink is not None:
+            stage_sink["last_stage"] = "render_ffmpeg_compose"
         completed = subprocess.run(command, cwd=job_dir, capture_output=True, text=True, timeout=180, check=False)
-        if completed.returncode != 0 or not validate_video_artifact(output_path):
+        if completed.returncode != 0:
             return RenderResult(False, error=f"Production composition başarısız: {completed.stderr[-400:]}", ffmpeg_path=ffmpeg)
+
+        if stage_sink is not None:
+            stage_sink["last_stage"] = "render_validate"
+        if not validate_video_artifact(output_path):
+            return RenderResult(False, error="Production composition başarısız: artifact doğrulaması geçmedi.", ffmpeg_path=ffmpeg)
 
         quality_manifest = output_path.with_suffix(".quality.json")
         evidence = dict(manifest)

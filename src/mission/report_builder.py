@@ -4,6 +4,7 @@ from typing import Optional
 
 from src.jobs.task import Task
 from src.jobs.task_status import TaskStatus
+from src.mission.completion import evaluate_goal_completion
 from src.mission.models import Mission
 
 # Sprint 16 (CEO Report Engine): Mission çalışıyor, department'lar
@@ -133,6 +134,25 @@ def _sandbox_verdict(result) -> str:
 # --- Bölümler ----------------------------------------------------------------
 
 
+# Mission repair (real "Jarvis İsviçre için video üret." failure): the
+# whole CEO report/decision layer used to assume EVERY mission is a
+# repository-acquisition mission -- "Hedef repo: <full text>" was printed
+# unconditionally (falling back to the raw mission text when no repo/
+# category target existed), and the final ONAYLA/İNSAN İNCELEMESİ/REDDET
+# decision was a pure repo-candidate count, so a MEDIA mission with no
+# github/evaluation/sandbox/integration departments always REJECTED with
+# "Hiçbir departman somut bir repo adayı üretmedi." -- true, but
+# meaningless, since a repo was never part of this mission's goal.
+# Generic (any mission type): repository semantics apply only when the
+# mission ACTUALLY dispatched a repo-acquisition department -- preserved
+# unchanged for CODE/GITHUB/acquisition missions.
+_REPO_ACQUISITION_DEPARTMENTS = frozenset({"github", "evaluation", "sandbox", "integration"})
+
+
+def _mission_uses_repo_acquisition(mission: Mission) -> bool:
+    return any(name in mission.departments for name in _REPO_ACQUISITION_DEPARTMENTS)
+
+
 def _target_repo_label(mission: Mission) -> str:
     """Sprint 33B: CEO kanıt zincirinin 1. maddesi ("Target repo") --
     Mission oluşturulurken TEK kez çözümlenen ``mission.target``'ı
@@ -155,11 +175,16 @@ def _target_repo_label(mission: Mission) -> str:
 
 
 def _mission_section(mission: Mission) -> str:
+    target_line = (
+        f"Hedef repo: {_target_repo_label(mission)}\n"
+        if _mission_uses_repo_acquisition(mission)
+        else ""
+    )
     return (
         "MISSION\n"
         f"{mission.title}\n\n"
         f"Tür: {mission.mission_type.value.upper()}\n"
-        f"Hedef repo: {_target_repo_label(mission)}\n"
+        f"{target_line}"
         f"Risk: {mission.risk_level}\n"
         f"Confidence: %{mission.confidence:.0f}\n"
         f"Tahmini süre (Mission düzeyinde, kaba sezgisel tahmin): {mission.estimated_duration:.0f} dk"
@@ -597,6 +622,60 @@ def _veri_var_mi(value: bool, detail: str = "") -> str:
     return detail or "var"
 
 
+def _production_ceo_decision(
+    mission: Mission, tasks_by_department: dict[str, Task],
+) -> tuple[list[str], str, str, str]:
+    """CEO decision for a mission that never dispatched a repo-acquisition
+    department (see ``_mission_uses_repo_acquisition``) -- e.g. MEDIA/
+    YOUTUBE video production. Evaluates the requested artifact/workflow
+    via the EXISTING, generic ``evaluate_goal_completion`` (the SAME
+    function that already drives ``mission.status``, see
+    ``department_orchestrator.dispatch()``) instead of counting
+    repository candidates that were never relevant to this mission's goal."""
+
+    completion = evaluate_goal_completion(mission)
+
+    evidence_lines = [f"Talep: {mission.title}"]
+    for item in completion.requirements:
+        evidence_lines.append(f"{item.requirement.name} ({item.requirement.kind}): {'var' if item.satisfied else 'eksik'}")
+
+    media_task = tasks_by_department.get("media")
+    failed_stage = None
+    if media_task is not None and media_task.status != TaskStatus.COMPLETED:
+        failed_stage = (media_task.metadata or {}).get("last_stage")
+    stage_note = f" Başarısız aşama: {failed_stage}." if failed_stage else ""
+
+    if not completion.requirements:
+        # No explicit artifact/evidence contract was inferred for this
+        # goal -- fall back to plain task completion (still never a
+        # repo-candidate count).
+        evidence_lines.append("Bu mission için somut bir artifact/kanıt gereksinimi çıkarılmadı.")
+        all_completed = bool(mission.tasks) and all(t.status == TaskStatus.COMPLETED for t in mission.tasks)
+        if all_completed:
+            final_decision = "ONAYLA"
+            reason = "Seçilen tüm departmanlar gerçek sonuçla tamamlandı."
+        else:
+            final_decision = "İNSAN İNCELEMESİ"
+            reason = f"Bazı departmanlar tamamlanmadı.{stage_note}"
+        next_step = "Departman sonuçlarını (yukarıdaki bölümler) insan gözden geçirmesiyle doğrula."
+    elif completion.satisfied:
+        final_decision = "ONAYLA"
+        reason = "Talep edilen tüm çıktı/kanıt gereksinimleri karşılandı."
+        next_step = "İnsan onayıyla yayın/sonraki adıma geç."
+    else:
+        missing_labels = ", ".join(dict.fromkeys(item.requirement.remaining for item in completion.missing))
+        if any(item.satisfied for item in completion.requirements):
+            final_decision = "İNSAN İNCELEMESİ"
+            reason = f"Üretim kısmen tamamlandı; eksik: {missing_labels}.{stage_note}"
+            next_step = "Eksik kalan çıktı/kanıtı tamamlamak için mission'ı devam ettir/yeniden dene."
+        else:
+            final_decision = "REDDET"
+            reason = f"Üretim tamamlanmadı; eksik: {missing_labels}.{stage_note}"
+            next_step = "Kök nedeni (bkz. Media/Recovery bölümleri) gider, mission'ı yeniden çalıştır."
+
+    return evidence_lines, final_decision, reason, next_step
+
+
 def _ceo_section(mission: Mission, tasks_by_department: dict[str, Task]) -> str:
     """CEO'nun departman sonuçlarından ürettiği nihai karar.
 
@@ -612,6 +691,33 @@ def _ceo_section(mission: Mission, tasks_by_department: dict[str, Task]) -> str:
     merge_ready, GitHub'ın bulduğu somut adaylar) dayalı basit,
     deterministik bir karar ağacıdır.
     """
+
+    if not _mission_uses_repo_acquisition(mission):
+        # Mission repair (real "Jarvis İsviçre için video üret." failure):
+        # this mission never dispatched github/evaluation/sandbox/
+        # integration -- a repo was never part of its goal. Reuses the
+        # SAME, already-existing, capability-agnostic completion evaluator
+        # (``evaluate_goal_completion`` -- the same one that already drives
+        # ``mission.status``, see ``department_orchestrator.dispatch()``)
+        # instead of a repo-candidate count, so the CEO's stated reason and
+        # the mission's actual completion status can never contradict each
+        # other again.
+        evidence_lines, final_decision, reason, next_step = _production_ceo_decision(
+            mission, tasks_by_department,
+        )
+        completed = sum(1 for task in mission.tasks if task.status == TaskStatus.COMPLETED)
+        total = len(mission.tasks)
+        result_line = (
+            f"{completed}/{total} departman gerçek sonuçla tamamlandı "
+            f"(risk={mission.risk_level}, confidence=%{mission.confidence:.0f})."
+        )
+        lines = ["CEO", "", "Kanıt zinciri:"]
+        lines.extend(f"  {index}. {line}" for index, line in enumerate(evidence_lines, start=1))
+        lines.append("")
+        lines.append(f"Öneri: {final_decision} — {reason}")
+        lines.append(f"Sonuç: {result_line}")
+        lines.append(f"Sonraki adım: {next_step}")
+        return "\n".join(lines)
 
     target_label = _target_repo_label(mission)
 

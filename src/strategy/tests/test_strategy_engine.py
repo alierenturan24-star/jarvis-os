@@ -169,16 +169,29 @@ class TestToolSelection:
         assert "social_media" in names
         assert any("henüz gerçek bir tool" in t.reason.lower() for t in plan.tools)
 
-    def test_media_and_automation_now_have_real_tools_disclosed(self):
-        # Sprint 39: eskiden "henüz bağlı değil" olan media/automation,
-        # artık ZATEN VAR OLAN gerçek modüllere (src.media/src.automation)
-        # bağlı -- bu, yeni bir puanlama/tool sistemi İCAT ETMEDEN, tek
-        # kaynak olan ``_TOOLS_FOR_DEPARTMENT``'a eklenen iki satırla
-        # yansıtılır.
+    def test_media_now_has_a_real_tool_disclosed(self):
+        # Sprint 39: eskiden "henüz bağlı değil" olan media, artık ZATEN
+        # VAR OLAN gerçek modüle (src.media) bağlı -- bu, yeni bir
+        # puanlama/tool sistemi İCAT ETMEDEN, tek kaynak olan
+        # ``_TOOLS_FOR_DEPARTMENT``'a eklenen bir satırla yansıtılır.
+        #
+        # Mission repair (real "Jarvis İsviçre için video üret." failure,
+        # FIX 4): "automation" is no longer auto-dispatched for a plain
+        # produce_video request (see department.py/department_orchestrator.py)
+        # -- a bare "Bir video üret." only selects media (+ research, for
+        # topic discovery), so this test no longer asserts AutomationManager
+        # here; see the test below for automation's own (still real) tool.
         engine = _engine(available={"ollama"})
         plan = engine.plan("Bir video üret.")
         tool_names = {t.name for t in plan.tools}
         assert any("MediaManager" in name for name in tool_names)
+
+    def test_automation_still_has_a_real_tool_disclosed_when_selected(self):
+        engine = _engine(available={"ollama"})
+        plan = engine.plan("Video üret ve otomasyon kur.")
+        names = {c.name for c in plan.departments}
+        assert "automation" in names
+        tool_names = {t.name for t in plan.tools}
         assert any("AutomationManager" in name for name in tool_names)
 
 

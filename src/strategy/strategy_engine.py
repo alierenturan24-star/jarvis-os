@@ -72,6 +72,16 @@ _MISSION_TYPE_TO_CATEGORY: dict[MissionType, TaskCategory] = {
     MissionType.YOUTUBE: TaskCategory.YOUTUBE,
     MissionType.BROWSER: TaskCategory.BROWSER,
     MissionType.GITHUB: TaskCategory.GITHUB,
+    # Mission repair (real "Jarvis İsviçre için video üret." failure): this
+    # entry was MISSING -- a bare video/content-production command (no
+    # "youtube"/"shorts" wording, so ``classify_mission_type`` correctly
+    # returns MEDIA, not YOUTUBE) fell through to the generic OTHER
+    # category below, misreporting a real media-production mission as
+    # "category: other". MEDIA is, at the coarse AI/tool-planning level
+    # this enum exists for (see class docstring), the same kind of task as
+    # YOUTUBE -- video/content production -- so it reuses that EXISTING
+    # category rather than inventing a new one.
+    MissionType.MEDIA: TaskCategory.YOUTUBE,
 }
 
 

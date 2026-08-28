@@ -309,7 +309,7 @@ Kurallar:
         while True:
             if stage_sink is not None:
                 stage_sink["last_stage"] = "render"
-            render = self.renderer.render(topic, plan_text, duration_seconds)
+            render = self.renderer.render(topic, plan_text, duration_seconds, stage_sink=stage_sink)
             if not render.success:
                 self.last_artifact_path = ""
                 return f"\n\nVIDEO RENDER: BLOCKED\n{render.error}"

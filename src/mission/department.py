@@ -62,7 +62,7 @@ DEFAULT_DEPARTMENTS: tuple[Department, ...] = (
     # seslendirme-planı/görsel-planı/altyazı/thumbnail/başlık ÜRETİR
     # (src.media, gerçek bir LLM çağrısıyla). maturity bu yüzden 1.0
     # DEĞİL, kısmi (0.6) -- dürüstçe "planlama var, üretim yok" yansıtır.
-    Department("media", "YouTube içerik planlama ve güvenli yerel video render (src.media)", ["video üret", "görsel oluştur", "ses oluştur", "içerik üret"], maturity=0.8),
+    Department("media", "YouTube içerik planlama ve güvenli yerel video render (src.media)", ["video üret", "video hazırla", "short üret", "short hazırla", "görsel oluştur", "ses oluştur", "içerik üret"], maturity=0.8),
     Department("social_media", "Sosyal medya paylaşımı (henüz özel modül yok)", ["sosyal medya", "twitter", "instagram", "tiktok", "paylaşım"], maturity=0.1),
     Department("security", "Güvenlik/risk denetimi (henüz özel modül yok)", ["güvenlik", "zafiyet", "penetrasyon", "audit"], maturity=0.3),
     Department("learning", "Öğrenme/eğitim kaynağı toplama (henüz özel modül yok)", ["öğren", "eğitim al", "kurs", "öğret"], maturity=0.2),
@@ -211,7 +211,17 @@ _MISSION_TYPE_KEYWORDS: dict[MissionType, tuple[str, ...]] = {
     MissionType.SECURITY: ("güvenlik", "zafiyet", "penetrasyon", "audit"),
     MissionType.LEARNING: ("öğren", "eğitim al", "kurs", "öğret"),
     MissionType.AUTOMATION: ("otomasyon kur", "otomatikleştir", "pipeline kur"),
-    MissionType.MEDIA: ("video üret", "görsel oluştur", "ses oluştur", "içerik üret"),
+    # Mission repair (real "Jarvis İsviçre için video üret." failure, FIX
+    # 1): "video hazırla"/"short üret"/"short hazırla" were MISSING --
+    # generic synonyms of the ALREADY-recognized "video üret" (same verb
+    # meaning, different phrasing), added so any of these resolve to an
+    # executable media/video-production intent instead of falling through
+    # to the RESEARCH default. Does not clash with YOUTUBE's "shorts"
+    # (plural) keyword above -- same non-overlap reasoning as Sprint 35.
+    MissionType.MEDIA: (
+        "video üret", "video hazırla", "short üret", "short hazırla",
+        "görsel oluştur", "ses oluştur", "içerik üret",
+    ),
 }
 
 
@@ -254,7 +264,17 @@ DEFAULT_DEPARTMENTS_BY_MISSION_TYPE: dict[MissionType, tuple[str, ...]] = {
     MissionType.SECURITY: ("security", "sandbox", "research"),
     MissionType.LEARNING: ("research", "learning"),
     MissionType.AUTOMATION: ("automation", "browser"),
-    MissionType.MEDIA: ("media", "browser", "automation"),
+    # Mission repair (real "Jarvis İsviçre için video üret." failure):
+    # "browser"/"automation" used to be unconditional here -- browser then
+    # blind-searched the LITERAL raw command on Google (hitting an
+    # anti-bot page), and automation ran a generic pre-publish checklist
+    # that added no execution value for a plain produce_video request.
+    # Both are still available on demand (their own keyword-triggered
+    # enrichment in ``select_departments`` is UNCHANGED); "research" is
+    # now added conditionally by ``_narrow_media_topic_research`` (see
+    # ``department_orchestrator.py``) when the goal needs topic/content
+    # discovery rather than editing an already-existing asset.
+    MissionType.MEDIA: ("media",),
 }
 
 

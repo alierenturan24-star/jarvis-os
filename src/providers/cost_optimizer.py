@@ -70,6 +70,21 @@ _TASK_KEYWORDS: dict[str, tuple[str, ...]] = {
     TASK_PLANNING: (
         "planla", "plan oluştur", "takvim", "yol haritası", "zaman çizelgesi",
         "strateji oluştur",
+        # Mission repair (real "Jarvis İsviçre için video üret." failure):
+        # a bare video/content-production command matched NO keyword here,
+        # so whole-message classify() silently fell through to the
+        # TASK_CHAT default -- misreporting a real media-production
+        # mission as "task_class: chat/simple". ``src.mission.department_
+        # orchestrator._TASK_TYPE_FOR_DEPARTMENT`` (strategy_engine.py)
+        # already maps the "media" department to TASK_PLANNING (a
+        # structured content-plan output is the closest of the 7 existing
+        # classes -- no new class invented there); these keywords make the
+        # WHOLE-MESSAGE classification agree with that EXISTING mapping
+        # instead of contradicting it. Generic (not the exact Swiss
+        # sentence) -- reuses the same vocabulary already established in
+        # ``src.mission.department`` for MissionType.MEDIA/YOUTUBE.
+        "video üret", "video hazırla", "short üret", "short hazırla",
+        "shorts üret", "shorts hazırla", "youtube videosu üret", "içerik üret",
     ),
 }
 

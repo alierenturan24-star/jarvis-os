@@ -35,6 +35,14 @@ from src.providers.claude_code_provider import DEFAULT_TIMEOUT_SECONDS as _CLAUD
 from src.providers.codex_provider import DEFAULT_TIMEOUT_SECONDS as _CODEX_TIMEOUT_SECONDS
 from src.config.settings import Settings
 from src.research.collector import MAX_SEARCH_STEPS
+# Round 4 repair: "media"'s own outer department timeout, sized from its
+# REAL inner worst-case (bounded repair-attempt count + the quality gate's
+# own real subprocess timeout sum) -- SAME pattern as CODING/RESEARCH above.
+# No circular import risk: neither src.media.manager nor src.media.quality
+# import anything from src.mission (verified -- they only import
+# src.knowledge/src.providers/src.utils).
+from src.media.manager import MAX_REPAIR_ATTEMPTS
+from src.media.quality import quality_check_worst_case_seconds
 
 # Sprint 33B: "AI Validation Pipeline" (evaluation/sandbox/integration)
 # tetiklenmesi gereken görevler için -- bkz. ``_wants_repo_validation_pipeline``.
@@ -108,12 +116,44 @@ RESEARCH_DEPARTMENT_TASK_TIMEOUT_SECONDS = (
     + DEPARTMENT_TASK_TIMEOUT_SECONDS + RESEARCH_DEPARTMENT_TASK_TIMEOUT_MARGIN_SECONDS
 )
 
+# Round 4 repair (real live-mission evidence): a media task reached
+# ``last_stage="quality_check"`` and was then killed by the shared 75s
+# ``DEPARTMENT_TASK_TIMEOUT_SECONDS`` before the quality gate itself
+# finished -- the mission report showed "ARTIFACT STATUS: MISSING" even
+# though a real video had already been rendered. "media" had NO entry in
+# ``_DEPARTMENT_TASK_TIMEOUTS`` (unlike "coding"/"research" above, which
+# already got this same treatment), so it silently fell back to the base
+# 75s -- a budget sized for ONE local LLM call, not for planning + a real
+# FFmpeg render + a multi-probe quality gate + bounded repair.
+#
+# SAME pattern as CODING/RESEARCH above: size the outer budget FROM the
+# real, already-configured inner worst-case, never an arbitrary/blind
+# increase. One full "cycle" here is: the base 75s budget (planning LLM
+# call + production build + render -- round 4 evidence shows this part
+# already completes within the base budget; it reuses the SAME
+# already-justified local-Ollama/FFmpeg worst-case margin RESEARCH reuses
+# above, not a second independent guess) followed by ONE
+# ``validate_media_goal_artifact`` call (its own real worst-case --
+# ``quality_check_worst_case_seconds()``, see src/media/quality.py -- the
+# sum of every bounded ffmpeg/ffprobe subprocess timeout it can run,
+# including the per-scene body-motion probe loop). Bounded repair
+# (``MediaManager.MAX_REPAIR_ATTEMPTS``, see src/media/manager.py) can run
+# that same render+quality cycle up to ``MAX_REPAIR_ATTEMPTS`` additional
+# times -- still finite, still bounded, no unlimited retries.
+MEDIA_DEPARTMENT_TASK_TIMEOUT_MARGIN_SECONDS = 15.0
+MEDIA_DEPARTMENT_TASK_TIMEOUT_SECONDS = (
+    DEPARTMENT_TASK_TIMEOUT_SECONDS
+    + (1 + MAX_REPAIR_ATTEMPTS) * quality_check_worst_case_seconds()
+    + MEDIA_DEPARTMENT_TASK_TIMEOUT_MARGIN_SECONDS
+)
+
 # Departments whose outer task timeout differs from the shared
 # DEPARTMENT_TASK_TIMEOUT_SECONDS default -- each sized FROM its own real
 # inner worst-case above, never an arbitrary override.
 _DEPARTMENT_TASK_TIMEOUTS: dict[str, float] = {
     "coding": CODING_DEPARTMENT_TASK_TIMEOUT_SECONDS,
     "research": RESEARCH_DEPARTMENT_TASK_TIMEOUT_SECONDS,
+    "media": MEDIA_DEPARTMENT_TASK_TIMEOUT_SECONDS,
 }
 
 # Sprint 19 düzeltmesi: "browser" departmanının task action'ı hep sabit
@@ -309,11 +349,35 @@ _MEDIA_PRODUCTION_VERB_PATTERN = re.compile(
 
 
 def _media_research_query(source_text: str) -> str:
+    # Round 4 repair (real live-mission evidence): the previous phrasing --
+    # "{context} güncel YouTube Shorts içerik fırsatı araştır" -- literally
+    # asked "research a current YouTube Shorts content opportunity". That
+    # reads as a CREATOR-GROWTH/TOOLING question ("how do I find Shorts
+    # content opportunities"), not "what is currently happening in
+    # {context} that could BECOME a Short". Real evidence: it returned SEO/
+    # view-buying/tagging advice from the web, AND (``ResearchCollector.
+    # collect`` unconditionally also runs a ``site:github.com {topic}``
+    # search for EVERY topic, see src/research/collector.py) open-source
+    # "Shorts generator" repositories -- neither is the requested market/
+    # current-events opportunity. The fix is purely about WORDING: never
+    # mention "YouTube"/"tool"/"generator"/"repo" (acquisition-signal
+    # vocabulary, see ``target_resolver.has_acquisition_signal`` -- kept
+    # generic/shared, not reinvented here) in the query text, and frame the
+    # ask around CURRENT events/public interest/trends/freshness for the
+    # given market, ending in a request to pick ONE strongest opportunity.
+    # "Kısa video (Shorts)" is kept only as a FORMAT-suitability qualifier
+    # on the story, never as the query's subject -- content research and
+    # capability/tool research stay separate; no GitHub/tool search is
+    # requested here.
     stripped = _MEDIA_ADDRESS_PREFIX_PATTERN.sub("", source_text or "")
     stripped = _MEDIA_PRODUCTION_VERB_PATTERN.sub("", stripped)
     stripped = re.sub(r"\s+", " ", stripped).strip(" .,:;-")
     context = stripped or "genel"
-    return f"{context} güncel YouTube Shorts içerik fırsatı araştır"
+    return (
+        f"{context} güncel gündem: bugün öne çıkan haberler, kamuoyunun ilgisini çeken "
+        "gelişmeler ve trend olan konular. Kısa video (Shorts) anlatımına uygun, "
+        "güncelliği kaynaklarla doğrulanabilir TEK bir içerik fırsatı belirle."
+    )
 
 
 def _narrow_pure_generation_youtube(

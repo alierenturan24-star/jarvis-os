@@ -3,6 +3,7 @@ from __future__ import annotations
 from src.config.settings import Settings, _env_float
 from src.mission.department_orchestrator import (
     DEPARTMENT_TASK_TIMEOUT_SECONDS,
+    MEDIA_DEPARTMENT_TASK_TIMEOUT_SECONDS,
     RESEARCH_DEPARTMENT_TASK_TIMEOUT_SECONDS,
     DepartmentOrchestrator,
 )
@@ -87,12 +88,14 @@ class TestC_MalformedResearchTimeoutConfigFailsSafely:
 
 
 # Test D: unrelated departments retain their existing timeout behavior --
-# only "coding" and "research" get a dedicated outer budget; everyone else
-# keeps the shared, unchanged constant (same proof pattern as
-# test_coding_department_timeout.py's own Test D, extended to confirm
-# research's new budget didn't leak into unrelated departments).
+# only "coding"/"research"/"media" get a dedicated outer budget (media's
+# added in round 4, see test_swiss_insider_mission_repair_round4.py for the
+# real evidence/derivation); everyone else keeps the shared, unchanged
+# constant (same proof pattern as test_coding_department_timeout.py's own
+# Test D, extended to confirm research's new budget didn't leak into
+# unrelated departments).
 class TestD_UnrelatedDepartmentsRetainExistingTimeoutBehavior:
-    def test_non_research_non_coding_departments_keep_the_shared_timeout(self):
+    def test_non_research_non_coding_non_media_departments_keep_the_shared_timeout(self):
         tasks = _tasks_for(["github", "evaluation", "sandbox", "integration", "browser"])
 
         for task in tasks:
@@ -101,10 +104,20 @@ class TestD_UnrelatedDepartmentsRetainExistingTimeoutBehavior:
 
     def test_research_budget_is_distinct_from_and_does_not_replace_the_shared_default(self):
         assert RESEARCH_DEPARTMENT_TASK_TIMEOUT_SECONDS != DEPARTMENT_TASK_TIMEOUT_SECONDS
-        tasks = _tasks_for(["media", "finance"])
+        tasks = _tasks_for(["finance"])
         for task in tasks:
-            # media/finance are provider-backed (see recovery.py
+            # finance is provider-backed (see recovery.py
             # PROVIDER_BACKED_DEPARTMENTS) but not given a dedicated outer
-            # budget by THIS fix -- they must still get the shared default,
-            # unchanged.
+            # budget by any fix so far -- it must still get the shared
+            # default, unchanged.
             assert task.timeout_seconds == DEPARTMENT_TASK_TIMEOUT_SECONDS
+
+    def test_media_now_gets_its_own_dedicated_budget_not_the_shared_default(self):
+        # Round 4 repair: media used to silently fall back to the shared
+        # 75s default (see the module this docstring pointed to before this
+        # test existed) -- a real quality_check timeout proved that budget
+        # didn't cover render + quality gate + bounded repair.
+        tasks = _tasks_for(["media"])
+        media_task = next(t for t in tasks if t.agent == "media")
+        assert media_task.timeout_seconds == MEDIA_DEPARTMENT_TASK_TIMEOUT_SECONDS
+        assert media_task.timeout_seconds != DEPARTMENT_TASK_TIMEOUT_SECONDS

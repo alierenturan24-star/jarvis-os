@@ -25,7 +25,7 @@ def deterministic_provider_registry(monkeypatch, tmp_path):
     # cover the real probe boundary separately.
     monkeypatch.setattr(
         "src.media.quality._measure_local_body_motion",
-        lambda artifact, evidence, ffmpeg: (False, None),
+        lambda artifact, evidence, ffmpeg, *, stage_sink=None: (False, None),
     )
     # Never inspect persisted artifacts from an earlier workstation run. Tests
     # which create an artifact in their own tmp_path still exercise the real
@@ -34,11 +34,11 @@ def deterministic_provider_registry(monkeypatch, tmp_path):
     from src.media import quality
     original_validate = quality.validate_media_goal_artifact
 
-    def validate_current_test_artifact(path, goal=""):
+    def validate_current_test_artifact(path, goal="", *, stage_sink=None):
         try:
             Path(path).resolve().relative_to(tmp_path.resolve())
         except (OSError, ValueError):
             return quality.MediaArtifactQuality(False, False, False, ("artifact outside test sandbox",))
-        return original_validate(path, goal)
+        return original_validate(path, goal, stage_sink=stage_sink)
 
     monkeypatch.setattr(quality, "validate_media_goal_artifact", validate_current_test_artifact)

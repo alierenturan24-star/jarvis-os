@@ -323,8 +323,17 @@ def build_self_check(mission, review: Optional[SelfImprovementReview]) -> SelfCh
         cache_note=cache_note,
         review=review,
         expected_outputs=tuple(item.requirement.name for item in goal_completion.requirements),
+        # Round 4 repair: a real rendered artifact that simply hasn't
+        # PASSED quality validation (yet, or at all) is reported distinctly
+        # from "no artifact was ever produced" -- both used to show as a
+        # flat "MISSING", which is what let a truthfully-rendered video get
+        # reported as if it never existed after a quality_check
+        # timeout/failure. Still never "PRESENT" -- the mission stays
+        # incomplete either way (see ``RequirementStatus.rendered_not_approved``).
         artifact_statuses=tuple(
-            "PRESENT" if item.satisfied else "MISSING"
+            "PRESENT" if item.satisfied
+            else "RENDERED_NOT_APPROVED" if item.rendered_not_approved
+            else "MISSING"
             for item in goal_completion.requirements
         ),
         remaining=tuple(item.requirement.remaining for item in missing_requirements),

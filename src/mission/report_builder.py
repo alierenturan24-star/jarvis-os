@@ -664,13 +664,24 @@ def _production_ceo_decision(
         next_step = "İnsan onayıyla yayın/sonraki adıma geç."
     else:
         missing_labels = ", ".join(dict.fromkeys(item.requirement.remaining for item in completion.missing))
+        # Round 4 repair: don't let "eksik: video" read as "no video was
+        # ever produced" when a real rendered file exists on disk but
+        # simply hasn't passed quality validation (see
+        # ``RequirementStatus.rendered_not_approved`` -- e.g. quality_check
+        # timed out against the outer department budget, or a repairable/
+        # non-repairable gate genuinely failed). Truthful either way: the
+        # mission still stays incomplete, but the evidence isn't erased.
+        rendered_note = (
+            " (gerçek bir render dosyası VAR -- artifact KAYIP değil, yalnızca kalite onayından geçmedi.)"
+            if any(item.rendered_not_approved for item in completion.missing) else ""
+        )
         if any(item.satisfied for item in completion.requirements):
             final_decision = "İNSAN İNCELEMESİ"
-            reason = f"Üretim kısmen tamamlandı; eksik: {missing_labels}.{stage_note}"
+            reason = f"Üretim kısmen tamamlandı; eksik: {missing_labels}.{rendered_note}{stage_note}"
             next_step = "Eksik kalan çıktı/kanıtı tamamlamak için mission'ı devam ettir/yeniden dene."
         else:
             final_decision = "REDDET"
-            reason = f"Üretim tamamlanmadı; eksik: {missing_labels}.{stage_note}"
+            reason = f"Üretim tamamlanmadı; eksik: {missing_labels}.{rendered_note}{stage_note}"
             next_step = "Kök nedeni (bkz. Media/Recovery bölümleri) gider, mission'ı yeniden çalıştır."
 
     return evidence_lines, final_decision, reason, next_step

@@ -43,6 +43,56 @@ _NARRATION_COVERAGE_MIN_RATIO = 0.8
 _TAIL_SILENCE_SECONDS = 3.0
 _TAIL_SILENCE_DB = -50.0
 
+# Round 4 repair (real live-mission evidence: media task failed at
+# ``last_stage="quality_check"`` with no finer diagnostic, then the outer
+# 75s department timeout killed it before quality_check itself finished).
+# ``validate_media_goal_artifact`` runs SEVERAL independently-bounded local
+# ffmpeg/ffprobe subprocess calls -- each already has its own ``timeout=``
+# below, but the flat "quality_check" marker gave no visibility into which
+# one was actually running when a run got slow. Named as constants (instead
+# of inline literals) so ``quality_check_worst_case_seconds`` below can sum
+# the SAME real numbers the subprocess calls actually use -- one source of
+# truth, no risk of the budget and the calls drifting apart.
+_TECHNICAL_VALIDATION_TIMEOUT_SECONDS = 15.0  # renderer.validate_video_artifact's own ffprobe probe
+_SCENE_CUT_DETECTION_TIMEOUT_SECONDS = 30.0
+_AUDIO_LEVEL_DETECTION_TIMEOUT_SECONDS = 30.0
+_DURATION_PROBE_TIMEOUT_SECONDS = 15.0
+_TAIL_SILENCE_PROBE_TIMEOUT_SECONDS = 20.0
+_AUDIO_TIMING_PROBE_TIMEOUT_SECONDS = 15.0
+_BODY_MOTION_PER_SCENE_TIMEOUT_SECONDS = 30.0
+_SHORTS_DIMENSIONS_PROBE_TIMEOUT_SECONDS = 15.0
+
+# Body-motion measurement runs ONE ffmpeg probe per
+# ``rendered_character_motion`` entry -- i.e. per scene -- so it is the one
+# sub-check whose worst case scales with scene count instead of being a
+# single fixed call. Bounded here using the SAME 4-6 scene range
+# ``MediaManager.plan()``'s own LLM prompt already instructs ("Metni 4-6
+# sahneye böl") -- not a new, independently-invented cap.
+MAX_EXPECTED_SCENES_FOR_BUDGET = 6
+
+
+def quality_check_worst_case_seconds(max_scenes: int = MAX_EXPECTED_SCENES_FOR_BUDGET) -> float:
+    """Real, additive worst-case wall-clock for ONE ``validate_media_goal_artifact``
+    call: every bounded subprocess timeout above that this function CAN run,
+    summed (not maxed) -- the sub-checks run sequentially, not in parallel,
+    so a truthful outer department budget must assume each one individually
+    hits its own cap. This is a static sum of already-configured timeouts
+    (not a live measurement); callers (see
+    ``department_orchestrator.MEDIA_DEPARTMENT_TASK_TIMEOUT_SECONDS``) use
+    it to size the outer timeout FROM this real inner worst-case instead of
+    guessing a number independent of it.
+    """
+    return (
+        _TECHNICAL_VALIDATION_TIMEOUT_SECONDS
+        + _SCENE_CUT_DETECTION_TIMEOUT_SECONDS
+        + _AUDIO_LEVEL_DETECTION_TIMEOUT_SECONDS
+        + _DURATION_PROBE_TIMEOUT_SECONDS
+        + _TAIL_SILENCE_PROBE_TIMEOUT_SECONDS
+        + _AUDIO_TIMING_PROBE_TIMEOUT_SECONDS
+        + _SHORTS_DIMENSIONS_PROBE_TIMEOUT_SECONDS
+        + max_scenes * _BODY_MOTION_PER_SCENE_TIMEOUT_SECONDS
+    )
+
 
 @dataclass(frozen=True)
 class MediaQualityCheck:
@@ -73,13 +123,25 @@ class MediaArtifactQuality:
     critical_failures: tuple[str, ...] = ()
 
 
-def _measure_local_body_motion(artifact: Path, evidence: dict, ffmpeg: str) -> tuple[bool, float | None]:
-    """Separate localized character articulation from whole-frame camera motion."""
+def _measure_local_body_motion(
+    artifact: Path, evidence: dict, ffmpeg: str, *, stage_sink: dict | None = None,
+) -> tuple[bool, float | None]:
+    """Separate localized character articulation from whole-frame camera motion.
+
+    Round 4 repair: this is the ONE quality sub-check whose real worst case
+    scales with scene count (one ffmpeg probe per motion spec) -- per-scene
+    ``last_stage`` markers here, matching the SAME
+    ``render_ffmpeg_scene_{i}_of_{n}`` convention ``LocalVideoRenderer``
+    already uses (see src/media/renderer.py), so a slow/hung run identifies
+    exactly which scene's probe was running.
+    """
     specs = evidence.get("rendered_character_motion", [])
     if not specs:
         return False, None
     best_ratio: float | None = None
-    for spec in specs:
+    for index, spec in enumerate(specs):
+        if stage_sink is not None:
+            stage_sink["last_stage"] = f"quality_body_motion_scene_{index + 1}_of_{len(specs)}"
         roi = spec.get("character_roi")
         if not (isinstance(roi, list) and len(roi) == 4):
             continue
@@ -88,7 +150,7 @@ def _measure_local_body_motion(artifact: Path, evidence: dict, ffmpeg: str) -> t
         probe = subprocess.run([
             ffmpeg, "-hide_banner", "-loglevel", "error", "-ss", f"{start:.3f}", "-t", f"{duration:.3f}",
             "-i", str(artifact), "-vf", "fps=8,scale=160:90,format=gray", "-f", "rawvideo", "-",
-        ], capture_output=True, timeout=30, check=False)
+        ], capture_output=True, timeout=_BODY_MOTION_PER_SCENE_TIMEOUT_SECONDS, check=False)
         frame_size, width, height = 160 * 90, 160, 90
         frames = [probe.stdout[i:i + frame_size] for i in range(0, len(probe.stdout) - frame_size + 1, frame_size)]
         if len(frames) < 3:
@@ -214,7 +276,7 @@ def _probe_duration_seconds(path: Path, ffprobe: str) -> float | None:
     try:
         result = subprocess.run(
             [ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(path)],
-            capture_output=True, text=True, timeout=15, check=False,
+            capture_output=True, text=True, timeout=_DURATION_PROBE_TIMEOUT_SECONDS, check=False,
         )
         return float(result.stdout.strip())
     except (OSError, ValueError, subprocess.TimeoutExpired):
@@ -225,7 +287,8 @@ def _probe_dimensions(path: Path, ffprobe: str) -> tuple[int, int] | None:
     try:
         result = subprocess.run(
             [ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
-             "-of", "json", str(path)], capture_output=True, text=True, timeout=15, check=False,
+             "-of", "json", str(path)], capture_output=True, text=True,
+            timeout=_SHORTS_DIMENSIONS_PROBE_TIMEOUT_SECONDS, check=False,
         )
         stream = json.loads(result.stdout)["streams"][0]
         return int(stream["width"]), int(stream["height"])
@@ -245,7 +308,7 @@ def _measure_tail_silence(artifact: Path, ffmpeg: str, overall_max_db: float | N
         probe = subprocess.run(
             [ffmpeg, "-hide_banner", "-sseof", f"-{_TAIL_SILENCE_SECONDS:.2f}",
              "-i", str(artifact), "-af", "volumedetect", "-f", "null", "NUL"],
-            capture_output=True, text=True, timeout=20, check=False,
+            capture_output=True, text=True, timeout=_TAIL_SILENCE_PROBE_TIMEOUT_SECONDS, check=False,
         )
         match = re.search(r"max_volume:\s*(-?[\d.]+) dB", probe.stderr)
         tail_db = float(match.group(1)) if match else None
@@ -345,7 +408,9 @@ def check_media_plan_quality(plan_text: str) -> MediaQualityCheck:
     )
 
 
-def validate_media_goal_artifact(path: str | Path, goal: str = "") -> MediaArtifactQuality:
+def validate_media_goal_artifact(
+    path: str | Path, goal: str = "", *, stage_sink: dict | None = None,
+) -> MediaArtifactQuality:
     """Validate container integrity separately from production semantics.
 
     Semantic acceptance requires explicit provenance, multiple authored story
@@ -357,9 +422,18 @@ def validate_media_goal_artifact(path: str | Path, goal: str = "") -> MediaArtif
     relevance, non-repetitive motion, full-timeline audio coverage, and (for
     Shorts) a validated vertical/hook/payoff structure -- see the module
     docstring and ``MediaArtifactQuality.gates``/``critical_failures``.
+
+    Round 4 repair: ``stage_sink`` (the SAME shared dict ``MediaManager``/
+    ``LocalVideoRenderer`` already write ``last_stage`` markers into, see
+    src/media/manager.py and src/media/renderer.py) gets a marker before
+    every potentially-blocking local ffmpeg/ffprobe subprocess call below,
+    so a slow/timed-out quality_check identifies exactly which sub-check
+    was running instead of the previous flat "quality_check" marker.
     """
     from src.media.renderer import find_ffmpeg, find_ffprobe, validate_video_artifact
 
+    if stage_sink is not None:
+        stage_sink["last_stage"] = "quality_technical_validation"
     artifact = Path(path)
     technical = validate_video_artifact(artifact)
     issues: list[str] = []
@@ -367,6 +441,8 @@ def validate_media_goal_artifact(path: str | Path, goal: str = "") -> MediaArtif
                               ["technical artifact validation failed"]}}
     if not technical:
         issues.append("technical artifact validation failed")
+        if stage_sink is not None:
+            stage_sink["last_stage"] = "quality_complete"
         return MediaArtifactQuality(False, False, False, tuple(issues), gates=gates,
                                      critical_failures=("technical_render_validity",))
 
@@ -393,6 +469,8 @@ def validate_media_goal_artifact(path: str | Path, goal: str = "") -> MediaArtif
         [r for r in provenance_reasons if r not in gates["technical_render_validity"]["reasons"]]
     gates["technical_render_validity"]["passed"] = gates["technical_render_validity"]["passed"] and not provenance_reasons
 
+    if stage_sink is not None:
+        stage_sink["last_stage"] = "quality_semantic_validation"
     coherence = _check_narrative_coherence(evidence)
     scene_count = coherence["scene_count"]
     gates["narrative_coherence"] = coherence
@@ -402,6 +480,8 @@ def validate_media_goal_artifact(path: str | Path, goal: str = "") -> MediaArtif
     gates["visual_relevance"] = relevance
     issues.extend(r for r in relevance["reasons"] if r not in issues)
 
+    if stage_sink is not None:
+        stage_sink["last_stage"] = "quality_research_grounding"
     research = _check_research_grounding(evidence)
     gates["research_grounding"] = research
     issues.extend(r for r in research["reasons"] if r not in issues)
@@ -412,19 +492,25 @@ def validate_media_goal_artifact(path: str | Path, goal: str = "") -> MediaArtif
     ffmpeg = find_ffmpeg()
     ffprobe = find_ffprobe()
     if ffmpeg:
+        if stage_sink is not None:
+            stage_sink["last_stage"] = "quality_scene_cut_detection"
         scene_probe = subprocess.run(
             [ffmpeg, "-hide_banner", "-i", str(artifact), "-filter:v", "select=gt(scene\\,0.25),showinfo", "-f", "null", "NUL"],
-            capture_output=True, text=True, timeout=30, check=False,
+            capture_output=True, text=True, timeout=_SCENE_CUT_DETECTION_TIMEOUT_SECONDS, check=False,
         )
         detected_cuts = len(re.findall(r"pts_time:", scene_probe.stderr))
+        if stage_sink is not None:
+            stage_sink["last_stage"] = "quality_audio_level_detection"
         audio_probe = subprocess.run(
             [ffmpeg, "-hide_banner", "-i", str(artifact), "-af", "volumedetect", "-f", "null", "NUL"],
-            capture_output=True, text=True, timeout=30, check=False,
+            capture_output=True, text=True, timeout=_AUDIO_LEVEL_DETECTION_TIMEOUT_SECONDS, check=False,
         )
         match = re.search(r"max_volume:\s*(-?[\d.]+) dB", audio_probe.stderr)
         if match:
             max_audio_db = float(match.group(1))
     if ffprobe:
+        if stage_sink is not None:
+            stage_sink["last_stage"] = "quality_duration_probe"
         artifact_duration = _probe_duration_seconds(artifact, ffprobe)
     if detected_cuts < 3:
         issues.append("measured temporal/scene variation is insufficient")
@@ -432,6 +518,8 @@ def validate_media_goal_artifact(path: str | Path, goal: str = "") -> MediaArtif
     audio_reasons = []
     if evidence.get("audio_present") is not True or max_audio_db is None or max_audio_db <= -60:
         audio_reasons.append("meaningful voice/audio is absent")
+    if stage_sink is not None:
+        stage_sink["last_stage"] = "quality_tail_silence_detection"
     tail = _measure_tail_silence(artifact, ffmpeg, max_audio_db) if ffmpeg else {"unexpected_end_silence": False, "tail_max_db": None}
     if tail["unexpected_end_silence"]:
         audio_reasons.append(
@@ -444,14 +532,22 @@ def validate_media_goal_artifact(path: str | Path, goal: str = "") -> MediaArtif
 
     source_root_raw = evidence.get("source_root")
     source_root = Path(source_root_raw) if source_root_raw else None
+    if stage_sink is not None:
+        stage_sink["last_stage"] = "quality_audio_timing_validation"
     timing = _check_audio_timing(evidence, artifact, artifact_duration, source_root, ffprobe)
     gates["av_timing"] = timing
     issues.extend(r for r in timing["reasons"] if r not in issues)
 
-    body_motion_detected, body_motion_ratio = _measure_local_body_motion(artifact, evidence, ffmpeg) if ffmpeg else (False, None)
+    if stage_sink is not None:
+        stage_sink["last_stage"] = "quality_body_motion_detection"
+    body_motion_detected, body_motion_ratio = (
+        _measure_local_body_motion(artifact, evidence, ffmpeg, stage_sink=stage_sink) if ffmpeg else (False, None)
+    )
     if evidence.get("rendered_character_motion") and not body_motion_detected:
         issues.append("declared character motion is camera/global motion only")
 
+    if stage_sink is not None:
+        stage_sink["last_stage"] = "quality_motion_repetition_check"
     repetition = _detect_motion_repetition(evidence)
     gates["repetition"] = {"passed": not repetition["severe_repetition"], "reasons": repetition["reasons"],
                             "worst_unique_ratio": repetition.get("worst_unique_ratio")}
@@ -464,6 +560,8 @@ def validate_media_goal_artifact(path: str | Path, goal: str = "") -> MediaArtif
     gates["visual_continuity"] = {"passed": not continuity_reasons, "reasons": continuity_reasons}
     issues.extend(r for r in continuity_reasons if r not in issues)
 
+    if stage_sink is not None:
+        stage_sink["last_stage"] = "quality_shorts_structure_validation"
     shorts = _check_shorts_structure(evidence, artifact, ffprobe)
     gates["shorts_structure"] = shorts
     issues.extend(r for r in shorts["reasons"] if r not in issues)
@@ -475,6 +573,8 @@ def validate_media_goal_artifact(path: str | Path, goal: str = "") -> MediaArtif
     if not gates["publication_readiness"]["passed"]:
         critical_failures = critical_failures + ("publication_readiness",) if "publication_readiness" not in critical_failures else critical_failures
 
+    if stage_sink is not None:
+        stage_sink["last_stage"] = "quality_complete"
     return MediaArtifactQuality(technical and semantic, technical, semantic, tuple(issues), scene_count,
                                  detected_cuts, max_audio_db, body_motion_detected, body_motion_ratio,
                                  gates=gates, critical_failures=critical_failures)

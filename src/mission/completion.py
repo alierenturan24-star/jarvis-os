@@ -49,6 +49,18 @@ class RequirementStatus:
     requirement: CompletionRequirement
     satisfied: bool
     paths: tuple[str, ...] = ()
+    # Round 4 repair (real live-mission evidence): a rendered artifact that
+    # merely hasn't PASSED quality validation yet (still in-progress,
+    # timed-out mid quality_check, or genuinely failed a gate) must not be
+    # reported the SAME way as "no artifact was ever produced" -- both used
+    # to collapse into ``satisfied=False`` with no distinguishing signal.
+    # True only for an unsatisfied ARTIFACT requirement where a real,
+    # non-empty, correctly-extensioned file was found on disk (see
+    # ``_artifact_file_exists`` below) among the reported candidate paths --
+    # never for other requirement kinds. Does NOT relax ``satisfied``
+    # itself: a mission stays incomplete until the artifact actually PASSES
+    # quality validation.
+    rendered_not_approved: bool = False
 
 
 @dataclass(frozen=True)
@@ -214,7 +226,11 @@ def evaluate_goal_completion(mission) -> GoalCompletion:
         if requirement.kind == "artifact":
             kind = ArtifactType(requirement.name)
             valid = tuple(dict.fromkeys(path for path in paths if _valid_artifact(path, kind, mission.title)))
-            statuses.append(RequirementStatus(requirement, bool(valid), valid))
+            satisfied = bool(valid)
+            rendered_not_approved = not satisfied and any(
+                _artifact_file_exists(path, kind) for path in paths
+            )
+            statuses.append(RequirementStatus(requirement, satisfied, valid, rendered_not_approved))
         elif requirement.kind == "youtube_evidence":
             media_task = next((task for task in mission.tasks if task.agent == "media"), None)
             report = media_task.metadata.get("youtube_production") if media_task and media_task.metadata else None
@@ -391,6 +407,22 @@ def _paths_in_text(text: str) -> Iterable[str]:
     pattern = rf"(?im)(?:^|[\s:'\"])([^\r\n<>|?*\"]+?(?:{'|'.join(re.escape(ext) for ext in extensions)}))(?=$|[\s'\"])"
     for match in re.finditer(pattern, text or ""):
         yield match.group(1).strip()
+
+
+def _artifact_file_exists(raw_path: str, kind: ArtifactType) -> bool:
+    """True when a real, non-empty file of the right extension exists on
+    disk for this artifact kind -- regardless of whether it PASSED semantic
+    quality validation. This is the ``rendered_not_approved`` signal's
+    truth source (round 4 repair): it lets callers distinguish "no
+    artifact was ever produced" from "a real artifact exists but quality
+    validation has not approved it (yet, or at all)"."""
+    path = Path(raw_path.strip().strip("'\""))
+    if path.suffix.casefold() not in ARTIFACT_EXTENSIONS[kind]:
+        return False
+    try:
+        return path.is_file() and path.stat().st_size > 0
+    except OSError:
+        return False
 
 
 def _valid_artifact(raw_path: str, kind: ArtifactType, goal: str = "") -> bool:

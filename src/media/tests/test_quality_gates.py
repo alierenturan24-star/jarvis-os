@@ -228,3 +228,31 @@ def test_coherent_research_grounded_production_passes_all_gates(tmp_path):
     assert check.gates["shorts_structure"]["passed"] is True
     assert check.critical_failures == ()
     assert check.passed is True
+
+
+# K: round 4 repair -- quality substage evidence. Body-motion measurement
+# runs one ffmpeg probe PER declared motion spec (i.e. per scene) -- the
+# only quality sub-check whose worst case scales with scene count (see
+# ``quality.quality_check_worst_case_seconds``). A real live mission failed
+# at the flat marker "quality_check" with no finer diagnostic; this proves
+# the per-scene marker is set BEFORE each blocking probe, mirroring the
+# renderer's existing ``render_ffmpeg_scene_{i}_of_{n}`` convention.
+def test_body_motion_check_marks_per_scene_substage_before_each_probe(monkeypatch):
+    from src.media.quality import _measure_local_body_motion
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("ffmpeg should not actually run in this test")
+
+    monkeypatch.setattr(subprocess, "run", _boom)
+
+    evidence = {"rendered_character_motion": [
+        {"character_roi": [0.1, 0.1, 0.5, 0.5], "start_seconds": 0, "end_seconds": 2},
+        {"character_roi": [0.1, 0.1, 0.5, 0.5], "start_seconds": 2, "end_seconds": 4},
+    ]}
+    sink: dict = {}
+    try:
+        _measure_local_body_motion(Path("unused.mp4"), evidence, "ffmpeg.exe", stage_sink=sink)
+    except AssertionError:
+        pass
+
+    assert sink.get("last_stage") == "quality_body_motion_scene_1_of_2"

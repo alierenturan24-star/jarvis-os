@@ -190,7 +190,7 @@ class TestBoundedRepairLoop:
         )
         checks = [_quality(False, ("audio_completeness",)), _quality(True)]
         monkeypatch.setattr("src.media.manager.validate_media_goal_artifact",
-                             lambda path, goal: checks.pop(0))
+                             lambda path, goal, **kw: checks.pop(0))
 
         result = manager.plan(topic="Bitcoin neden düştü", produce_artifact=True)
 
@@ -210,7 +210,7 @@ class TestBoundedRepairLoop:
                              audio_used=True, production_ready=True))[1],
         )
         monkeypatch.setattr("src.media.manager.validate_media_goal_artifact",
-                             lambda path, goal: _quality(False, ("audio_completeness",)))
+                             lambda path, goal, **kw: _quality(False, ("audio_completeness",)))
 
         result = manager.plan(topic="Bitcoin neden düştü", produce_artifact=True)
 
@@ -230,7 +230,7 @@ class TestBoundedRepairLoop:
                 RenderResult(True, str(tmp_path / "artifact.mp4"), audio_used=True, production_ready=True))[1],
         )
         monkeypatch.setattr("src.media.manager.validate_media_goal_artifact",
-                             lambda path, goal: _quality(False, ("visual_relevance",)))
+                             lambda path, goal, **kw: _quality(False, ("visual_relevance",)))
 
         result = manager.plan(topic="Bitcoin neden düştü", produce_artifact=True)
 

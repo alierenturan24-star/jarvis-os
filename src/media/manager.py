@@ -31,7 +31,12 @@ ENVIRONMENT_CAPABILITY_NOTE = (
 # are deliberately excluded: those require going back to the opportunity/script
 # stage (a different topic/research input), which an automatic retry cannot do.
 _REPAIRABLE_GATES = {"audio_completeness", "av_timing", "repetition", "shorts_structure"}
-_MAX_REPAIR_ATTEMPTS = 2
+# Public (not module-private) name: round 4 repair -- department_orchestrator
+# needs the REAL repair-attempt count to size media's outer department
+# timeout budget from this module's own bounded worst-case, the same
+# pattern already used for "research"/"coding" (see
+# ``department_orchestrator.MEDIA_DEPARTMENT_TASK_TIMEOUT_SECONDS``).
+MAX_REPAIR_ATTEMPTS = 2
 
 
 class MediaManager:
@@ -295,7 +300,7 @@ Kurallar:
         motion-repetition/Shorts-format) triggers a full regenerate-and-rerender
         (there is no isolated per-stage regeneration API yet, so the retry unit
         is coarse: a whole new build+render, not a single patched scene) up to
-        ``_MAX_REPAIR_ATTEMPTS`` times. A non-repairable failure (research
+        ``MAX_REPAIR_ATTEMPTS`` times. A non-repairable failure (research
         grounding, narrative coherence, visual relevance -- these require going
         back to the opportunity/script stage, not re-rendering the same content)
         stops immediately and reports truthfully. Either way, this never creates
@@ -314,11 +319,34 @@ Kurallar:
                 self.last_artifact_path = ""
                 return f"\n\nVIDEO RENDER: BLOCKED\n{render.error}"
 
-            if stage_sink is not None:
-                stage_sink["last_stage"] = "quality_check"
-            check = validate_media_goal_artifact(Path(render.artifact_path), topic)
-            failing = [name for name in check.critical_failures if name != "publication_readiness"]
+            # Round 4 repair (real live-mission evidence: render completed,
+            # quality_check then hit the outer 75s department timeout, and
+            # the final mission report claimed "ARTIFACT STATUS: MISSING"
+            # even though a real file existed on disk). ROOT CAUSE:
+            # ``self.last_artifact_path`` -- the ONLY signal
+            # ``MediaAgent.execute()`` reads to record ``task.metadata
+            # ["artifact_path"]`` -- used to be assigned AFTER the quality
+            # check call below returned. If that call never returns in
+            # time, the assignment never runs and the real rendered file
+            # is reported as if it never existed. Fix: record the artifact
+            # the moment it's known to exist -- BEFORE the (potentially
+            # slow/blocking) quality check -- and also write it directly
+            # into the shared ``stage_sink`` dict (== ``task.metadata``),
+            # the SAME live-write pattern already used for "last_stage" (see
+            # ``MediaAgent.execute``'s comment) so it survives even if this
+            # whole call is later killed by an outer timeout before
+            # returning. This does NOT change completion semantics: a
+            # failing/timed-out quality check still keeps the mission
+            # incomplete (see ``src.mission.completion._valid_artifact``,
+            # which still requires the artifact to PASS validation) -- it
+            # only stops a truthful, already-rendered artifact from being
+            # reported as missing.
             self.last_artifact_path = render.artifact_path
+            if stage_sink is not None:
+                stage_sink["artifact_path"] = render.artifact_path
+                stage_sink["last_stage"] = "quality_check_start"
+            check = validate_media_goal_artifact(Path(render.artifact_path), topic, stage_sink=stage_sink)
+            failing = [name for name in check.critical_failures if name != "publication_readiness"]
             self.last_production_record = self.learning.record(
                 goal=topic, artifact_path=render.artifact_path, plan_text=plan_text,
             )
@@ -330,11 +358,11 @@ Kurallar:
 
             repairable = [name for name in failing if name in _REPAIRABLE_GATES]
             non_repairable = [name for name in failing if name not in _REPAIRABLE_GATES]
-            if non_repairable or attempts >= _MAX_REPAIR_ATTEMPTS:
+            if non_repairable or attempts >= MAX_REPAIR_ATTEMPTS:
                 reason = (
                     f"non-repairable quality gate failure(s): {', '.join(non_repairable)}"
                     if non_repairable else
-                    f"repair attempts exhausted ({_MAX_REPAIR_ATTEMPTS}) for: {', '.join(repairable)}"
+                    f"repair attempts exhausted ({MAX_REPAIR_ATTEMPTS}) for: {', '.join(repairable)}"
                 )
                 block = f"\n\nQUALITY: NOT READY FOR PUBLICATION\n{reason}"
                 if repair_log:

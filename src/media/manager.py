@@ -80,6 +80,7 @@ class MediaManager:
         preferred_provider: str | None = None,
         produce_artifact: bool = False,
         stage_sink: dict | None = None,
+        research_opportunity: dict | None = None,
     ) -> str:
         topic = topic.strip()
         self.last_capability_gap = None
@@ -111,7 +112,23 @@ class MediaManager:
         # departmanlar bağımsız olduğu için o turun SONUCUNU burada
         # DOĞRUDAN okuyamayız, bkz. Sprint 39 mimari notu).
         prior = self.knowledge.find_research(topic)
-        if prior is not None:
+        # Round 5 repair (real live-mission evidence): an explicitly-passed,
+        # ALREADY-SELECTED research opportunity (see
+        # MediaAgent.execute()/src.research.opportunity) is authoritative
+        # over the ``prior`` lookup above. That lookup is a best-effort
+        # convenience for callers with no explicit research dependency --
+        # a real live mission proved it can silently miss (media's own
+        # re-derived topic string was a DIFFERENT string than research's
+        # actual query, so the KnowledgeBase containment-match never hit),
+        # which is exactly why the explicit data dependency exists now.
+        if research_opportunity is not None:
+            context_block = (
+                "Araştırma tarafından SEÇİLMİŞ, güncel bir içerik fırsatı VAR "
+                f"(konum/pazar: {research_opportunity.get('location_or_market', '')}, "
+                f"güncellik: {research_opportunity.get('why_current', '')}):\n"
+                f"{str(research_opportunity.get('selected_topic', ''))[:800]}\n"
+            )
+        elif prior is not None:
             context_block = (
                 f"Bu konuda daha önce yapılmış bir araştırma özeti var "
                 f"({prior.get('created_at', '?')}):\n{str(prior.get('summary', ''))[:800]}\n"
@@ -234,10 +251,27 @@ Kurallar:
             # prompt context; reused here (no second research system) as the
             # truthful "was this topic actually research-grounded" signal recorded
             # into the manifest and enforced by the quality gate.
-            research_evidence_ref = (
-                {"created_at": prior.get("created_at"), "source_count": prior.get("source_count")}
-                if prior is not None else None
-            )
+            # Round 5 repair: an explicit ``research_opportunity`` (see above)
+            # is the authoritative grounding signal when present -- it is
+            # already truthfulness-checked (market coverage + freshness,
+            # see ``build_selected_opportunity``) BEFORE ever reaching here
+            # (MediaAgent.execute() never calls ``plan()`` with an
+            # insufficient one), so it grounds production exactly like a
+            # KnowledgeBase hit does, just sourced explicitly instead of an
+            # internal lookup that can silently miss.
+            if research_opportunity is not None:
+                research_grounded = True
+                research_evidence_ref = {
+                    "location_or_market": research_opportunity.get("location_or_market"),
+                    "freshness_status": research_opportunity.get("freshness_status"),
+                    "source_count": len(research_opportunity.get("supporting_evidence") or []),
+                }
+            else:
+                research_grounded = prior is not None
+                research_evidence_ref = (
+                    {"created_at": prior.get("created_at"), "source_count": prior.get("source_count")}
+                    if prior is not None else None
+                )
 
             def _build_production():
                 if stage_sink is not None:
@@ -249,7 +283,7 @@ Kurallar:
                     channel_id=self.channel_id,
                     channel_market=self.channel_market,
                     channel_language=self.channel_language,
-                    research_grounded=prior is not None,
+                    research_grounded=research_grounded,
                     research_evidence_ref=research_evidence_ref,
                     stage_sink=stage_sink,
                 )

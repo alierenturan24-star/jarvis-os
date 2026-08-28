@@ -130,6 +130,46 @@ def classify_source(
     return result
 
 
+# Round 5 repair (real live-mission evidence): a pure current-events/
+# content-opportunity query -- "İsviçre için güncel gündem: ..." -- used to
+# be searched UNCONDITIONALLY against site:github.com/site:arxiv.org/
+# site:news.ycombinator.com for every topic, regardless of what the topic
+# actually was. That is how an unrelated "GitHub Foundations Certification"
+# course surfaced as a "Swiss content opportunity". These three specialized
+# channels are appropriate ONLY when the topic itself is genuinely about
+# software/tooling/repos (GitHub, Hacker News) or academic/technical
+# research (arXiv) -- never unconditionally for every research call.
+# GENERAL_WEB (the base "any topic" channel) is unaffected, and an
+# explicit ``source_preferences`` request (existing, unchanged mechanism)
+# always forces its channel back in regardless of auto-classification --
+# explicit request beats automatic inference, same priority rule used
+# elsewhere in this codebase (see department_orchestrator.py).
+#
+# Reuses ``target_resolver.has_acquisition_signal`` -- the SAME generic
+# "does this text actually ask for a tool/repo/provider" vocabulary already
+# proven for GitHub-category routing (Sprint 31A / round 3) -- kept in one
+# place, not duplicated into a second capability-detection system.
+def _wants_tooling_sources(topic: str, preferences: list[str]) -> bool:
+    if "GITHUB" in preferences or "HACKER_NEWS" in preferences or "COMMUNITY" in preferences:
+        return True
+    from src.mission.target_resolver import has_acquisition_signal
+
+    return has_acquisition_signal(topic)
+
+
+_ACADEMIC_SIGNAL_SUBSTRINGS = (
+    "arxiv", "paper", "makale", "preprint", "academic", "akademik",
+    "research paper", "tez", "thesis", "conference paper", "journal article",
+)
+
+
+def _wants_academic_sources(topic: str, preferences: list[str]) -> bool:
+    if "ARXIV" in preferences:
+        return True
+    lowered = (topic or "").casefold()
+    return any(cue in lowered for cue in _ACADEMIC_SIGNAL_SUBSTRINGS)
+
+
 def source_matches_preferences(source_type: str, preferences: list[str]) -> bool:
     normalized = {str(item).strip().upper() for item in preferences if str(item).strip()}
     if not normalized:
@@ -150,12 +190,19 @@ class ResearchCollector:
         source_preferences: list[str] | None = None,
     ) -> list[dict]:
         preferences = [str(item).strip().upper() for item in (source_preferences or []) if str(item).strip()]
-        searches = [
-            {"search_channel": "GENERAL_WEB", "query": topic},
-            {"search_channel": "GITHUB", "query": f"site:github.com {topic}"},
-            {"search_channel": "ARXIV", "query": f"site:arxiv.org {topic}"},
-            {"search_channel": "HACKER_NEWS", "query": f"site:news.ycombinator.com {topic}"},
-        ]
+
+        # Round 5 repair: GITHUB/ARXIV/HACKER_NEWS are no longer
+        # unconditional -- see ``_wants_tooling_sources``/
+        # ``_wants_academic_sources`` above. GENERAL_WEB always runs (the
+        # base "any topic" channel, appropriate for every intent including
+        # current-events/news).
+        searches = [{"search_channel": "GENERAL_WEB", "query": topic}]
+        if _wants_tooling_sources(topic, preferences):
+            searches.append({"search_channel": "GITHUB", "query": f"site:github.com {topic}"})
+        if _wants_academic_sources(topic, preferences):
+            searches.append({"search_channel": "ARXIV", "query": f"site:arxiv.org {topic}"})
+        if _wants_tooling_sources(topic, preferences):
+            searches.append({"search_channel": "HACKER_NEWS", "query": f"site:news.ycombinator.com {topic}"})
         if "OFFICIAL_DOCS" in preferences:
             searches.insert(0, {"search_channel": "OFFICIAL_DOCS", "query": f"{topic} official documentation"})
         preferred_channels = {"GITHUB" if item == "GITHUB" else item for item in preferences}

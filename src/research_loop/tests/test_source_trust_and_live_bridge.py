@@ -79,7 +79,13 @@ def test_github_search_channel_does_not_grant_github_identity():
             return {"success": False}
 
     collector.web = Web()
-    rows = collector.collect("video")
+    # Round 5: GITHUB is no longer an unconditional channel (see
+    # collector._wants_tooling_sources) -- "video tool" carries a genuine
+    # tooling/acquisition signal ("tool"), unlike a bare topic, so the
+    # GITHUB channel still runs here; this test's actual subject (a result
+    # arriving via the GITHUB search channel must NOT automatically be
+    # trusted as a GitHub-identity source) is unaffected by that change.
+    rows = collector.collect("video tool")
     assert rows[0]["search_channel"] == "GITHUB"
     assert rows[0]["source_identity"] == "example.test" and rows[0]["source_type"] == "WEB"
 

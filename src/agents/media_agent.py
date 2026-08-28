@@ -3,6 +3,7 @@ import inspect
 from src.mission.completion import has_youtube_production_intent
 
 from src.agents.base_agent import BaseAgent
+from src.jobs.task_status import TaskStatus
 from src.media.manager import MediaManager
 from src.planner.task import Task
 
@@ -48,7 +49,6 @@ class MediaAgent(BaseAgent):
     def execute(self, task: Task) -> str:
         command = str(getattr(task, "target", ""))
 
-        topic = self._extract_topic(command)
         duration = self._extract_duration(command)
 
         preferred_provider = getattr(task, "metadata", {}).get("preferred_ai_provider")
@@ -57,6 +57,42 @@ class MediaAgent(BaseAgent):
         if channel_match:
             self.manager.set_channel_scope(channel_match.group(1))
             task.metadata["channel_id"] = channel_match.group(1)
+
+        # Round 5 repair (real live-mission evidence): when department_
+        # orchestrator.py wired an explicit media->research data dependency
+        # (topic discovery required -- see
+        # ``_media_requires_research_dependency``... i.e.
+        # ``media_needs_research_grounding``), ``task.metadata["research_task"]``
+        # is a LIVE reference to the (by now COMPLETED, ``depends_on``
+        # guarantees this) research Task object. Its structured
+        # ``SelectedOpportunity`` (``task.metadata["report"]``, see
+        # src.research.opportunity/src.agents.research_agent) is
+        # authoritative over independently re-deriving a topic here -- a
+        # real live mission proved that re-derivation drifts to a DIFFERENT
+        # string than what research actually searched, silently losing all
+        # research grounding and falling back to generic evergreen content.
+        research_task = getattr(task, "metadata", {}).get("research_task")
+        research_opportunity: dict | None = None
+        if research_task is not None:
+            if getattr(research_task, "status", None) != TaskStatus.COMPLETED:
+                task.metadata["last_stage"] = "research_gap_stop"
+                return (
+                    "RESEARCH_GAP\nGerekli konu keşif araştırması tamamlanmadı "
+                    f"(durum: {getattr(research_task, 'status', None)}); güncel/doğrulanmış bir içerik "
+                    "fırsatı yok. Genel/evergreen bir video ÜRETİLMEDİ."
+                )
+            candidate = (getattr(research_task, "metadata", None) or {}).get("report")
+            if not isinstance(candidate, dict) or not candidate.get("sufficient"):
+                reason = (candidate or {}).get("reason") or "güncel/yeterli kanıt bulunamadı"
+                task.metadata["last_stage"] = "research_gap_stop"
+                return (
+                    f"RESEARCH_GAP\n{reason}\n"
+                    "Genel/evergreen bir video ÜRETİLMEDİ; konu araştırma ile doğrulanmadan üretim yapılmaz."
+                )
+            research_opportunity = candidate
+            topic = str(candidate.get("selected_topic") or "").strip() or self._extract_topic(command)
+        else:
+            topic = self._extract_topic(command)
 
         # Mission repair (MEDIA 75S TIMEOUT): ``task.metadata`` is the SAME
         # dict object the (possibly outer-timed-out) background thread keeps
@@ -76,6 +112,8 @@ class MediaAgent(BaseAgent):
             plan_kwargs["produce_artifact"] = True
         if "stage_sink" in inspect.signature(self.manager.plan).parameters:
             plan_kwargs["stage_sink"] = task.metadata
+        if research_opportunity is not None and "research_opportunity" in inspect.signature(self.manager.plan).parameters:
+            plan_kwargs["research_opportunity"] = research_opportunity
         result = self.manager.plan(**plan_kwargs)
         if "SENARYO" in result and "SAHNELER" in result:
             task.metadata["youtube_content_plan"] = True

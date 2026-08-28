@@ -153,5 +153,10 @@ def test_existing_collector_propagates_remaining_deadline_to_network_adapter(mon
                                       or {"success": False}})()
     ticks = iter([10.0, 12.0])
     monkeypatch.setattr(collector_module.time, "monotonic", lambda: next(ticks))
-    with pytest.raises(TimeoutError): collector.collect("topic", deadline=11.0)
+    # Round 5: GITHUB/HACKER_NEWS are no longer unconditional channels (see
+    # collector._wants_tooling_sources) -- this test needs >= 2 search
+    # steps to exercise the SECOND deadline check, so the topic carries a
+    # genuine tooling signal ("tool") to keep multiple channels active;
+    # the deadline-propagation behavior under test is unaffected.
+    with pytest.raises(TimeoutError): collector.collect("topic tool", deadline=11.0)
     assert observed == [1.0]

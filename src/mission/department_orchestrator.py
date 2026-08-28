@@ -369,15 +369,34 @@ def _media_research_query(source_text: str) -> str:
     # on the story, never as the query's subject -- content research and
     # capability/tool research stay separate; no GitHub/tool search is
     # requested here.
-    stripped = _MEDIA_ADDRESS_PREFIX_PATTERN.sub("", source_text or "")
-    stripped = _MEDIA_PRODUCTION_VERB_PATTERN.sub("", stripped)
-    stripped = re.sub(r"\s+", " ", stripped).strip(" .,:;-")
-    context = stripped or "genel"
+    context = _media_research_context(source_text)
     return (
         f"{context} güncel gündem: bugün öne çıkan haberler, kamuoyunun ilgisini çeken "
         "gelişmeler ve trend olan konular. Kısa video (Shorts) anlatımına uygun, "
         "güncelliği kaynaklarla doğrulanabilir TEK bir içerik fırsatı belirle."
     )
+
+
+def _media_research_context(source_text: str) -> str:
+    """The same address/production-verb-stripped market/location context
+    ``_media_research_query`` embeds in its query text -- exposed
+    separately (round 5) so it can ALSO be attached to the research task's
+    metadata as ``market_context``: the signal ``SelectedOpportunity``
+    (src/research/opportunity.py) uses to judge whether the collected
+    evidence actually covers the requested market, instead of the query's
+    boilerplate wording."""
+    stripped = _MEDIA_ADDRESS_PREFIX_PATTERN.sub("", source_text or "")
+    stripped = _MEDIA_PRODUCTION_VERB_PATTERN.sub("", stripped)
+    stripped = re.sub(r"\s+", " ", stripped).strip(" .,:;-")
+    return stripped or "genel"
+
+
+# Round 5 repair: mirrors ``MediaAgent._extract_topic``'s existing "X
+# konusunda" explicit-topic signal (src/agents/media_agent.py) -- reused
+# here (not reinvented) so the SAME text that already tells media "the
+# user gave a concrete topic" also tells the orchestrator "media does not
+# need to wait on research's topic-discovery opportunity".
+_EXPLICIT_MEDIA_TOPIC_PATTERN = re.compile(r"\bkonusunda\b", re.IGNORECASE)
 
 
 def _narrow_pure_generation_youtube(
@@ -632,8 +651,13 @@ class DepartmentOrchestrator:
 
     def create_tasks(self, mission: Mission) -> list[Task]:
         """Mission'ın seçilmiş her departmanı için görev(ler) üretir.
-        Departmanlar birbirinden BAĞIMSIZDIR (aralarında depends_on yok —
-        paralel çalışırlar). Sprint 15: her görevin ``handler``'ı, o
+        Departmanlar VARSAYILAN olarak birbirinden BAĞIMSIZDIR (aralarında
+        depends_on yok). İki bilinen istisna, ikisi de veri BAĞIMLILIĞI
+        gerektiği için ``depends_on`` ile açıkça bağlanır: finance ->
+        learning (aşağıda) ve (round 5) media -> research, YALNIZCA media
+        gerçekten konu keşfi gerektiriyorsa (bkz.
+        ``media_needs_research_grounding`` aşağıda). Sprint 15: her görevin
+        ``handler``'ı, o
         departmanın arkasında GERÇEK bir alt sistemi olup olmadığına göre
         ``DepartmentAdapterRegistry`` üzerinden bağlanır (varsa gerçek
         modül; yoksa ``None`` -- ``JobManager`` bunu önceki davranışla
@@ -650,6 +674,13 @@ class DepartmentOrchestrator:
         kategori/URL çözümlemesi yapmak zorunda kalmaz."""
 
         tasks: list[Task] = []
+        # Round 5 repair: set True only when media genuinely needs
+        # research's SELECTED opportunity to know what to make a video
+        # about (implicit topic discovery, not an explicit research ask or
+        # an explicit user-given topic -- see the "research" task-building
+        # branch below). Drives the explicit media->research dependency
+        # wired after the task-creation loop.
+        media_needs_research_grounding = False
         # Handlers need the complete original request. GoalSpec.goal is the
         # leading semantic clause; its context/constraints must not erase
         # later execution cues such as bounded exploration and timeframes.
@@ -787,12 +818,28 @@ class DepartmentOrchestrator:
                     keyword_matches(routing_text(source_text), keyword)
                     for keyword in research_department.keywords
                 )
-                if not explicit_research_ask:
+                # Round 5 repair: an explicit user-given topic ("X
+                # konusunda...", see ``_EXPLICIT_MEDIA_TOPIC_PATTERN``)
+                # means media already knows what to make a video about --
+                # it must not unnecessarily wait on topic discovery either.
+                needs_topic_discovery = (
+                    not explicit_research_ask
+                    and not _EXPLICIT_MEDIA_TOPIC_PATTERN.search(source_text)
+                    and _media_needs_topic_research(source_text.casefold())
+                )
+                if needs_topic_discovery:
                     # Research was added FOR the user (topic discovery,
                     # see ``_narrow_media_topic_research``), not explicitly
                     # asked for -- an explicit ask keeps its own wording
                     # (existing ResearchAgent._clean_query behavior).
                     task_target = _media_research_query(source_text)
+                    # Round 5 repair: media needs this SAME market/location
+                    # context (not the query's boilerplate wording) to
+                    # judge whether research's evidence actually covers the
+                    # requested market -- see
+                    # src.research.opportunity.build_selected_opportunity.
+                    metadata["market_context"] = _media_research_context(source_text)
+                    media_needs_research_grounding = True
 
             department_timeout = _DEPARTMENT_TASK_TIMEOUTS.get(department_name, DEPARTMENT_TASK_TIMEOUT_SECONDS)
             tasks.append(Task(
@@ -806,9 +853,32 @@ class DepartmentOrchestrator:
                 metadata=metadata,
             ))
 
-        # Media must remain runnable when optional opportunity research is
-        # unavailable. It can consume persisted KnowledgeBase context and
-        # safely produce/block on its own capability gate.
+        # Round 5 repair (real live-mission evidence): media used to
+        # independently re-derive its own topic and rely on an internal,
+        # coincidental KnowledgeBase string-match to pick up research
+        # context -- the live mission's media task used a DIFFERENT topic
+        # string than research's own query, that lookup silently missed,
+        # and media fell back to generic evergreen content, never grounded
+        # in what research actually found. When media genuinely needs
+        # topic discovery (``media_needs_research_grounding``, set above --
+        # narrower than "research is in the bundle": excludes an explicit
+        # research ask and an explicit user-given topic, which must not
+        # unnecessarily wait), media now explicitly depends on research
+        # completing first (SAME mechanism as the finance->learning
+        # dependency below) and receives a live reference to the research
+        # task so it can read its structured ``SelectedOpportunity``
+        # (``task.metadata["report"]``) once done -- see
+        # MediaAgent.execute()/MediaManager.plan(). Media otherwise (no
+        # topic discovery needed, or research not selected at all) remains
+        # fully independent/runnable on its own, unchanged -- it can still
+        # consume persisted KnowledgeBase context and safely produce/block
+        # on its own capability gate.
+        if media_needs_research_grounding:
+            research_task = next((task for task in tasks if task.agent == "research"), None)
+            media_task = next((task for task in tasks if task.agent == "media"), None)
+            if research_task is not None and media_task is not None:
+                media_task.depends_on = list(dict.fromkeys((*media_task.depends_on, research_task.id)))
+                media_task.metadata["research_task"] = research_task
 
         finance_ids = [task.id for task in tasks if task.agent == "finance"]
         if finance_ids:

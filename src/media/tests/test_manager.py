@@ -238,3 +238,80 @@ class TestBoundedRepairLoop:
         assert len(build_calls) == 1
         assert "QUALITY: NOT READY FOR PUBLICATION" in result
         assert "non-repairable quality gate failure(s): visual_relevance" in result
+
+
+# Round 5 repair (real live-mission evidence): a live mission's media task
+# independently re-derived its own topic (a DIFFERENT string than
+# research's actual query) and silently fell back to generic evergreen
+# content -- research_grounded never became True because the internal
+# KnowledgeBase lookup missed. These prove ``research_opportunity`` (an
+# explicitly-passed, already-selected opportunity -- see
+# src.research.opportunity/MediaAgent.execute()) is authoritative over that
+# lookup and reaches production/QC provenance correctly.
+_OPPORTUNITY = {
+    "selected_topic": "İsviçre'de bugün açıklanan yeni enerji tasarrufu paketi",
+    "location_or_market": "İsviçre için",
+    "why_current": "güncellik sinyali doğrulandı, bayat/eski yıl referansı bulunamadı",
+    "supporting_evidence": [{"url": "https://example.test/isvicre-enerji", "title": "İsviçre enerji paketi"}],
+    "freshness_status": "CURRENT",
+    "sufficient": True,
+    "reason": "",
+}
+
+
+class TestResearchOpportunityGrounding:
+    def test_research_opportunity_is_authoritative_over_knowledge_base_lookup(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            ProviderManager, "route_and_generate",
+            lambda self, prompt, task_type, **kw: _route_result(_complete_plan_text()),
+        )
+        monkeypatch.setattr("src.media.manager.find_goal_production_package", lambda topic: None)
+
+        captured: dict = {}
+
+        def fake_build(self, **kwargs):
+            captured.update(kwargs)
+            return PackageBuildResult(False, error="stub stops before real render")
+
+        monkeypatch.setattr(GeneralProductionBuilder, "build", fake_build)
+
+        manager = MediaManager()
+        # No KnowledgeBase record exists for this topic at all -- the
+        # OLD/internal ``self.knowledge.find_research(topic)`` lookup would
+        # miss (``prior is None``), exactly reproducing the real live
+        # failure. The explicit ``research_opportunity`` must ground
+        # production anyway.
+        manager.plan(
+            topic=_OPPORTUNITY["selected_topic"], produce_artifact=True,
+            research_opportunity=_OPPORTUNITY,
+        )
+
+        assert captured.get("research_grounded") is True
+        assert captured.get("research_evidence_ref", {}).get("location_or_market") == "İsviçre için"
+        assert captured.get("research_evidence_ref", {}).get("source_count") == 1
+
+    def test_without_research_opportunity_falls_back_to_knowledge_base_lookup(self, tmp_path, monkeypatch):
+        # Unchanged existing behavior when no explicit opportunity is
+        # passed (e.g. an explicit-topic media request, no research
+        # dependency wired) -- proves the round 5 change is additive, not
+        # a replacement of the existing KnowledgeBase-lookup path.
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            ProviderManager, "route_and_generate",
+            lambda self, prompt, task_type, **kw: _route_result(_complete_plan_text()),
+        )
+        monkeypatch.setattr("src.media.manager.find_goal_production_package", lambda topic: None)
+
+        captured: dict = {}
+
+        def fake_build(self, **kwargs):
+            captured.update(kwargs)
+            return PackageBuildResult(False, error="stub stops before real render")
+
+        monkeypatch.setattr(GeneralProductionBuilder, "build", fake_build)
+
+        manager = MediaManager()
+        manager.plan(topic="Bitcoin neden düştü", produce_artifact=True)
+
+        assert captured.get("research_grounded") is False

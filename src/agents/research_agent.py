@@ -5,6 +5,7 @@ from src.planner.task import Task
 from src.research.local_code_manager import LocalCodeManager
 from src.research.local_code_search import is_local_code_query
 from src.research.manager import ResearchManager
+from src.research.opportunity import build_selected_opportunity
 
 
 class ResearchAgent(BaseAgent):
@@ -97,4 +98,27 @@ class ResearchAgent(BaseAgent):
         }
         if requested_name:
             research_kwargs["evidence_only"] = True
-        return self.manager.research(**research_kwargs)
+        result = self.manager.research(**research_kwargs)
+
+        # Round 5 repair: when this research call exists to select a
+        # content opportunity FOR a downstream media task (``market_context``
+        # is set by department_orchestrator.py only for that implicit
+        # topic-discovery case), expose a compact, structured, traceable
+        # handoff into ``task.metadata["report"]`` -- the SAME convention
+        # github/evaluation/sandbox/integration already use for structured
+        # results (see report_builder.py) -- instead of forcing the
+        # consumer (MediaAgent) to re-parse or silently ignore the long
+        # natural-language report.
+        market_context = getattr(task, "metadata", {}).get("market_context")
+        if market_context is not None:
+            record = self.manager.knowledge.find_research(query)
+            opportunity = build_selected_opportunity(
+                topic=query,
+                location_or_market=market_context,
+                summary=str(record.get("summary", "")) if record else "",
+                sources=record.get("sources", []) if record else (),
+                created_at=str(record.get("created_at", "")) if record else "",
+            )
+            task.metadata["report"] = opportunity.as_dict()
+
+        return result

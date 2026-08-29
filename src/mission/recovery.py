@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -8,6 +9,14 @@ from src.config.settings import Settings
 from src.core.plan_executor import PlanExecutor
 from src.core.task_plan import TaskPlan
 from src.evolution.collector import EvolutionCollector
+from src.capabilities.capability_registry import CapabilityRegistry
+from src.capabilities.requirement import CapabilityRequirement, REQUIRED
+from src.capabilities.resolution import (
+    READY as CAPABILITY_READY,
+    DEGRADED as CAPABILITY_DEGRADED,
+    resolve_capability_name,
+    resolve_capability_requirement,
+)
 from src.evaluation.evaluation_engine import EvaluationEngine
 from src.evaluation.relevance import RELEVANCE_LOW_THRESHOLD
 from src.github.github_intelligence import GitHubIntelligence
@@ -204,7 +213,99 @@ class MissionRecoveryReport:
     integrated_candidates: list[dict] = field(default_factory=list)
     used_candidates: list[dict] = field(default_factory=list)
     remaining_goals: list[str] = field(default_factory=list)
+    exact_capability_gaps: list[dict] = field(default_factory=list)
+    capability_resolutions: list[dict] = field(default_factory=list)
+    lifecycle_candidates: list[dict] = field(default_factory=list)
+    continuation_ids: list[str] = field(default_factory=list)
     blocked: bool = False
+
+
+_RUNTIME_GAP_ALIASES = {
+    "scene_generation": "visual_scene_generation",
+    "character_visual_generation": "visual_scene_generation",
+    "motion_generation": "visual_scene_generation",
+    "narration_generation": "tts",
+    "video_render": "video_render",
+    "thumbnail_generation": "thumbnail_generation",
+}
+
+
+def _exact_runtime_gaps(mission: Mission, plan: TaskPlan) -> list[dict]:
+    """Read the structured media/worker gap already attached to failed tasks.
+
+    The stored requirement name always comes from the existing capability
+    vocabulary.  A fine-grained provider stage wins over older production
+    accounting aliases because it identifies the operation that actually
+    failed (for example ``text_to_image`` rather than ``media_artifact``).
+    """
+
+    gaps: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for task in plan.all_tasks():
+        metadata = task.metadata or {}
+        raw = metadata.get("capability_gap")
+        if not isinstance(raw, dict):
+            continue
+        stage = str(metadata.get("last_stage") or raw.get("last_stage") or "")
+        parsed = _parse_media_stage_provider(stage)
+        stage_capability = parsed[0] if parsed else ""
+        missing = [str(item) for item in raw.get("missing_capabilities") or () if str(item)]
+        names = [stage_capability] if stage_capability else [
+            _RUNTIME_GAP_ALIASES.get(name, name) for name in missing
+        ]
+        for name in dict.fromkeys(names):
+            key = (task.id, name)
+            if not name or key in seen:
+                continue
+            seen.add(key)
+            gaps.append({
+                "mission_id": mission.id,
+                "blocked_task_id": task.id,
+                "requirement": name,
+                "checkpoint": stage,
+                "provider_stage_evidence": stage,
+                "reason": str(raw.get("reason") or _failure_text(task)),
+            })
+    return gaps
+
+
+def _requirement_for_exact_gap(mission: Mission, name: str) -> CapabilityRequirement:
+    for row in mission.capability_requirements or ():
+        if row.get("name") != name:
+            continue
+        alternatives = tuple(tuple(group) for group in row.get("alternatives") or ((name,),))
+        return CapabilityRequirement(name, str(row.get("necessity") or REQUIRED), alternatives,
+                                     str(row.get("reason") or ""))
+    return CapabilityRequirement(name, REQUIRED, ((name,),), "Runtime operational capability gap")
+
+
+def _persist_continuation(store, gap: dict, *, capability_id: str = "", proposal_id: str = "",
+                          status: str = "DISCOVERY_REQUIRED") -> str:
+    continuation_id = "capability-continuation-" + uuid.uuid4().hex
+    row = {
+        "continuation_id": continuation_id,
+        **gap,
+        "capability_id": capability_id,
+        "proposal_id": proposal_id,
+        "status": status,
+        "recovery_attempts": 0,
+        "resume_attempts": 0,
+    }
+    def mutate(state):
+        rows = state["autonomous_research"]["mission_continuations"]
+        existing = next((item for item in rows
+                         if item.get("mission_id") == gap["mission_id"]
+                         and item.get("blocked_task_id") == gap["blocked_task_id"]
+                         and item.get("requirement") == gap["requirement"]
+                         and item.get("status") not in {"RESUMED", "RESUME_FAILED"}), None)
+        if existing:
+            existing.update(capability_id=capability_id or existing.get("capability_id", ""),
+                            proposal_id=proposal_id or existing.get("proposal_id", ""), status=status)
+            row["continuation_id"] = existing["continuation_id"]
+            return
+        rows.append(row)
+    store.update(mutate)
+    return row["continuation_id"]
 
 
 # Görev türüne göre "hedefe özgü" keşif odak sorgusu -- yeni bir keşif
@@ -666,6 +767,63 @@ def _repo_for_candidate(candidate: dict, github: GitHubIntelligence) -> RepoData
         return None
 
 
+def _persist_discovered_candidates(store, outcome: DiscoveryOutcome, exact_gaps: list[dict]) -> list[dict]:
+    """Hand discovery evidence to the existing autonomous-research lifecycle.
+
+    This performs no evaluation, fetch, sandbox, install, or execution.  The
+    existing service/lifecycle remains authoritative for every later state.
+    """
+    from src.research_loop.autonomous import AutonomousResearchService
+
+    github_rows = []
+    provided = list(dict.fromkeys(gap["requirement"] for gap in exact_gaps))
+    for candidate in outcome.candidates:
+        url = str(candidate.get("url") or "").strip()
+        if "github.com/" not in url.casefold():
+            continue
+        parts = url.split("github.com/", 1)[1].strip("/").split("/")
+        if len(parts) < 2:
+            continue
+        owner, repository = parts[:2]
+        repository = repository.removesuffix(".git")
+        github_rows.append({
+            "subject": candidate.get("title") or f"{owner}/{repository}",
+            "predicate": "capability_candidate",
+            "value": candidate.get("summary") or f"Candidate for {', '.join(provided)}",
+            "excerpt": candidate.get("summary") or candidate.get("title") or f"{owner}/{repository}",
+            "source_url": f"https://github.com/{owner}/{repository}",
+            "source_identity": "GitHub",
+            "source_type": "GITHUB",
+            "search_channel": "GITHUB",
+            "verification_state": "VERIFIED",
+            "confidence": .65,
+            "tool": {
+                "name": repository,
+                "capability_id": f"github-{owner.casefold()}-{repository.casefold()}",
+                "repository": f"{owner}/{repository}",
+                "category": "RESEARCH_DISCOVERED_TOOL",
+                "provides_capabilities": provided,
+                "access_method": "MANUAL_ONLY",
+                "discovery_state": "VERIFIED_CANDIDATE",
+                "description": f"Research-discovered candidate for {', '.join(provided)}",
+            },
+        })
+    if not github_rows:
+        return []
+    service = AutonomousResearchService(store=store)
+    topic = service.create_topic(
+        name=f"capability recovery: {', '.join(provided)}",
+        description="Bounded discovery for an exact runtime capability gap.",
+        tags=[*(f"capability:{name}" for name in provided),
+              *(f"mission:{gap['mission_id']}" for gap in exact_gaps)],
+        source_preferences=["GITHUB", "OFFICIAL_DOCS"],
+    )
+    service.run_topic(topic["id"], reason="CAPABILITY_GAP", raw_findings=github_rows)
+    ids = {row["tool"]["capability_id"] for row in github_rows}
+    return [row for row in store.snapshot()["autonomous_research"]["tools"]
+            if row.get("capability_id") in ids]
+
+
 def _continue_capability_gaps(
     mission: Mission,
     plan: TaskPlan,
@@ -673,6 +831,7 @@ def _continue_capability_gaps(
     *,
     evolution_collector: EvolutionCollector | None,
     job_manager: JobManager,
+    capability_registry: CapabilityRegistry | None = None,
 ) -> None:
     """Connect gap -> discovery -> validation -> safe existing use.
 
@@ -680,7 +839,69 @@ def _continue_capability_gaps(
     existing ActionPolicy. Static sandbox analysis is the automatic safe
     acquisition boundary.
     """
-    if not mission.capability_gaps:
+    exact_gaps = _exact_runtime_gaps(mission, plan)
+    report.exact_capability_gaps.extend(exact_gaps)
+    if not mission.capability_gaps and not exact_gaps:
+        return
+
+    approval_blocked = next((task for task in plan.all_tasks()
+                             if "approval_required" in _failure_text(task).casefold()
+                             or "_approval_required_" in str((task.metadata or {}).get("last_stage") or "").casefold()), None)
+    if approval_blocked is not None and not exact_gaps:
+        report.approval_required.append({
+            "task_id": approval_blocked.id,
+            "department": approval_blocked.agent,
+            "need": "Existing provider/action approval",
+            "why": _failure_text(approval_blocked),
+            "why_free_insufficient": "The capability exists; discovery is not an approval substitute.",
+        })
+        return
+
+    registry = capability_registry or CapabilityRegistry()
+
+    # Existing operational inventory is authoritative and always checked
+    # before any external discovery.  A positive inventory result is still
+    # proven by retrying the original producer; availability metadata alone
+    # never closes the runtime gap.
+    unresolved: list[dict] = []
+    for gap in exact_gaps:
+        requirement = _requirement_for_exact_gap(mission, gap["requirement"])
+        resolution = resolve_capability_requirement(
+            requirement,
+            capability_registry=registry,
+            provider_manager=ProviderManager(),
+            allow_discovery_topic=False,
+        )
+        report.capability_resolutions.append(resolution.as_dict())
+        if resolution.status not in {CAPABILITY_READY, CAPABILITY_DEGRADED}:
+            unresolved.append(gap)
+            continue
+        producer = plan.get(gap["blocked_task_id"])
+        if producer is None or producer.handler is None:
+            unresolved.append(gap)
+            continue
+        producer.status = TaskStatus.PENDING
+        producer.error = ""
+        producer.result = None
+        producer.metadata.pop("capability_gap", None)
+        job_manager.run_task(producer)
+        output = _failure_text(producer).casefold()
+        if (_task_genuinely_succeeded(producer) and not producer.metadata.get("capability_gap")
+                and "approval_required" not in output):
+            report.used_candidates.append({"task_id": producer.id, "capability": gap["requirement"],
+                                           "source": resolution.source})
+            report.resumed_task_ids.extend(_reset_stale_dependents(plan, producer))
+            mission.current_capabilities = tuple(dict.fromkeys((*mission.current_capabilities, gap["requirement"])))
+            if not evaluate_goal_completion(mission).missing:
+                mission.capability_gaps = tuple(item for item in mission.capability_gaps if item != "media_artifact")
+                mission.discovery_required = bool(mission.capability_gaps)
+        else:
+            unresolved.append(gap)
+
+    # When structured runtime evidence exists, only its still-unresolved
+    # requirements may trigger research.  Coarse legacy gaps retain their
+    # previous behavior for older missions/tasks.
+    if exact_gaps and not unresolved:
         return
 
     _remember_candidates(mission, _existing_mission_candidates(mission, plan))
@@ -688,6 +909,25 @@ def _continue_capability_gaps(
     outcome = discover_for_goal(mission, probe, evolution_collector)
     report.discovery_runs.append(outcome)
     _remember_candidates(mission, outcome.candidates)
+
+    store = registry.store
+    if store is not None and unresolved:
+        lifecycle = _persist_discovered_candidates(store, outcome, unresolved)
+        report.lifecycle_candidates.extend({"capability_id": row.get("capability_id"),
+                                            "status": row.get("status")} for row in lifecycle)
+        for gap in unresolved:
+            candidate = next((row for row in lifecycle
+                              if gap["requirement"] in (row.get("provides_capabilities") or [])), None)
+            continuation_id = _persist_continuation(
+                store, gap,
+                capability_id=str(candidate.get("capability_id") or "") if candidate else "",
+                status=str(candidate.get("status") or "VERIFIED_CANDIDATE") if candidate else "DISCOVERY_REQUIRED",
+            )
+            report.continuation_ids.append(continuation_id)
+        # Persistent CapabilityManager/approval-bound Sandbox/Integration
+        # lifecycle owns every later transition.  Do not also run the legacy
+        # mission-local evaluation/sandbox/integration state machine.
+        return
 
     evaluator = EvaluationEngine()
     github = GitHubIntelligence()
@@ -810,6 +1050,7 @@ def recover_mission(
     provider_manager: ProviderManager | None = None,
     evolution_collector: EvolutionCollector | None = None,
     history: RecoveryAttemptHistory | None = None,
+    capability_registry: CapabilityRegistry | None = None,
 ) -> MissionRecoveryReport:
     """Sprint 42/43 ana giriş noktası: bir Mission dispatch edildikten
     sonra GERÇEKTEN başarısız kalan görevleri "provider'ı değil hedefi
@@ -850,6 +1091,7 @@ def recover_mission(
     _continue_capability_gaps(
         mission, plan, report,
         evolution_collector=evolution_collector, job_manager=job_manager,
+        capability_registry=capability_registry,
     )
 
     for task in failed_tasks:
@@ -885,7 +1127,7 @@ def recover_mission(
         if task.handler is None and not mission.capability_gaps:
             report.discovery_runs.append(discover_for_goal(mission, task, evolution_collector))
 
-    if any_fixed:
+    if any_fixed or report.resumed_task_ids:
         PlanExecutor(job_manager, cancel_on_failure=False).run(plan)
 
     # Artifact/evidence recovery is goal-level: completed research/github/

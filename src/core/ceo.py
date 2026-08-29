@@ -51,6 +51,11 @@ class CEO:
         # ``ProviderManager`` -- ikinci bir provider erişim katmanı İCAT
         # EDİLMEDİ.
         self.provider_manager = ProviderManager()
+        # Live checkpoints for the narrow capability-continuation records
+        # persisted by recovery. The JSON store keeps the durable identity;
+        # this map retains the existing Mission/TaskPlan objects so the same
+        # process can resume them without constructing a replacement mission.
+        self._capability_recovery_plans = {}
 
         # Sprint 37: AUTONOMOUS RESEARCH LOOP -- yeni bir ikinci CEO/Mission
         # sistemi DEĞİL, ZATEN VAR OLAN ``create_mission``/``dispatch_mission``'ı
@@ -145,7 +150,10 @@ class CEO:
                 print("[AŞAMA: RECOVERY]", flush=True)
                 mission.recovery = recover_mission(
                     mission, plan, provider_manager=self.provider_manager,
+                    capability_registry=self.mission_engine.capability_registry,
                 )
+                if mission.recovery.continuation_ids:
+                    self._capability_recovery_plans[mission.id] = (mission, plan)
                 from src.mission.task_criticality import critical_failures
                 execution_report.success = not critical_failures(plan)
                 mission.status = (
@@ -191,6 +199,85 @@ class CEO:
             f"Mission dağıtıldı: {mission.title!r} -> {mission.status.value}",
         )
         return plan, report
+
+    def resume_capability_continuations(self, capability_id: str) -> list[dict]:
+        """Resume exact blocked tasks after verified activation, at most once.
+
+        This is intentionally not a workflow engine: it only consumes the
+        persisted capability-continuation rows created by mission recovery.
+        """
+        from src.capabilities.resolution import READY, DEGRADED, resolve_capability_name
+        from src.core.plan_executor import PlanExecutor
+        from src.jobs.job_manager import JobManager
+        from src.jobs.task_status import TaskStatus
+        from src.mission.completion import evaluate_goal_completion
+        from src.mission.recovery import _reset_stale_dependents, _task_genuinely_succeeded
+
+        registry = self.mission_engine.capability_registry
+        store = getattr(registry, "store", None)
+        if store is None:
+            return []
+        rows = [row for row in store.snapshot()["autonomous_research"]["mission_continuations"]
+                if row.get("capability_id") == capability_id
+                and row.get("status") not in {"RESUMED", "RESUME_FAILED"}]
+        outcomes = []
+        for row in rows:
+            result = {"continuation_id": row["continuation_id"], "status": "RESUME_FAILED"}
+            checkpoint = self._capability_recovery_plans.get(row.get("mission_id"))
+            if int(row.get("resume_attempts", 0)) >= 1 or checkpoint is None:
+                result["reason"] = ("Resume attempt limit reached" if checkpoint is not None
+                                    else "Original live mission checkpoint unavailable")
+                self._update_continuation(store, row["continuation_id"], result)
+                outcomes.append(result)
+                continue
+            resolution = resolve_capability_name(
+                str(row.get("requirement") or ""), capability_registry=registry,
+                provider_manager=self.provider_manager, allow_discovery_topic=False,
+            )
+            if resolution.status not in {READY, DEGRADED}:
+                result["reason"] = "Activated capability does not operationally resolve the exact requirement"
+                self._update_continuation(store, row["continuation_id"], result)
+                outcomes.append(result)
+                continue
+            mission, plan = checkpoint
+            task = plan.get(str(row.get("blocked_task_id") or ""))
+            if task is None or task.handler is None:
+                result["reason"] = "Original blocked task checkpoint unavailable"
+                self._update_continuation(store, row["continuation_id"], result)
+                outcomes.append(result)
+                continue
+            task.status = TaskStatus.PENDING
+            task.error = ""
+            task.result = None
+            task.metadata.pop("capability_gap", None)
+            manager = JobManager()
+            manager.run_task(task)
+            if not _task_genuinely_succeeded(task) or task.metadata.get("capability_gap"):
+                result["reason"] = task.error or "Original producer still cannot use the activated capability"
+                self._update_continuation(store, row["continuation_id"], result)
+                outcomes.append(result)
+                continue
+            reset = _reset_stale_dependents(plan, task)
+            PlanExecutor(manager, cancel_on_failure=False).run(plan)
+            missing = evaluate_goal_completion(mission).missing
+            mission.status = MissionStatus.COMPLETED if not missing else MissionStatus.INCOMPLETE
+            result.update(status="RESUMED" if not missing else "RESUME_FAILED", resumed_task_id=task.id,
+                          reset_dependent_task_ids=reset, remaining=[item.requirement.name for item in missing])
+            if missing:
+                result["reason"] = "Original mission resumed but normal completion/QC remains unsatisfied"
+            self._update_continuation(store, row["continuation_id"], result)
+            outcomes.append(result)
+        return outcomes
+
+    @staticmethod
+    def _update_continuation(store, continuation_id: str, outcome: dict) -> None:
+        def mutate(state):
+            row = next(item for item in state["autonomous_research"]["mission_continuations"]
+                       if item.get("continuation_id") == continuation_id)
+            row["resume_attempts"] = int(row.get("resume_attempts", 0)) + 1
+            row["status"] = outcome["status"]
+            row["resume_result"] = dict(outcome)
+        store.update(mutate)
 
     def run_mission(self, request, priority=1, deadline=None, execution_hints=None):
         """Uçtan uca: create_mission + dispatch_mission tek çağrıda."""

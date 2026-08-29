@@ -229,6 +229,7 @@ class MissionEngine:
         if plan_needs_recovery(plan, mission):
             mission.recovery = recover_mission(
                 mission, plan, provider_manager=ProviderManager(),
+                capability_registry=self.capability_registry,
             )
             completion_pending = plan_needs_recovery(plan, mission)
             if completion_pending:

@@ -29,6 +29,8 @@ from src.capabilities.repository_evidence import (
 from src.capabilities.sandbox_executor import CapabilitySandboxExecutor
 from src.capabilities.capability_installer import ControlledCapabilityInstaller
 from src.capabilities.integration_lifecycle import IntegrationLifecycleManager, local_environment_probe
+from src.capabilities.build_delegation import delegate_capability_build
+from src.jobs.job_manager import JobManager
 from src.workforce import AccountConnectionManager, WorkforceManager, YouTubePublisher
 from src.workforce.manager import ensure_channel_tag
 from src.workforce.publisher import artifact_id
@@ -613,7 +615,7 @@ class ControlCenterService:
     def research_state(self) -> dict[str, Any]:
         state = self.store.snapshot()["autonomous_research"]
         return {key: state[key] for key in ("topics", "cycles", "findings", "tools", "capabilities", "evaluations", "capability_audit", "proposals",
-                                                  "integration_plans", "integration_verifications")}
+                                                  "integration_plans", "integration_verifications", "mission_continuations")}
 
     def evaluate_capability(self, capability_id: str) -> dict[str, Any]:
         candidate = next((row for row in self.store.snapshot()["autonomous_research"]["tools"]
@@ -645,7 +647,15 @@ class ControlCenterService:
             metadata=dict(source.get("metadata") or {}),
             evidence_items=list(source.get("evidence_items") or []),
         )
-        return self.capability_manager.evaluate(capability_id, evidence, local_environment())
+        result = self.capability_manager.evaluate(capability_id, evidence, local_environment())
+        proposal = next((row for row in reversed(self.store.snapshot()["autonomous_research"]["proposals"])
+                         if row.get("capability_id") == capability_id
+                         and row.get("requested_action") == "SANDBOX_VERIFICATION"), None)
+        self._bind_capability_continuations(
+            capability_id, "SANDBOX_APPROVAL_REQUIRED" if proposal else "EVALUATION_FAILED",
+            proposal_id=str(proposal.get("proposal_id") or "") if proposal else "",
+        )
+        return result
 
     def execute_capability_proposal(self, proposal_id: str) -> dict[str, Any]:
         # ThreadingHTTPServer can receive duplicate clicks concurrently. Keep the
@@ -654,12 +664,27 @@ class ControlCenterService:
             proposals = self.store.snapshot()["autonomous_research"]["proposals"]
             if not any(row.get("proposal_id") == proposal_id for row in proposals):
                 raise CapabilityCandidateNotFound("Capability proposal not found")
-            return self.capability_manager.execute_approved(proposal_id, self.capability_sandbox_executor)
+            outcome = self.capability_manager.execute_approved(proposal_id, self.capability_sandbox_executor)
+            proposal = next(row for row in self.store.snapshot()["autonomous_research"]["proposals"]
+                            if row.get("proposal_id") == proposal_id)
+            self._bind_capability_continuations(
+                str(proposal["capability_id"]),
+                "SANDBOX_VERIFIED" if outcome.get("success") else "SANDBOX_FAILED",
+                proposal_id=proposal_id,
+            )
+            return outcome
 
     def plan_capability_integration(self, capability_id: str) -> dict[str, Any]:
         if not any(x.get("capability_id") == capability_id for x in self.store.snapshot()["autonomous_research"]["tools"]):
             raise CapabilityCandidateNotFound("Capability candidate not found")
-        return self.integration_lifecycle.plan(capability_id, local_environment_probe())
+        plan = self.integration_lifecycle.plan(capability_id, local_environment_probe())
+        proposal = next(row for row in reversed(self.store.snapshot()["autonomous_research"]["proposals"])
+                        if row.get("capability_id") == capability_id
+                        and row.get("requested_action") == "CONTROLLED_INTEGRATION")
+        self._bind_capability_continuations(
+            capability_id, "INTEGRATION_APPROVAL_REQUIRED", proposal_id=proposal["proposal_id"],
+        )
+        return plan
 
     def integration_plans(self) -> list[dict[str, Any]]:
         return self.store.snapshot()["autonomous_research"]["integration_plans"]
@@ -668,18 +693,105 @@ class ControlCenterService:
         if not any(x.get("proposal_id") == proposal_id for x in self.store.snapshot()["autonomous_research"]["proposals"]):
             raise CapabilityCandidateNotFound("Integration proposal not found")
         with self._lock:
-            return self.integration_lifecycle.execute_integration(proposal_id, self.controlled_integration_executor)
+            outcome = self.integration_lifecycle.execute_integration(proposal_id, self.controlled_integration_executor)
+            proposal = next(row for row in self.store.snapshot()["autonomous_research"]["proposals"]
+                            if row.get("proposal_id") == proposal_id)
+            self._bind_capability_continuations(
+                str(proposal["capability_id"]),
+                "INTEGRATION_VERIFIED" if outcome.get("success") else "VERIFICATION_FAILED",
+                proposal_id=proposal_id,
+            )
+            return outcome
+
+    def propose_capability_build(self, capability_id: str, repo_path: str, *, run_tests: bool = True) -> dict[str, Any]:
+        """Request the existing edit/test approvals for a bounded build task.
+
+        Merely discovering or sandboxing a repository cannot call this path.
+        The candidate must already have a current integration plan.
+        """
+        state = self.store.snapshot()["autonomous_research"]
+        plan = next((row for row in state["integration_plans"]
+                     if row.get("capability_id") == capability_id and row.get("current") is True), None)
+        if plan is None:
+            raise RuntimeError("Current integration plan required before coding delegation")
+        return self.create_approval("capability_build", {
+            "need": f"Bounded capability code integration: {capability_id}",
+            "why": "Existing integration plan requires repository adapter/code work",
+            "risk": "MEDIUM",
+            "expected_result": "CODING_WORKER_REQUIRED",
+            "requested_action": "edit_project_file",
+            "capability_id": capability_id,
+            "integration_plan_id": plan["integration_plan_id"],
+            "repo_path": str(Path(repo_path).resolve()),
+            "run_tests": bool(run_tests),
+        })
+
+    def execute_capability_build(self, approval_id: str, *, job_manager: JobManager | None = None,
+                                 adapter_registry=None) -> dict[str, Any]:
+        approval = next((row for row in self.store.snapshot()["approvals"]
+                         if row.get("id") == approval_id), None)
+        if approval is None or approval.get("type") != "capability_build" or approval.get("status") != "APPROVED":
+            raise RuntimeError("Explicit capability-build approval required")
+        details = approval.get("details") or {}
+        if details.get("requested_action") != "edit_project_file":
+            raise RuntimeError("Capability-build approval binding mismatch")
+        plan = next((row for row in self.store.snapshot()["autonomous_research"]["integration_plans"]
+                     if row.get("integration_plan_id") == details.get("integration_plan_id")
+                     and row.get("capability_id") == details.get("capability_id")
+                     and row.get("current") is True), None)
+        if plan is None:
+            raise RuntimeError("Current integration-plan binding required")
+        task = delegate_capability_build(
+            str(details["capability_id"]), str(details["repo_path"]), approved=True,
+            run_tests=bool(details.get("run_tests", True)), adapter_registry=adapter_registry,
+        )
+        (job_manager or JobManager()).run_task(task)
+        delegated_status = str(task.metadata.get("status") or "FAILED")
+        if delegated_status == "FAILED" and "kullan" in str(task.result or task.error).casefold():
+            delegated_status = "CODING_WORKER_UNAVAILABLE"
+        self._bind_capability_continuations(str(details["capability_id"]), delegated_status)
+        self.store.update(lambda state: next(row for row in state["approvals"]
+                                             if row.get("id") == approval_id).update(status="EXECUTED"))
+        # This result is evidence only. Integration verification and the
+        # independent activation approval remain mandatory and untouched.
+        return {"status": delegated_status, "task_id": task.id,
+                "capability_id": details["capability_id"],
+                "files_changed": list(task.metadata.get("files_changed") or []),
+                "tests_executed": bool(task.metadata.get("tests_executed")),
+                "approval_required": bool(task.metadata.get("approval_required")),
+                "result": str(task.result.output if task.result is not None else task.error)}
 
     def propose_capability_activation(self, capability_id: str) -> dict[str, Any]:
         if not any(x.get("capability_id") == capability_id for x in self.store.snapshot()["autonomous_research"]["tools"]):
             raise CapabilityCandidateNotFound("Capability candidate not found")
-        return self.integration_lifecycle.propose_activation(capability_id)
+        proposal = self.integration_lifecycle.propose_activation(capability_id)
+        self._bind_capability_continuations(
+            capability_id, "ACTIVATION_APPROVAL_REQUIRED", proposal_id=proposal["proposal_id"],
+        )
+        return proposal
 
     def execute_activation_proposal(self, proposal_id: str) -> dict[str, Any]:
         if not any(x.get("proposal_id") == proposal_id for x in self.store.snapshot()["autonomous_research"]["proposals"]):
             raise CapabilityCandidateNotFound("Activation proposal not found")
         with self._lock:
-            return self.integration_lifecycle.activate(proposal_id)
+            capability = self.integration_lifecycle.activate(proposal_id)
+            self._bind_capability_continuations(
+                capability["capability_id"], "RESUME_READY", proposal_id=proposal_id,
+            )
+            ceo = getattr(getattr(self.runtime, "jarvis", None), "ceo", None)
+            resume = ceo.resume_capability_continuations(capability["capability_id"]) if ceo is not None else []
+            return {**capability, "mission_continuations": resume}
+
+    def _bind_capability_continuations(self, capability_id: str, status: str, *, proposal_id: str = "") -> None:
+        def mutate(state: dict[str, Any]) -> None:
+            for row in state["autonomous_research"]["mission_continuations"]:
+                if row.get("capability_id") != capability_id or row.get("status") in {"RESUMED", "RESUME_FAILED"}:
+                    continue
+                row["status"] = status
+                if proposal_id:
+                    row["proposal_id"] = proposal_id
+                row["updated_at"] = utc_now()
+        self.store.update(mutate)
 
     @staticmethod
     def _repository_evidence_sufficient(source: dict[str, Any]) -> bool:

@@ -42,7 +42,8 @@ DEFAULT_STATE: dict[str, Any] = {
     "publications": [],
     "autonomous_research": {"topics": [], "cycles": [], "findings": [], "tools": [], "capabilities": [],
                             "evaluations": [], "capability_audit": [], "proposals": [],
-                            "integration_plans": [], "integration_verifications": []},
+                            "integration_plans": [], "integration_verifications": [],
+                            "mission_continuations": []},
 }
 
 
@@ -123,7 +124,7 @@ class ControlCenterStore:
             merged["paper"].setdefault("initial_cash", 10000.0); merged["paper"].setdefault("performance", {})
             research = merged.setdefault("autonomous_research", {})
             for key in ("topics", "cycles", "findings", "tools", "capabilities", "evaluations", "capability_audit", "proposals",
-                        "integration_plans", "integration_verifications"):
+                        "integration_plans", "integration_verifications", "mission_continuations"):
                 research.setdefault(key, [])
             return merged
         except (OSError, UnicodeError, ValueError) as error:

@@ -173,6 +173,46 @@ class ControlCenterInstanceLock:
     def _alive(pid: int) -> bool:
         if pid <= 0:
             return False
+        if pid == os.getpid():
+            return True
+        if os.name == "nt":
+            # ``os.kill(pid, 0)`` is not a harmless existence probe on
+            # Windows: signal 0 is CTRL_C_EVENT and can interrupt the target
+            # console process group. Query the process handle without sending
+            # any signal instead.
+            import ctypes
+            from ctypes import wintypes
+
+            process_query_limited_information = 0x1000
+            error_access_denied = 5
+            error_invalid_parameter = 87
+            still_active = 259
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            open_process = kernel32.OpenProcess
+            open_process.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+            open_process.restype = wintypes.HANDLE
+            get_exit_code_process = kernel32.GetExitCodeProcess
+            get_exit_code_process.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+            get_exit_code_process.restype = wintypes.BOOL
+            close_handle = kernel32.CloseHandle
+            close_handle.argtypes = (wintypes.HANDLE,)
+            close_handle.restype = wintypes.BOOL
+
+            handle = open_process(process_query_limited_information, False, pid)
+            if not handle:
+                error = ctypes.get_last_error()
+                if error == error_invalid_parameter:
+                    return False
+                if error == error_access_denied:
+                    return True
+                return True
+            try:
+                exit_code = wintypes.DWORD()
+                if not get_exit_code_process(handle, ctypes.byref(exit_code)):
+                    return True
+                return exit_code.value == still_active
+            finally:
+                close_handle(handle)
         try:
             os.kill(pid, 0)
             return True

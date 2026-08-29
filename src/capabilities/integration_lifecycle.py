@@ -363,7 +363,8 @@ class IntegrationLifecycleManager:
             "version/revision_identity": UNKNOWN, "evaluation_fingerprint": plan["evaluation_fingerprint"],
             "integration_fingerprint": plan["integration_plan_fingerprint"], "activation_approval_identity": proposal["approval_id"],
             "runtime_interface": plan["proposed_runtime_interface"], "last_verified_at": now, "health": UNKNOWN,
-            "status": "ACTIVE_CAPABILITY", "available": True, "requires_approval": False, "verification_valid": True}
+            "status": "ACTIVE_CAPABILITY", "available": True, "requires_approval": False, "verification_valid": True,
+            "provides_capabilities": list(tool.get("provides_capabilities") or [])}
         def mutate(current: dict[str, Any]) -> None:
             car = current["autonomous_research"]
             car["capabilities"].append(row)

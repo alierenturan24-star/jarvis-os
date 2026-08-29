@@ -139,7 +139,8 @@ def test_available_dynamic_provider_produces_real_manifest_and_scenes(tmp_path, 
 
     result = builder.build(goal="Swiss Insider icin hibrit calisma haberi", plan_text=_PLAN_TEXT,
                             memory={}, duration_seconds=32, channel_id="youtube-ch",
-                            channel_market="Switzerland", channel_language="de-CH")
+                            channel_market="Switzerland", channel_language="de-CH",
+                            standing_permission=True)
 
     assert result.success is True, result.error
     manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
@@ -168,7 +169,7 @@ def test_available_dynamic_provider_reports_full_capability_accounting(tmp_path,
     builder = GeneralProductionBuilder(source_root=tmp_path / "sources", output_root=tmp_path / "generated")
 
     result = builder.build(goal="Swiss Insider icin hibrit calisma haberi", plan_text=_PLAN_TEXT,
-                            memory={}, duration_seconds=32)
+                            memory={}, duration_seconds=32, standing_permission=True)
 
     assert result.missing_capabilities == ()
     assert "character_visual_generation" in result.available_capabilities
@@ -203,7 +204,7 @@ def test_top_ranked_provider_failure_falls_back_to_next_candidate(tmp_path, monk
     builder = GeneralProductionBuilder(source_root=tmp_path / "sources", output_root=tmp_path / "generated")
 
     result = builder.build(goal="Swiss Insider icin hibrit calisma haberi", plan_text=_PLAN_TEXT,
-                            memory={}, duration_seconds=32)
+                            memory={}, duration_seconds=32, standing_permission=True)
 
     assert result.success is True, result.error
     manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
@@ -219,6 +220,11 @@ def test_no_available_provider_returns_capability_gap_with_considered_candidates
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(Settings, "NVIDIA_API_KEY", "")
     monkeypatch.setattr(Settings, "LTX_API_KEY", "")
+    # AIML (src.providers.aiml_media_provider) is a THIRD real
+    # text_to_image candidate -- must also be disabled for this scenario
+    # to genuinely mean "no provider available" regardless of which real
+    # keys happen to be configured in the running environment.
+    monkeypatch.setattr(Settings, "AIML_API_KEY", "")
     builder = GeneralProductionBuilder(source_root=tmp_path / "sources", output_root=tmp_path / "generated")
 
     result = builder.build(goal="Swiss Insider icin hibrit calisma haberi", plan_text=_PLAN_TEXT,
@@ -237,6 +243,7 @@ def test_dynamic_path_never_falls_back_to_legacy_assets_implicitly(tmp_path, mon
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(Settings, "NVIDIA_API_KEY", "")
     monkeypatch.setattr(Settings, "LTX_API_KEY", "")
+    monkeypatch.setattr(Settings, "AIML_API_KEY", "")
     source_root = tmp_path / "sources"
     source_root.mkdir()
     for suffix in ("-storyboard.png", "-running-poses.png"):
@@ -270,7 +277,8 @@ def test_scene_motion_not_attempted_when_disabled_by_default(tmp_path, monkeypat
     builder = GeneralProductionBuilder(source_root=tmp_path / "sources", output_root=tmp_path / "generated")
 
     result = builder.build(goal="Swiss Insider icin hibrit calisma haberi", plan_text=_PLAN_TEXT,
-                            memory={}, duration_seconds=32)  # enable_scene_motion defaults False
+                            memory={}, duration_seconds=32,  # enable_scene_motion defaults False
+                            standing_permission=True)
 
     assert result.success is True, result.error
     assert video_calls["n"] == 0
@@ -304,7 +312,8 @@ def test_enable_scene_motion_chains_image_to_video_when_url_available(tmp_path, 
     builder = GeneralProductionBuilder(source_root=tmp_path / "sources", output_root=tmp_path / "generated")
 
     result = builder.build(goal="Swiss Insider icin hibrit calisma haberi", plan_text=_PLAN_TEXT,
-                            memory={}, duration_seconds=32, enable_scene_motion=True)
+                            memory={}, duration_seconds=32, enable_scene_motion=True,
+                            standing_permission=True)
 
     assert result.success is True, result.error
     manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
@@ -341,7 +350,8 @@ def test_scene_motion_skipped_when_image_provider_has_no_hosted_url(tmp_path, mo
     builder = GeneralProductionBuilder(source_root=tmp_path / "sources", output_root=tmp_path / "generated")
 
     result = builder.build(goal="Swiss Insider icin hibrit calisma haberi", plan_text=_PLAN_TEXT,
-                            memory={}, duration_seconds=32, enable_scene_motion=True)
+                            memory={}, duration_seconds=32, enable_scene_motion=True,
+                            standing_permission=True)
 
     assert result.success is True, result.error
     assert video_calls["n"] == 0
@@ -364,7 +374,8 @@ def test_scene_motion_failure_falls_back_to_still_image(tmp_path, monkeypatch):
     builder = GeneralProductionBuilder(source_root=tmp_path / "sources", output_root=tmp_path / "generated")
 
     result = builder.build(goal="Swiss Insider icin hibrit calisma haberi", plan_text=_PLAN_TEXT,
-                            memory={}, duration_seconds=32, enable_scene_motion=True)
+                            memory={}, duration_seconds=32, enable_scene_motion=True,
+                            standing_permission=True)
 
     assert result.success is True, result.error
     manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))

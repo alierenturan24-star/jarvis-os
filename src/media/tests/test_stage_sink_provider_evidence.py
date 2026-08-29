@@ -48,6 +48,14 @@ def test_stage_sink_captures_provider_and_model_before_the_blocking_call(tmp_pat
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(Settings, "NVIDIA_API_KEY", "test-key-not-real")
     monkeypatch.setattr(Settings, "LTX_API_KEY", "")
+    # _generate_scene_image tries up to the top-2 ranked candidates -- FAL/
+    # AIML (src.providers.fal_provider/aiml_media_provider) must also be
+    # disabled here, otherwise a real configured key in the running
+    # environment would make one of them the second-ranked candidate and
+    # this test would fall through to an UNMOCKED, real network call after
+    # NVIDIA's simulated failure.
+    monkeypatch.setattr(Settings, "FAL_API_KEY", "")
+    monkeypatch.setattr(Settings, "AIML_API_KEY", "")
 
     def _always_fails(self, prompt, **kwargs):
         return MediaGenerationResult(
@@ -60,6 +68,10 @@ def test_stage_sink_captures_provider_and_model_before_the_blocking_call(tmp_pat
     sink: dict = {}
     result = builder.build(
         goal="test", plan_text=_PLAN_TEXT, memory={}, duration_seconds=32, stage_sink=sink,
+        # Approved -- this test is about the blocking-network-call stage
+        # marker, not the paid-media approval gate (see
+        # test_paid_media_approval.py for that).
+        standing_permission=True,
     )
 
     assert result.success is False

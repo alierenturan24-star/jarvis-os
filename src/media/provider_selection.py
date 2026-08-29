@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 
 from src.config.settings import Settings
 from src.media.capability_model import MediaModelProfile
+from src.providers.aiml_media_provider import AIMLMediaProvider
 from src.providers.execution_history import ProviderExecutionHistory
 from src.providers.fal_provider import FalMediaProvider
 from src.providers.ltx_provider import LTXMediaProvider
@@ -18,8 +19,10 @@ from src.providers.nvidia_provider import NvidiaMediaProvider
 # type = the media capability string, e.g. "text_to_image") for reliability
 # and CostOptimizer.cost_class() (via each provider's profile()) for cost
 # ranking. Extend this tuple to add a new media provider; nothing else in
-# this module hardcodes "nvidia"/"ltx"/"fal" by name.
-_PROVIDERS: tuple[MediaProvider, ...] = (NvidiaMediaProvider(), FalMediaProvider(), LTXMediaProvider())
+# this module hardcodes "nvidia"/"ltx"/"fal"/"aiml" by name.
+_PROVIDERS: tuple[MediaProvider, ...] = (
+    NvidiaMediaProvider(), FalMediaProvider(), LTXMediaProvider(), AIMLMediaProvider(),
+)
 
 _COST_RANK = {"free": 0, "plan": 0, "unknown": 2, "paid": 3}
 

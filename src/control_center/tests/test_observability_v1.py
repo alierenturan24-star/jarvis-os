@@ -31,6 +31,13 @@ def test_provider_contract_never_exposes_credentials(tmp_path):
 def test_media_providers_reports_truthful_status_without_secrets(tmp_path, monkeypatch):
     monkeypatch.setattr(Settings, "NVIDIA_API_KEY", "")
     monkeypatch.setattr(Settings, "LTX_API_KEY", "")
+    # AIML (src.providers.aiml_media_provider) is a fourth real
+    # text_to_image candidate -- must also be disabled here, otherwise a
+    # real configured key in the running environment would make its row
+    # AVAILABLE and break the blanket "neither key is configured" assertion
+    # below (which applies to every row, not just nvidia/ltx).
+    monkeypatch.setattr(Settings, "FAL_API_KEY", "")
+    monkeypatch.setattr(Settings, "AIML_API_KEY", "")
     rows = service(tmp_path).read_model.media_providers()
 
     providers = {row["provider"] for row in rows}
@@ -59,6 +66,7 @@ def test_dashboard_includes_media_provider_health_without_degrading_status(tmp_p
     monkeypatch.setattr(Settings, "NVIDIA_API_KEY", "")
     monkeypatch.setattr(Settings, "LTX_API_KEY", "")
     monkeypatch.setattr(Settings, "FAL_API_KEY", "")
+    monkeypatch.setattr(Settings, "AIML_API_KEY", "")
     current = service(tmp_path)
     dashboard = current.read_model.dashboard()
 

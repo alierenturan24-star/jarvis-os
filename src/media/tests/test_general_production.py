@@ -26,6 +26,9 @@ def _no_real_media_provider_calls(monkeypatch):
     monkeypatch.setattr(Settings, "NVIDIA_API_KEY", "")
     monkeypatch.setattr(Settings, "FAL_API_KEY", "")
     monkeypatch.setattr(Settings, "LTX_API_KEY", "")
+    # AIML (src.providers.aiml_media_provider) is a fourth real
+    # text_to_image candidate -- same reasoning as above.
+    monkeypatch.setattr(Settings, "AIML_API_KEY", "")
 
 # Sprint: research/production pipeline audit. These tests used to assert
 # GeneralProductionBuilder always returns hardcoded German "Leni" story

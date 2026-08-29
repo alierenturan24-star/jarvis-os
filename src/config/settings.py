@@ -84,6 +84,18 @@ class Settings:
     AIML_BASE_URL = os.getenv("AIML_BASE_URL", "https://api.aimlapi.com/v1").rstrip("/")
     AIML_DEFAULT_MODEL = os.getenv("AIML_MODEL", "openai/gpt-4.1-mini")
     AIML_TIMEOUT = int(os.getenv("AIML_TIMEOUT", "120"))
+    # Sprint: multi-provider media capability foundation -- AIML API as a
+    # text_to_image source (src.providers.aiml_media_provider). Separate
+    # from AIML_DEFAULT_MODEL (text /chat/completions, unchanged) --
+    # image generation is a genuinely different model family/endpoint on
+    # the same account (verified against AIML API's own docs,
+    # https://docs.aimlapi.com/api-references/image-models/flux/flux-schnell).
+    # "flux/schnell" is AIML's fast/cheap FLUX tier, matching the same
+    # "schnell"-class default already chosen for the sibling NVIDIA/fal
+    # image providers (see NVIDIA_IMAGE_MODEL/FAL_IMAGE_MODEL below).
+    # Reuses AIML_API_KEY/AIML_BASE_URL/AIML_TIMEOUT -- no second secret/
+    # timeout config introduced for this provider.
+    AIML_IMAGE_MODEL = os.getenv("AIML_IMAGE_MODEL", "flux/schnell")
 
     # OpenAI
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()

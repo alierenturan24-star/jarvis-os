@@ -10,11 +10,41 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from src.media.capability_model import IMAGE_TO_VIDEO, SceneProvenance, TEXT_TO_IMAGE
+from src.media.capability_model import IMAGE_TO_VIDEO, MediaModelProfile, SceneProvenance, TEXT_TO_IMAGE
 from src.media.provider_selection import rank_available_providers
 from src.media.quality import REQUIRED_SECTIONS
 from src.media.renderer import _write_sapi_wav, find_ffmpeg, find_ffprobe
 from src.providers.execution_history import ProviderExecutionHistory
+from src.security.action_policy import ActionPolicy
+
+# Sprint: paid media provider approval safety fix. Inspection found NVIDIA/
+# fal/LTX/AIML (every real remote media provider in this codebase) had NO
+# approval gate before their actual HTTP/API call -- only capability/
+# availability (API key present) was checked, never authorization to
+# actually SPEND. This is the ONE generic, provider-name-agnostic gate,
+# applied at the smallest point immediately BEFORE
+# ``MediaProvider.generate_image``/``generate_video_from_image`` -- keyed
+# purely off ``MediaModelProfile.cost_class`` (see capability_model.py), so
+# it automatically covers any FUTURE paid provider too, never special-cased
+# per provider. Reuses the EXISTING ``ActionPolicy`` risk table (see
+# "paid_media_generation" in ``ActionPolicy.MEDIUM_RISK_ACTIONS``) -- no
+# second approval system, no new store/queue. ``standing_permission``
+# mirrors the SAME per-call, narrowly-scoped flag ``claude_code_edit_
+# adapter.py``/``coding_agent.py`` already use for their own ActionPolicy
+# checks -- it is never inferred from "a key is configured" or "a prior
+# unrelated approval"; callers must explicitly opt in per request, and it
+# defaults to False (blocked) everywhere in this pass since no caller yet
+# threads a real approval-granting flow through (that UI/flow is future
+# work, intentionally out of scope for this fix).
+_PAID_MEDIA_ACTION = "paid_media_generation"
+
+
+def _paid_media_approval_decision(profile: MediaModelProfile, *, standing_permission: bool):
+    """``None`` when the profile isn't paid (free/local -- never gated).
+    Otherwise the real ``ActionPolicy`` decision for this one call."""
+    if profile.cost_class != "paid":
+        return None
+    return ActionPolicy().evaluate(_PAID_MEDIA_ACTION, standing_permission=standing_permission)
 
 
 PRODUCTION_CAPABILITIES = {
@@ -279,7 +309,8 @@ class GeneralProductionBuilder:
               research_evidence_ref: dict | None = None,
               allow_legacy_authored_series: bool = False,
               enable_scene_motion: bool = False,
-              stage_sink: dict | None = None) -> PackageBuildResult:
+              stage_sink: dict | None = None,
+              standing_permission: bool = False) -> PackageBuildResult:
         video_render_available = bool(find_ffmpeg())
         narration_available = bool(shutil.which("edge-tts") or shutil.which("powershell.exe") or shutil.which("powershell"))
         matching = self._matching_visual_assets(allow_legacy_authored_series)
@@ -312,7 +343,8 @@ class GeneralProductionBuilder:
                 channel_market=channel_market, channel_language=channel_language,
                 research_grounded=research_grounded, research_evidence_ref=research_evidence_ref,
                 required=required, available=available, missing=missing,
-                enable_scene_motion=enable_scene_motion, stage_sink=stage_sink)
+                enable_scene_motion=enable_scene_motion, stage_sink=stage_sink,
+                standing_permission=standing_permission)
 
         previous = list(memory.get("productions", []))
         used = {row.get("visual", {}).get("source_generation_fingerprint") for row in previous}
@@ -473,7 +505,8 @@ class GeneralProductionBuilder:
                                      required: tuple[str, ...], available: tuple[str, ...],
                                      missing: tuple[str, ...],
                                      enable_scene_motion: bool = False,
-                                     stage_sink: dict | None = None) -> PackageBuildResult:
+                                     stage_sink: dict | None = None,
+                                     standing_permission: bool = False) -> PackageBuildResult:
         """Real per-scene generation via whichever genuinely available,
         ranked text_to_image provider exists (see
         ``src.media.provider_selection``) -- e.g. NVIDIA NIM once
@@ -511,13 +544,27 @@ class GeneralProductionBuilder:
                 # a fallback in case the loop below throws before recording one.
                 stage_sink["last_stage"] = f"{capability_label}_scene_{index}_of_{len(parsed.scenes)}"
             image_path, entry = self._generate_scene_image(
-                ranked, scene, index, root, enable_motion=enable_scene_motion, stage_sink=stage_sink)
+                ranked, scene, index, root, enable_motion=enable_scene_motion, stage_sink=stage_sink,
+                standing_permission=standing_permission)
             provenance.append(entry.as_dict())
             if image_path is None:
-                self._checkpoint(checkpoint, production_id, "SCENES_AND_MOTION", "failed", entry.quality_evidence.get("reason", ""))
+                reason = entry.quality_evidence.get("reason", "")
+                self._checkpoint(checkpoint, production_id, "SCENES_AND_MOTION", "failed", reason)
+                if entry.quality_evidence.get("approval_required"):
+                    # The capability genuinely EXISTS (a real, ranked paid
+                    # provider was found) -- it is simply not approved to
+                    # spend yet. Truthfully distinct from CAPABILITY_GAP
+                    # (which implies the capability itself is missing and
+                    # would misdirect a caller toward tool discovery/
+                    # acquisition instead of an approval decision).
+                    return PackageBuildResult(
+                        False, error=f"APPROVAL_REQUIRED: paid media generation for scene {index} needs "
+                                     f"approval before any provider call: {reason}",
+                        production_id=production_id, required_capabilities=required,
+                        available_capabilities=available, missing_capabilities=())
                 return PackageBuildResult(
                     False, error=f"CAPABILITY_GAP: dynamic provider scene generation failed for scene "
-                                 f"{index}: {entry.quality_evidence.get('reason', 'unknown error')}",
+                                 f"{index}: {reason or 'unknown error'}",
                     production_id=production_id, required_capabilities=required,
                     available_capabilities=(), missing_capabilities=missing)
             scene_files.append(image_path)
@@ -639,7 +686,8 @@ class GeneralProductionBuilder:
     @staticmethod
     def _generate_scene_image(ranked, scene: ScenePlan, index: int, root: Path,
                                *, enable_motion: bool = False,
-                               stage_sink: dict | None = None) -> tuple[Path | None, SceneProvenance]:
+                               stage_sink: dict | None = None,
+                               standing_permission: bool = False) -> tuple[Path | None, SceneProvenance]:
         """Try the ranked candidates in order (bounded to the top 2 -- same
         bounded-retry spirit as the existing repair loop, never unbounded)
         so one candidate's real execution failure triggers the existing
@@ -657,8 +705,20 @@ class GeneralProductionBuilder:
         not force video generation for every scene")."""
         history = ProviderExecutionHistory()
         attempted: list[str] = []
+        approval_blocked: list[str] = []
         for profile, provider in ranked[:2]:
             if not hasattr(provider, "generate_image"):
+                continue
+            # Sprint: paid media provider approval safety fix -- checked
+            # BEFORE any network call, and BEFORE this candidate is added
+            # to ``attempted``/recorded into ``history``: the provider is
+            # never actually invoked, so this must never look like (or be
+            # recorded as) a real provider execution failure/cooldown.
+            decision = _paid_media_approval_decision(profile, standing_permission=standing_permission)
+            if decision is not None and (not decision.allowed or decision.requires_confirmation):
+                approval_blocked.append(f"{profile.provider_id}/{profile.model_id}")
+                if stage_sink is not None:
+                    stage_sink["last_stage"] = f"{TEXT_TO_IMAGE}_scene_{index}_approval_required_{profile.provider_id}/{profile.model_id}"
                 continue
             fallback_used = bool(attempted)
             attempted.append(profile.provider_id)
@@ -678,7 +738,8 @@ class GeneralProductionBuilder:
             if result.success and result.content_bytes and len(result.content_bytes) > 1000:
                 if enable_motion and result.content_url:
                     motion_path, motion_entry = GeneralProductionBuilder._maybe_generate_scene_motion(
-                        scene, result.content_url, index, root, history, stage_sink=stage_sink)
+                        scene, result.content_url, index, root, history, stage_sink=stage_sink,
+                        standing_permission=standing_permission)
                     if motion_path is not None:
                         return motion_path, motion_entry
                 path = root / f"scene-{index:02d}.png"
@@ -688,6 +749,19 @@ class GeneralProductionBuilder:
                     model=profile.model_id, generation_type=TEXT_TO_IMAGE, output_path=str(path.resolve()),
                     success=True, fallback_used=fallback_used, cost_class=result.cost_class,
                     input_reference=scene.visual_description[:200], duration_seconds=result.duration_seconds)
+        if not attempted and approval_blocked:
+            # EVERY genuinely eligible candidate was paid and unapproved --
+            # no provider was ever actually called. Truthfully distinct
+            # from "all candidate providers failed" (a real execution
+            # failure) -- see ``approval_required`` in quality_evidence,
+            # read by ``_build_via_dynamic_provider`` to report
+            # APPROVAL_REQUIRED instead of CAPABILITY_GAP.
+            return None, SceneProvenance(
+                scene_id=scene.scene_id, capability=TEXT_TO_IMAGE, provider=approval_blocked[-1].split("/")[0],
+                model="", generation_type=TEXT_TO_IMAGE, output_path="", success=False, fallback_used=False,
+                input_reference=scene.visual_description[:200],
+                quality_evidence={"reason": f"paid media generation requires approval for scene {index}: "
+                                             f"{', '.join(approval_blocked)}", "approval_required": True})
         return None, SceneProvenance(
             scene_id=scene.scene_id, capability=TEXT_TO_IMAGE, provider=attempted[-1] if attempted else "",
             model="", generation_type=TEXT_TO_IMAGE, output_path="", success=False, fallback_used=len(attempted) > 1,
@@ -698,16 +772,28 @@ class GeneralProductionBuilder:
     def _maybe_generate_scene_motion(scene: ScenePlan, image_url: str, index: int, root: Path,
                                       history: ProviderExecutionHistory,
                                       *, stage_sink: dict | None = None,
+                                      standing_permission: bool = False,
                                       ) -> tuple[Path | None, SceneProvenance | None]:
         """Bounded, best-effort image_to_video chain for one scene -- ONLY
         the single top-ranked compatible candidate is tried (never
         retried), and any failure returns ``(None, None)`` so the caller
         keeps the already-generated still image and the renderer's
         deterministic zoompan path (never blocks/fails the build for an
-        optional enhancement)."""
+        optional enhancement).
+
+        Sprint: paid media provider approval safety fix -- a paid
+        candidate (e.g. remote LTX) without approval is treated exactly
+        like any other unavailable/failed candidate here: silently skipped,
+        still image kept, and (since the provider is never actually
+        called) never recorded as a provider execution failure/cooldown."""
         ranked_video, _ = rank_available_providers(IMAGE_TO_VIDEO)
         for profile, provider in ranked_video[:1]:
             if not hasattr(provider, "generate_video_from_image"):
+                continue
+            decision = _paid_media_approval_decision(profile, standing_permission=standing_permission)
+            if decision is not None and (not decision.allowed or decision.requires_confirmation):
+                if stage_sink is not None:
+                    stage_sink["last_stage"] = f"{IMAGE_TO_VIDEO}_scene_{index}_approval_required_{profile.provider_id}/{profile.model_id}"
                 continue
             if stage_sink is not None:
                 stage_sink["last_stage"] = f"{IMAGE_TO_VIDEO}_scene_{index}_via_{profile.provider_id}/{profile.model_id}"

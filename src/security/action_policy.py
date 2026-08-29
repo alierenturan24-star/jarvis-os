@@ -56,6 +56,13 @@ class ActionPolicy:
         "run_project_tests",
         "install_sandbox_package",
         "create_social_draft",
+        # Sprint: paid media provider approval safety fix -- ANY remote
+        # media generation call (image/video) whose MediaModelProfile.
+        # cost_class == "paid" (NVIDIA/fal/LTX/AIML today, any future paid
+        # provider automatically) is real, spend-incurring execution, same
+        # risk shape as the other MEDIUM_RISK entries above (allowed only
+        # with standing_permission; otherwise blocked, never auto-run).
+        "paid_media_generation",
     }
 
     HIGH_RISK_ACTIONS = {

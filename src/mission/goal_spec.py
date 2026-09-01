@@ -27,6 +27,36 @@ _OUTPUT = re.compile(
 )
 _LABEL = re.compile(r"^(?:goal|hedef|context|bağlam|constraints?|kısıtlar?|output|çıktı)\s*:\s*", re.I)
 
+# Operational recovery and approval instructions describe how JARVIS must
+# behave if the primary goal hits a boundary; they are not additional goals.
+# Keep them on ``Mission.constraints`` for audit/safety, while preventing
+# their capability/provider/integration vocabulary from entering routing.
+_CONDITIONAL_RECOVERY = re.compile(
+    r"^(?:gerekli|gereken|eğer|eger|if)\b.*\b"
+    r"(?:yeten\w*|capabilit\w*|sağlayıcı\w*|saglayici\w*|provider\w*|recovery|kurtarma)\b",
+    re.I,
+)
+_CONDITIONAL_APPROVAL = re.compile(
+    r"\b(?:gerekiyorsa|gerekirse|gerektiğinde|if required)\b.*\b"
+    r"(?:onay|approval)\b|\b(?:onay|approval)\b.*\b(?:gerçekleştirme|yapma|etme)\b",
+    re.I,
+)
+_PROHIBITED_EXTERNAL_ACTION = re.compile(
+    r"^(?:videoyu\s+)?(?:youtube['’]?a\s+)?(?:yükleme|yükleme\s+yapma|upload(?:ing)?|"
+    r"yayınlama|paylaşma)\b|\b(?:yükleme|upload|yayınlama|paylaşma)\b.*\b"
+    r"(?:yapma|etme|gerçekleştirme)\b",
+    re.I,
+)
+
+
+def _is_constraint_clause(clause: str) -> bool:
+    return (
+        any(pattern.search(clause) for pattern in _CONSTRAINTS)
+        or bool(_CONDITIONAL_RECOVERY.search(clause))
+        or bool(_CONDITIONAL_APPROVAL.search(clause))
+        or bool(_PROHIBITED_EXTERNAL_ACTION.search(clause))
+    )
+
 
 def parse_goal_spec(message: str) -> GoalSpec:
     """Classify clauses, while preserving the original positive goal text."""
@@ -42,7 +72,7 @@ def parse_goal_spec(message: str) -> GoalSpec:
         clause = _LABEL.sub("", raw).strip()
         if not clause:
             continue
-        if any(pattern.search(clause) for pattern in _CONSTRAINTS):
+        if _is_constraint_clause(clause):
             constraints.append(clause)
         elif _OUTPUT.search(clause):
             outputs.append(clause)

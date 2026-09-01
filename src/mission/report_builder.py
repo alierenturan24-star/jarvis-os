@@ -874,6 +874,13 @@ def _recovery_section(mission: Mission) -> str:
     ]
     remaining_items = still_failed_titles + list(getattr(recovery, "remaining_goals", ()))
     failure_reasons = sorted({attempt.failure_class.value for attempt in recovery.attempts})
+    approval_reasons = sorted({
+        str(item.get("why") or item.get("need") or "").strip()
+        for item in recovery.approval_required
+        if str(item.get("why") or item.get("need") or "").strip()
+    })
+    if approval_reasons:
+        failure_reasons.extend(reason for reason in approval_reasons if reason not in failure_reasons)
     alt_methods = sorted({
         attempt.provider_tried for attempt in recovery.attempts
         if attempt.provider_tried and not attempt.provider_tried.startswith("__")
@@ -887,7 +894,10 @@ def _recovery_section(mission: Mission) -> str:
         "NEYİN BAŞARISIZ OLMASI BENİ DURDURDU? " + (", ".join(failure_reasons) if failure_reasons else "bilinmiyor"),
         "AYNI HEDEFE BAŞKA NASIL ULAŞABİLİRİM? " + (
             f"denenen alternatifler: {', '.join(alt_methods)}" if alt_methods
-            else "ücretsiz/yerel bir alternatif bulunamadı"
+            else (
+                "mevcut yetenek için kullanıcı onayı bekleniyor; capability discovery onayın yerine geçmez"
+                if recovery.approval_required else "ücretsiz/yerel bir alternatif bulunamadı"
+            )
         ),
         "", "Kurtarma denemeleri:",
     ]

@@ -255,7 +255,11 @@ _REPO_SELECTION_CUES = (
 
 
 def _wants_repo_validation_pipeline(lowered_text: str) -> bool:
-    return any(cue in lowered_text for cue in _REPO_SELECTION_CUES) or any(
+    repo_context = any(cue in lowered_text for cue in (
+        "repo", "github", "gitlab", "açık kaynak", "acik kaynak",
+        "paket", "package", "tool", "araç", "arac",
+    ))
+    return (repo_context and any(cue in lowered_text for cue in _REPO_SELECTION_CUES)) or any(
         cue in lowered_text for cue in ("evaluation", "sandbox", "integration", "lisans", "güvenli mi")
     )
 
@@ -388,6 +392,14 @@ def _media_research_context(source_text: str) -> str:
     stripped = _MEDIA_ADDRESS_PREFIX_PATTERN.sub("", source_text or "")
     stripped = _MEDIA_PRODUCTION_VERB_PATTERN.sub("", stripped)
     stripped = re.sub(r"\s+", " ", stripped).strip(" .,:;-")
+    # In Turkish content goals the market/location is normally the bounded
+    # phrase ending in "için" ("Swiss market for ..."). Keeping the later
+    # research/selection instructions in market_context would make the
+    # existing evidence-overlap gate test the summary against verbs such as
+    # "araştır/seç" instead of the requested market.
+    market_prefix = re.match(r"^(.{1,120}?\biçin\b)", stripped, re.IGNORECASE)
+    if market_prefix:
+        return market_prefix.group(1).strip()
     return stripped or "genel"
 
 
@@ -441,7 +453,19 @@ def _narrow_pure_generation_youtube(
 def _narrow_pure_content_research_youtube(lowered_text: str, bundle: list[str]) -> list[str]:
     if has_acquisition_signal(lowered_text):
         return bundle
+    explicit_browser = any(cue in lowered_text for cue in (
+        "web sitesi", "tarayıcıda aç", "google'da ara", "browser kullan",
+        "web'de araştır", "internette araştır", "site aç",
+    ))
+    explicit_automation = any(cue in lowered_text for cue in (
+        "otomasyon kur", "otomatikleştir", "pipeline kur",
+    ))
+    pure_generation = any(signal in lowered_text for signal in _PURE_GENERATION_SIGNALS)
     removable = {"github", *_VALIDATION_DEPARTMENTS}
+    if not explicit_browser:
+        removable.add("browser")
+    if not explicit_automation and not pure_generation:
+        removable.add("automation")
     return [name for name in bundle if name not in removable]
 
 
@@ -680,7 +704,13 @@ class DepartmentOrchestrator:
         # an explicit user-given topic -- see the "research" task-building
         # branch below). Drives the explicit media->research dependency
         # wired after the task-creation loop.
-        media_needs_research_grounding = False
+        media_needs_research_grounding = (
+            mission.mission_type in {MissionType.MEDIA, MissionType.YOUTUBE}
+            and "research" in mission.departments
+            and "media" in mission.departments
+            and _media_needs_topic_research((mission.goal or mission.title).casefold())
+            and not _EXPLICIT_MEDIA_TOPIC_PATTERN.search(mission.goal or mission.title)
+        )
         # Handlers need the complete original request. GoalSpec.goal is the
         # leading semantic clause; its context/constraints must not erase
         # later execution cues such as bounded exploration and timeframes.
@@ -812,34 +842,17 @@ class DepartmentOrchestrator:
                     })
 
             task_target = source_text
-            if department_name == "research" and mission.mission_type == MissionType.MEDIA:
-                research_department = self.departments.get("research")
-                explicit_research_ask = research_department is not None and any(
-                    keyword_matches(routing_text(source_text), keyword)
-                    for keyword in research_department.keywords
-                )
-                # Round 5 repair: an explicit user-given topic ("X
-                # konusunda...", see ``_EXPLICIT_MEDIA_TOPIC_PATTERN``)
-                # means media already knows what to make a video about --
-                # it must not unnecessarily wait on topic discovery either.
-                needs_topic_discovery = (
-                    not explicit_research_ask
-                    and not _EXPLICIT_MEDIA_TOPIC_PATTERN.search(source_text)
-                    and _media_needs_topic_research(source_text.casefold())
-                )
-                if needs_topic_discovery:
-                    # Research was added FOR the user (topic discovery,
-                    # see ``_narrow_media_topic_research``), not explicitly
-                    # asked for -- an explicit ask keeps its own wording
-                    # (existing ResearchAgent._clean_query behavior).
-                    task_target = _media_research_query(source_text)
-                    # Round 5 repair: media needs this SAME market/location
-                    # context (not the query's boilerplate wording) to
-                    # judge whether research's evidence actually covers the
-                    # requested market -- see
-                    # src.research.opportunity.build_selected_opportunity.
-                    metadata["market_context"] = _media_research_context(source_text)
-                    media_needs_research_grounding = True
+            if department_name == "research" and media_needs_research_grounding:
+                # Use the clean primary goal, never the raw title whose
+                # conditional recovery/safety clauses can contain names
+                # of local modules (for example ``recovery``).
+                task_target = _media_research_query(mission.goal or source_text)
+                # Round 5 repair: media needs this SAME market/location
+                # context (not the query's boilerplate wording) to
+                # judge whether research's evidence actually covers the
+                # requested market -- see
+                # src.research.opportunity.build_selected_opportunity.
+                metadata["market_context"] = _media_research_context(mission.goal or source_text)
 
             department_timeout = _DEPARTMENT_TASK_TIMEOUTS.get(department_name, DEPARTMENT_TASK_TIMEOUT_SECONDS)
             tasks.append(Task(

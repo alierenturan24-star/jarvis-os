@@ -706,6 +706,16 @@ class GeneralProductionBuilder:
         history = ProviderExecutionHistory()
         attempted: list[str] = []
         approval_blocked: list[str] = []
+        # Execution remains bounded to the top two below. Approval reporting,
+        # however, must truthfully expose every ranked eligible paid option;
+        # inspecting policy decisions performs no provider/network call.
+        all_approval_blocked = [
+            f"{profile.provider_id}/{profile.model_id}"
+            for profile, _provider in ranked
+            if (decision := _paid_media_approval_decision(
+                profile, standing_permission=standing_permission
+            )) is not None and (not decision.allowed or decision.requires_confirmation)
+        ]
         for profile, provider in ranked[:2]:
             if not hasattr(provider, "generate_image"):
                 continue
@@ -761,7 +771,8 @@ class GeneralProductionBuilder:
                 model="", generation_type=TEXT_TO_IMAGE, output_path="", success=False, fallback_used=False,
                 input_reference=scene.visual_description[:200],
                 quality_evidence={"reason": f"paid media generation requires approval for scene {index}: "
-                                             f"{', '.join(approval_blocked)}", "approval_required": True})
+                                             f"{', '.join(all_approval_blocked or approval_blocked)}",
+                                  "approval_required": True})
         return None, SceneProvenance(
             scene_id=scene.scene_id, capability=TEXT_TO_IMAGE, provider=attempted[-1] if attempted else "",
             model="", generation_type=TEXT_TO_IMAGE, output_path="", success=False, fallback_used=len(attempted) > 1,

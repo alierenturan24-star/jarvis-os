@@ -199,7 +199,8 @@ class TestSprint40TaskLevelRouting:
         monkeypatch.setattr(GitHubIntelligence, "search", lambda self, *a, **k: [])
         engine = _mission_engine(available={"ollama"})
         mission = engine.create_mission(
-            "Bitcoin neden düştü konusunda 60 saniyelik bir YouTube Shorts hazırla."
+            "Bitcoin neden düştü konusunda 60 saniyelik bir YouTube Shorts hazırla "
+            "ve yayın öncesi süreci otomatikleştir."
         )
         plan = engine.build_task_plan(mission)
 

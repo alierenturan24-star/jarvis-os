@@ -47,7 +47,7 @@ class TestYouTubeMissionDepartments:
         departments = orchestrator.select_departments(
             "Bitcoin neden düştü konusunda 60 saniyelik bir YouTube Shorts hazırla."
         )
-        assert set(departments) == {"research", "browser", "media", "automation", "finance"}
+        assert set(departments) == {"research", "media", "finance"}
 
 
 # --- 2) Finans Mission -> doğru departmanlar -----------------------------------

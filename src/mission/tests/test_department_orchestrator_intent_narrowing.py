@@ -42,9 +42,10 @@ class TestCurrentInfoYoutubeTaskIsPreserved:
         )
 
         assert "research" in departments
-        assert "browser" in departments
+        assert "browser" not in departments
         assert "finance" in departments
         assert "media" in departments
+        assert "automation" not in departments
 
     def test_existing_youtube_setup_request_is_unaffected(self):
         # Regresyon: mevcut testin ("YouTube otomasyonu kur.") tam

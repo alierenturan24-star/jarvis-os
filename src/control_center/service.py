@@ -241,7 +241,14 @@ class ControlCenterService:
                 self._complete_worker_run(record, mission)
             recovery = getattr(mission, "recovery", None)
             for item in getattr(recovery, "approval_required", []) if recovery else []:
-                self.create_approval("mission_capability", item, mission_id=record["id"])
+                task = next((task for task in mission.tasks if task.id == item.get("task_id")), None)
+                paid_media = bool(task and task.agent == "media"
+                                  and (task.metadata or {}).get("approval_action") == "paid_media_generation")
+                details = ({**item, "action": "paid_media_generation",
+                    "provider_candidates": list(task.metadata.get("approval_provider_candidates", [])),
+                    "checkpoint_id": f"{mission.id}:{item.get('task_id', '')}"} if paid_media else item)
+                self.create_approval("mission_capability", details,
+                                     mission_id=mission.id if paid_media else record["id"])
             self.notify("MISSION COMPLETED" if status == "completed" else "MISSION BLOCKED", record["goal"], record["id"])
         except BaseException as error:
             # BaseException (not Exception): a runtime/provider escape (e.g. a
@@ -299,11 +306,20 @@ class ControlCenterService:
         self.activity("BLOCKED", "EMERGENCY STOP" if emergency else "JARVIS stopped", level="error" if emergency else "warning")
 
     def create_approval(self, kind: str, details: dict[str, Any], mission_id: str = "") -> dict[str, Any]:
+        action, task_id = details.get("action"), details.get("task_id")
+        existing = next((row for row in self.store.snapshot().get("approvals", [])
+                         if row.get("mission_id") == mission_id and row.get("task_id") == task_id
+                         and row.get("action") == action and row.get("status") == "PENDING"), None) if action and task_id else None
+        if existing is not None:
+            return existing
         item = {"id": uuid.uuid4().hex, "type": kind, "status": "PENDING", "what": details.get("need", kind),
                 "why": details.get("why", "Policy approval required"), "risk": details.get("risk", "HIGH"),
                 "cost": details.get("cost"), "expected_result": details.get("expected_result"),
                 "alternatives": details.get("alternatives", ["Reject and continue safe alternatives"]),
                 "details": details, "mission_id": mission_id, "worker_id": details.get("worker_id"),
+                "task_id": task_id, "action": action,
+                "provider_candidates": details.get("provider_candidates", []),
+                "checkpoint_id": details.get("checkpoint_id", ""),
                 "created_at": utc_now()}
         self.store.append("approvals", item); self.notify("APPROVAL REQUIRED", item["what"], mission_id)
         return item
@@ -357,6 +373,14 @@ class ControlCenterService:
                 self.workforce.release_backlog_if_clear(worker_id)
         if found.get("type") == "youtube_publish" and approved is False:
             self._record_youtube_rejection_learning(found, reason)
+        if found.get("type") == "mission_capability" and found.get("action") == "paid_media_generation" and approved is True:
+            ceo = getattr(getattr(self.runtime, "jarvis", None), "ceo", None)
+            if ceo is None:
+                raise RuntimeError("Mission continuation unavailable")
+            outcome = ceo.resume_paid_media_approval(found["mission_id"], found["task_id"])
+            found["resume_result"] = outcome
+            self.store.update(lambda state: next(row for row in state["approvals"]
+                if row.get("id") == approval_id).update(resume_result=outcome))
         return found
 
     def _record_youtube_rejection_learning(self, approval: dict[str, Any], reason: str) -> None:

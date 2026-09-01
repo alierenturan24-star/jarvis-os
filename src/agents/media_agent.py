@@ -112,6 +112,10 @@ class MediaAgent(BaseAgent):
             plan_kwargs["produce_artifact"] = True
         if "stage_sink" in inspect.signature(self.manager.plan).parameters:
             plan_kwargs["stage_sink"] = task.metadata
+        if "standing_permission" in inspect.signature(self.manager.plan).parameters:
+            plan_kwargs["standing_permission"] = bool(
+                task.metadata.get("paid_media_permission") == "paid_media_generation"
+            )
         if research_opportunity is not None and "research_opportunity" in inspect.signature(self.manager.plan).parameters:
             plan_kwargs["research_opportunity"] = research_opportunity
         result = self.manager.plan(**plan_kwargs)

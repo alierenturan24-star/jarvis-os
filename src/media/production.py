@@ -716,6 +716,9 @@ class GeneralProductionBuilder:
                 profile, standing_permission=standing_permission
             )) is not None and (not decision.allowed or decision.requires_confirmation)
         ]
+        if all_approval_blocked and stage_sink is not None:
+            stage_sink["approval_action"] = _PAID_MEDIA_ACTION
+            stage_sink["approval_provider_candidates"] = list(all_approval_blocked)
         for profile, provider in ranked[:2]:
             if not hasattr(provider, "generate_image"):
                 continue

@@ -152,7 +152,7 @@ class CEO:
                     mission, plan, provider_manager=self.provider_manager,
                     capability_registry=self.mission_engine.capability_registry,
                 )
-                if mission.recovery.continuation_ids:
+                if mission.recovery.continuation_ids or mission.recovery.approval_required:
                     self._capability_recovery_plans[mission.id] = (mission, plan)
                 from src.mission.task_criticality import critical_failures
                 execution_report.success = not critical_failures(plan)
@@ -199,6 +199,37 @@ class CEO:
             f"Mission dağıtıldı: {mission.title!r} -> {mission.status.value}",
         )
         return plan, report
+
+    def resume_paid_media_approval(self, mission_id: str, task_id: str) -> dict:
+        """Resume one exact paid-media task from the existing live checkpoint."""
+        from src.core.plan_executor import PlanExecutor
+        from src.jobs.job_manager import JobManager
+        from src.jobs.task_status import TaskStatus
+        from src.mission.completion import evaluate_goal_completion
+        from src.mission.recovery import _reset_stale_dependents, _task_genuinely_succeeded
+
+        checkpoint = self._capability_recovery_plans.get(mission_id)
+        if checkpoint is None:
+            raise RuntimeError("Original live mission checkpoint unavailable")
+        mission, plan = checkpoint
+        task = plan.get(task_id)
+        if task is None or task.agent != "media" or task.handler is None:
+            raise RuntimeError("Bound media task checkpoint unavailable")
+        task.metadata["paid_media_permission"] = "paid_media_generation"
+        task.status, task.error, task.result = TaskStatus.PENDING, "", None
+        manager = JobManager()
+        try:
+            manager.run_task(task)
+        finally:
+            task.metadata.pop("paid_media_permission", None)
+        if not _task_genuinely_succeeded(task):
+            return {"status": "RESUME_FAILED", "mission_id": mission_id, "task_id": task_id}
+        reset = _reset_stale_dependents(plan, task)
+        PlanExecutor(manager, cancel_on_failure=False).run(plan)
+        missing = evaluate_goal_completion(mission).missing
+        mission.status = MissionStatus.COMPLETED if not missing else MissionStatus.INCOMPLETE
+        return {"status": "RESUMED" if not missing else "RESUME_FAILED", "mission_id": mission_id,
+                "task_id": task_id, "reset_dependent_task_ids": reset}
 
     def resume_capability_continuations(self, capability_id: str) -> list[dict]:
         """Resume exact blocked tasks after verified activation, at most once.

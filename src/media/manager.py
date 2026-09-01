@@ -81,6 +81,7 @@ class MediaManager:
         produce_artifact: bool = False,
         stage_sink: dict | None = None,
         research_opportunity: dict | None = None,
+        standing_permission: bool = False,
     ) -> str:
         topic = topic.strip()
         self.last_capability_gap = None
@@ -286,6 +287,7 @@ Kurallar:
                     research_grounded=research_grounded,
                     research_evidence_ref=research_evidence_ref,
                     stage_sink=stage_sink,
+                    standing_permission=standing_permission,
                 )
 
             if find_goal_production_package(topic) is None:

@@ -4,27 +4,54 @@ Türkçe konuşan, çok ajanlı, çoklu-LLM-sağlayıcılı bir kişisel AI işl
 
 ## Kurulum
 
+### Windows 11 — tek tık (önerilen)
+
+1. Depoyu indirin/klonlayın.
+2. `START_JARVIS.bat` dosyasına çift tıklayın.
+3. İlk çalışmada oluşturulan `.env` dosyasına kullandığınız sağlayıcının API anahtarını ekleyin ve dosyayı yeniden açın.
+
+Başlatıcı yönetici izni istemez; `.venv` ortamını kurar, gereksinimleri yalnızca değiştiğinde günceller, depodaki yerel FFmpeg'i doğrular ve Control Center'ı yalnız `127.0.0.1:8765` üzerinde açar. `.env` mevcutsa üzerine yazmaz. Claude Code isteğe bağlıdır; kurulu ve giriş yapılmışsa JARVIS kod görevlerinde kontrollü olarak kullanabilir.
+
+Panelde **Ayarlar ve Hazırlık** bölümünden video, ses, AI sağlayıcısı, YouTube hesabı, Claude Code ve güvenli kimlik kasasının gerçek durumunu görebilirsiniz.
+
+### Elle kurulum
+
 ```bash
 pip install -r requirements.txt
 ```
 
-Proje kök dizinine bir `.env` dosyası ekleyin (bkz. `src/config/settings.py` içindeki tüm anahtarlar):
+Proje kök dizinine `.env.example` dosyasını `.env` adıyla kopyalayın ve yalnız kullanacağınız sağlayıcının anahtarını ekleyin (bkz. `src/config/settings.py`):
 
 ```
-DEFAULT_PROVIDER=ollama
-OLLAMA_URL=http://localhost:11434
-OLLAMA_MODEL=llama3.2:latest
+DEFAULT_PROVIDER=gemini
+GEMINI_API_KEY=
 # İsteğe bağlı: OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY,
 # DEEPSEEK_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY, AIML_API_KEY ...
 ```
 
 ## Çalıştırma
 
+Kontrol paneli:
+
+```bash
+python control_center.py
+```
+
+Terminal uygulaması:
+
 ```bash
 python main.py
 ```
 
 Komut satırında `çık` / `exit` ile kapatılır, `durum` ile çalışma zamanı durumu görüntülenir.
+
+## Gerçek çalışma sınırları
+
+- Paneldeki görev kutusu gerçek `/api/command` hattına bağlıdır; görevler planner ve ilgili worker'a yönlenir.
+- YouTube hattı trend/konu araştırması, senaryo, başlık/açıklama, ses, altyazı, yerel MP4 render ve kalite kontrolü yapabilir. Kaynak veya trend verisi yoksa sonuç uydurmaz.
+- YouTube hesabı resmi Google OAuth ile ayrıca bağlanmalıdır. Yayın otomatik değildir; kalite sonrasında insan onayı gerekir.
+- Finans hattı gerçek piyasa verisiyle araştırma, backtest ve paper pozisyon çalıştırır. Gerçek para emri kod yolu kapalıdır.
+- Claude Code yalnız kurulu ve giriş yapılmışsa kod görevlerinde; izin listesi, süre sınırı ve güvenlik politikası içinde kullanılabilir.
 
 ## Testler
 

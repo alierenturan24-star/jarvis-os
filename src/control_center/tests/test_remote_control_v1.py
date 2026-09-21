@@ -64,6 +64,10 @@ def test_health_and_notification_are_real_persisted_state(tmp_path):
     assert health["backend_alive"] is True and health["runtime_state"] == "SLEEPING"
     assert health["finance"]["live_activation"] is False and health["public_exposure"] is False
     assert health["notifications"]["unread"] == 1
+    capabilities = {item["id"]: item for item in health["capabilities"]}
+    assert capabilities["command_pipeline"]["ready"] is True
+    assert capabilities["finance"]["mode"] == "PAPER ONLY"
+    assert capabilities["youtube_account"]["ready"] is False
     assert service.store.snapshot()["notifications"][-1]["id"] == event["id"]
 
 
@@ -88,3 +92,13 @@ def test_startup_installer_defaults_to_plan_only_and_loopback():
     assert "Test-ControlCenterHealth" in watchdog and "Test-PortListening" in watchdog
     assert "Start-Process" in watchdog and "& python" not in watchdog
     assert "main()" in Path("control_center.py").read_text(encoding="utf-8")
+
+
+def test_one_click_launcher_is_local_non_admin_and_preserves_env():
+    batch = Path("START_JARVIS.bat").read_text(encoding="utf-8")
+    setup = Path("tools/setup_and_start.ps1").read_text(encoding="utf-8")
+    assert "setup_and_start.ps1" in batch
+    assert "127.0.0.1" in setup and "0.0.0.0" not in setup
+    assert "Test-Path -LiteralPath $EnvironmentFile" in setup
+    assert "Copy-Item -LiteralPath $EnvironmentExample" in setup
+    assert "RunAs" not in setup and "Start-Process $url" in setup

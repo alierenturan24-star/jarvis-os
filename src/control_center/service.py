@@ -4,6 +4,8 @@ import io
 import json
 import mimetypes
 import os
+import shutil
+import sys
 import threading
 import traceback
 import uuid
@@ -19,6 +21,7 @@ from src.core.runtime import JarvisRuntime
 from src.media.channel_store import ChannelScopedStore
 from src.media.learning import YouTubeLearningAgent
 from src.media.quality import validate_media_goal_artifact
+from src.media.renderer import find_ffmpeg, find_ffprobe
 from src.providers.execution_history import ProviderExecutionHistory
 from src.research_loop.autonomous import AutonomousResearchService
 from src.capabilities.capability_registry import CapabilityRegistry
@@ -441,6 +444,54 @@ class ControlCenterService:
         youtube = state["engines"]["youtube"]
         manager = getattr(getattr(getattr(self.runtime, "jarvis", None), "ceo", None), "provider_manager", None)
         provider_names = manager.names() if manager is not None else []
+        available_remote_providers: list[str] = []
+        if manager is not None:
+            # Ollama's availability probe performs a local HTTP request. Health is
+            # polled frequently by the UI, so keep this readiness check entirely
+            # local and side-effect free. Ollama is reported only after the
+            # explicit provider probe has already populated _provider_health.
+            for name in provider_names:
+                if name == "ollama":
+                    if self._provider_health.get(name):
+                        available_remote_providers.append(name)
+                    continue
+                try:
+                    if manager.get(name).is_available():
+                        available_remote_providers.append(name)
+                except Exception:
+                    continue
+        accounts = self.accounts.redacted_accounts()
+        connected_youtube_accounts = sum(
+            item.get("connection_status") == "CONNECTED" for item in accounts
+        )
+        ffmpeg_ready = bool(find_ffmpeg() and find_ffprobe())
+        speech_engine = "edge-tts" if shutil.which("edge-tts") else (
+            "windows-tts" if shutil.which("powershell.exe") else ""
+        )
+        capabilities = [
+            {"id": "command_pipeline", "label": "Gerçek görev hattı", "ready": True,
+             "mode": "JARVIS RUNTIME", "detail": "Panel komutları /api/command üzerinden gerçek runtime'a gider."},
+            {"id": "ai_provider", "label": "AI sağlayıcısı", "ready": bool(available_remote_providers),
+             "mode": ", ".join(available_remote_providers) or "YAPILANDIRMA GEREKLİ",
+             "detail": "API anahtarları yalnız yerel .env dosyasından okunur; değerler panele gönderilmez."},
+            {"id": "video_render", "label": "Video düzenleme / MP4", "ready": ffmpeg_ready,
+             "mode": "YEREL FFMPEG" if ffmpeg_ready else "FFMPEG BULUNAMADI",
+             "detail": "Render, altyazı, ses ve kalite kapıları yerel makinede çalışır."},
+            {"id": "speech", "label": "Seslendirme", "ready": bool(speech_engine),
+             "mode": speech_engine or "SES MOTORU BULUNAMADI",
+             "detail": "edge-tts tercih edilir; Windows TTS güvenli yerel yedektir."},
+            {"id": "youtube_account", "label": "YouTube hesabı", "ready": connected_youtube_accounts > 0,
+             "mode": f"{connected_youtube_accounts} BAĞLI HESAP" if connected_youtube_accounts else "BAĞLANTI GEREKLİ",
+             "detail": "Yayın otomatik değildir; kalite sonrası insan onayı zorunludur."},
+            {"id": "finance", "label": "Finans araştırması", "ready": bool(finance.get("enabled")),
+             "mode": "PAPER ONLY", "detail": "Araştırma, backtest ve sanal pozisyon açık; gerçek para emri yoktur."},
+            {"id": "claude_code", "label": "Claude Code yardımcısı", "ready": bool(shutil.which("claude")),
+             "mode": "KONTROLLÜ" if shutil.which("claude") else "İSTEĞE BAĞLI",
+             "detail": "Kurulu ve giriş yapılmışsa kod görevlerinde izin listesi ve süre sınırıyla kullanılabilir."},
+            {"id": "credential_vault", "label": "Güvenli kimlik kasası", "ready": self.workforce.vault.available,
+             "mode": self.workforce.vault.backend,
+             "detail": "OAuth belirteçleri state/log/frontend içine yazılmaz."},
+        ]
         runtime_started = getattr(self.runtime, "started_at", None)
         runtime_started_at = (
             runtime_started.astimezone().isoformat(timespec="seconds")
@@ -457,6 +508,9 @@ class ControlCenterService:
                 "provider_registry": {"registered": len(provider_names),
                                       "availability_probe": "on_demand",
                                       "availability": dict(self._provider_health)},
+                "capabilities": capabilities,
+                "python": {"version": ".".join(map(str, sys.version_info[:3])),
+                           "supported": sys.version_info >= (3, 11)},
                 "last_successful_mission": completed[-1].get("finished_at") if completed else None,
                 "last_error": self.runtime.last_error,
                 "notifications": {"persisted": True, "browser_delivery": "client_permission_required",

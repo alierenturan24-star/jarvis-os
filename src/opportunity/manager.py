@@ -47,6 +47,8 @@ class OpportunityManager:
                 f"Risk: {item.get('risk', 0)}/100"
             )
 
+        opportunities_text = "\n\n".join(blocks)
+
         prompt = f"""
 Sen JARVIS Fırsat Departmanı yöneticisisin.
 
@@ -58,7 +60,7 @@ Kullanıcının hedefleri:
 - Finansal riski sınırlamak
 
 Puanlanan fırsatlar:
-{"\n\n".join(blocks)}
+{opportunities_text}
 
 {TURKISH_OUTPUT_POLICY}
 

@@ -28,13 +28,15 @@ class Summarizer:
                 f"Bilgi: {result.get('summary', '')}"
             )
 
+        source_text = "\n\n".join(source_blocks)
+
         prompt = f"""
 Sen JARVIS Araştırma Departmanısın.
 
 Araştırma konusu: {topic}
 
 Toplanan sonuçlar:
-{"\n\n".join(source_blocks)}
+{source_text}
 
 {TURKISH_OUTPUT_POLICY}
 

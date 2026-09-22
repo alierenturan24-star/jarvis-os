@@ -49,10 +49,18 @@ Komut satırında `çık` / `exit` ile kapatılır, `durum` ile çalışma zaman
 
 - Paneldeki görev kutusu gerçek `/api/command` hattına bağlıdır; görevler planner ve ilgili worker'a yönlenir.
 - YouTube hattı trend/konu araştırması, senaryo, başlık/açıklama, ses, altyazı, yerel MP4 render ve kalite kontrolü yapabilir. Kaynak veya trend verisi yoksa sonuç uydurmaz.
-- `GEMINI_API_KEY` tanımlıysa Gemini'nin görsel modeli sahne ve kapak görsellerinde kullanılabilir. Görsel üretimi ücretli çağrı sayıldığı için panel onayı olmadan API çağrısı yapılmaz.
+- Varsayılan video bütçesi `FREE_ONLY`'dir: tarihli haber kanıtı, Public Domain/CC0/CC BY Wikimedia Commons görselleri, yerel özgün kapak, yerel özgün düşük sesli müzik yatağı, TTS, altyazı ve FFmpeg kullanılır. Her stok görselin kaynak/yazar/lisans kaydı saklanır.
+- `GEMINI_API_KEY` tanımlı olsa bile Gemini'nin ücretli görsel modeli panel onayı olmadan çağrılmaz. Ücretsiz uygun görsel bulunamazsa sistem para istemek yerine dürüst bir capability gap ile durur.
+- Başka kanalların videosunu indirip kapak/müzik değiştirerek yeniden yükleme yapılmaz; konu ve doğrulanmış olgular özgün senaryo ve yeni kurguya dönüştürülür.
 - YouTube hesabı resmi Google OAuth ile ayrıca bağlanmalıdır. Yayın otomatik değildir; kalite sonrasında insan onayı gerekir.
 - Finans hattı gerçek piyasa verisiyle araştırma, backtest ve paper pozisyon çalıştırır. Gerçek para emri kod yolu kapalıdır.
 - Claude Code yalnız kurulu ve giriş yapılmışsa kod görevlerinde; izin listesi, süre sınırı ve güvenlik politikası içinde kullanılabilir.
+
+Swiss Insider için önerilen ücretsiz görev örneği:
+
+```text
+Swiss Insider için İsviçre'nin son 7 günündeki gündemi Almanca, Fransızca ve İtalyanca tarihli kaynaklarla doğrula. En güçlü tek konuyu seç; başka videoyu kopyalamadan özgün Almanca Shorts üret. Yalnız ücretsiz ve lisansı kaydedilmiş görselleri, yerel özgün müziği, altyazıyı ve FFmpeg'i kullan. Ücretli medya kullanma ve YouTube'a yükleme; MP4 ile kapağı Artifacts bölümünde onaya gönder.
+```
 
 ## Testler
 

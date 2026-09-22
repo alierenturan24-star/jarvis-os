@@ -84,6 +84,7 @@ class MediaManager:
         stage_sink: dict | None = None,
         research_opportunity: dict | None = None,
         standing_permission: bool = False,
+        free_only: bool = True,
         request_text: str | None = None,
     ) -> str:
         topic = topic.strip()
@@ -157,8 +158,9 @@ class MediaManager:
 
         capability_note = (
             "Bu ortamda GERÇEKTEN kurulu olan: yerel Ollama, workspace-local "
-            "FFmpeg/ffprobe, deterministic scene-card composition ve Windows "
-            "System.Speech TTS. Yayınlama capability'si kullanılmaz."
+            "FFmpeg/ffprobe, anahtarsız ve lisans kanıtlı Wikimedia Commons görsel araması, "
+            "yerel özgün kapak/altyazı/müzik kompozisyonu ve Windows System.Speech TTS. "
+            "Onay yokken ücretli görsel sağlayıcısı kullanılmaz; yayınlama capability'si kullanılmaz."
             if find_ffmpeg()
             else "FFmpeg/video encoder bulunamadı; gerçek MP4 üretimi BLOCKED."
         )
@@ -214,7 +216,7 @@ ALTYAZI PLANI
 (Sahne zamanlamasına dayalı kısa altyazı satırları.)
 
 THUMBNAIL FİKRİ
-(Kısa, çarpıcı bir thumbnail açıklaması -- metin olarak, gerçek görsel ÜRETİLMEYECEK.)
+(Kısa, çarpıcı kapak metni ve kompozisyonu; sistem bunu seçilen lisanslı/özgün kare üzerinde yerelde tasarlayacak.)
 
 BAŞLIK
 (60 karakteri geçmeyen bir YouTube Shorts başlığı.)
@@ -231,6 +233,8 @@ Kurallar:
   eski bir yılı güncelmiş gibi sunma.
 - Kesin yatırım tavsiyesi verme.
 - Var olmayan bir aracı kurulu/kullanılabilirmiş gibi anlatma.
+- Başka bir üreticinin videosunu, kapağını veya telifli müziğini kopyalama/yeniden yükleme.
+- Görsel planında doğrulanabilir Public Domain, CC0 veya CC BY kaynakları tercih et.
 """
 
         if stage_sink is not None:
@@ -315,6 +319,7 @@ Kurallar:
                     research_evidence_ref=research_evidence_ref,
                     stage_sink=stage_sink,
                     standing_permission=standing_permission,
+                    free_only=free_only,
                 )
 
             if find_goal_production_package(topic) is None:

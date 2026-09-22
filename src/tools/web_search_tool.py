@@ -100,3 +100,56 @@ class WebSearchTool(BaseTool):
             max_results=max_results,
             timeout_seconds=timeout_seconds,
         )
+
+    def search_news(
+        self,
+        query: str,
+        max_results: int = 5,
+        timeout_seconds: float = WEB_SEARCH_TIMEOUT_SECONDS,
+        timelimit: str = "w",
+    ) -> dict:
+        """Return dated news results for current-event research.
+
+        A normal web result usually has no machine-readable publication date.
+        Current-event missions must not infer freshness from that absence, so
+        they use DDGS' news adapter and preserve its date/source provenance.
+        """
+        query = str(query or "").strip()
+        if not query:
+            return {"success": False, "query": "", "results": [], "message": "Arama metni boş."}
+
+        try:
+            requested_timeout = float(timeout_seconds)
+            timeout = max(0.01, min(WEB_SEARCH_TIMEOUT_SECONDS, requested_timeout))
+            raw_results = DDGS(timeout=timeout).news(
+                query,
+                region="wt-wt",
+                safesearch="moderate",
+                timelimit=timelimit,
+                max_results=max_results,
+            )
+            results = []
+            for item in raw_results or []:
+                results.append({
+                    "title": str(item.get("title", "")).strip(),
+                    "url": str(item.get("url") or item.get("href") or "").strip(),
+                    "summary": str(item.get("body") or item.get("snippet") or "").strip(),
+                    "published_at": str(
+                        item.get("date") or item.get("published_at") or item.get("published") or ""
+                    ).strip(),
+                    "publisher": str(item.get("source") or "").strip(),
+                })
+            if not results:
+                return {
+                    "success": False, "query": query, "results": [],
+                    "message": "Tarihli haber sonucu bulunamadı.",
+                }
+            return {
+                "success": True, "query": query, "results": results,
+                "message": f"{len(results)} tarihli haber sonucu bulundu.",
+            }
+        except Exception as error:
+            return {
+                "success": False, "query": query, "results": [],
+                "message": f"Haber araması başarısız: {error}",
+            }

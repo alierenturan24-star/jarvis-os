@@ -218,12 +218,39 @@ class LocalVideoRenderer:
 
         concat = job_dir / "production-scenes.txt"
         concat.write_text("".join(f"file '{path.name}'\n" for path in segment_paths), encoding="utf-8")
+        music = root / str(manifest.get("music_file", ""))
+        subtitles = root / str(manifest.get("subtitle_file", ""))
         command = [
             ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", concat.name,
-            "-i", str(audio.resolve()), "-t", str(max(total_duration, 1)), "-c:v", "copy",
-            "-af", "atempo=1.07,loudnorm=I=-16:TP=-1.5:LRA=11", "-c:a", "aac", "-b:a", "128k",
-            "-movflags", "+faststart", output_path.name,
+            "-i", str(audio.resolve()),
         ]
+        music_index = None
+        if music.is_file() and music.stat().st_size > 1024:
+            music_index = 2
+            command.extend(("-i", str(music.resolve())))
+        subtitle_index = None
+        if subtitles.is_file() and subtitles.stat().st_size > 10:
+            subtitle_index = 3 if music_index is not None else 2
+            command.extend(("-i", str(subtitles.resolve())))
+
+        command.extend(("-map", "0:v:0"))
+        if music_index is not None:
+            command.extend((
+                "-filter_complex",
+                f"[1:a]atempo=1.07[voice];[{music_index}:a]volume=0.10[music];"
+                "[voice][music]amix=inputs=2:duration=first:dropout_transition=2,"
+                "loudnorm=I=-16:TP=-1.5:LRA=11[mixed]",
+                "-map", "[mixed]",
+            ))
+        else:
+            command.extend(("-map", "1:a:0", "-af", "atempo=1.07,loudnorm=I=-16:TP=-1.5:LRA=11"))
+        if subtitle_index is not None:
+            command.extend(("-map", f"{subtitle_index}:s:0", "-c:s", "mov_text",
+                            "-metadata:s:s:0", f"language={str(manifest.get('channel_language', 'de'))[:2]}"))
+        command.extend((
+            "-t", str(max(total_duration, 1)), "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart", output_path.name,
+        ))
         if stage_sink is not None:
             stage_sink["last_stage"] = "render_ffmpeg_compose"
         completed = subprocess.run(command, cwd=job_dir, capture_output=True, text=True, timeout=180, check=False)
@@ -360,5 +387,4 @@ def _write_sapi_wav(path: Path, narration: str) -> bool:
         return completed.returncode == 0 and path.is_file() and path.stat().st_size > 1024
     except OSError:
         return False
-
 

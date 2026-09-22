@@ -332,6 +332,7 @@ class TestResearchOpportunityGrounding:
         )
 
         assert captured.get("research_grounded") is True
+        assert captured.get("free_only") is True
         assert captured.get("research_evidence_ref", {}).get("location_or_market") == "İsviçre için"
         assert captured.get("research_evidence_ref", {}).get("source_count") == 1
 

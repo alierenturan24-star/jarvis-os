@@ -100,13 +100,20 @@ def test_g_research_does_not_require_video():
 
 
 def test_current_youtube_plan_requires_research_and_plan_but_not_video():
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).isoformat()
     title = (
         "YouTube için güncel trendleri araştır, en iyi 3 video fikrini ve "
         "başlıklarını hazırla; video üretim planı oluştur fakat yayınlama."
     )
     research = _completed_task("research", metadata={"report": {
         "sufficient": True,
-        "supporting_evidence": [{"url": "https://example.test/current"}],
+        "freshness_status": "CURRENT",
+        "freshness_window_days": 7,
+        "supporting_evidence": [
+            {"url": "https://srf.ch/current", "published_at": today},
+            {"url": "https://rts.ch/current", "published_at": today},
+        ],
     }})
     media = _completed_task("media", metadata={"youtube_content_plan": True})
     mission = _mission(title, [research, media], ["research", "media", "automation"])

@@ -24,13 +24,18 @@ from src.utils.llm_utils import is_llm_failure
 _CURRENCY_CUES = (
     "today", "bugün", "current", "güncel", "now", "şu an", "şu anda",
     "this week", "bu hafta", "currently", "as of today", "right now",
+    "son gün", "son hafta", "geçen hafta", "latest", "recent", "yakın zamanda",
 )
 _YEAR_PATTERN = re.compile(r"\b(20\d{2})\b")
+_RECENT_WINDOW_PATTERN = re.compile(
+    r"(?:\bson|\bgeçen|\blast|\bpast)\s+\d+\s+(?:gün\w*|days?)\b",
+    re.IGNORECASE,
+)
 
 
 def topic_wants_current_information(topic: str) -> bool:
     lowered = (topic or "").casefold()
-    return any(cue in lowered for cue in _CURRENCY_CUES)
+    return any(cue in lowered for cue in _CURRENCY_CUES) or bool(_RECENT_WINDOW_PATTERN.search(lowered))
 
 
 def staleness_warning(topic: str, text: str, *, current_year: int | None = None) -> str | None:

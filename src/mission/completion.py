@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Iterable
 
 from src.jobs.task_status import TaskStatus
+from src.research.opportunity import selected_opportunity_has_verified_current_evidence
 
 
 class ArtifactType(str, Enum):
@@ -330,9 +331,7 @@ def evaluate_goal_completion(mission) -> GoalCompletion:
                 ),
                 "current_research_grounding": bool(
                     research_task and research_task.status == TaskStatus.COMPLETED
-                    and isinstance(research_report, dict)
-                    and research_report.get("sufficient") is True
-                    and research_report.get("supporting_evidence")
+                    and selected_opportunity_has_verified_current_evidence(research_report)
                 ),
                 "technical_validation": artifact.get("technical_validation") is True,
                 "semantic_validation": artifact.get("semantic_validation") is True and quality.get("production_readiness") is True,

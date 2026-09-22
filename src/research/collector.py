@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 import time
+import unicodedata
 from typing import Any
 from urllib.parse import urlparse
 
@@ -13,7 +14,7 @@ from src.tools.web_search_tool import WebSearchTool
 # requested (see ``ResearchCollector.collect``). Exported so callers can
 # size an outer/inner timeout budget from the REAL worst-case step count
 # instead of a second, independently-maintained magic number.
-MAX_SEARCH_STEPS = 5
+MAX_SEARCH_STEPS = 8
 
 PRIMARY_SOURCE_TYPES = {"OFFICIAL_DOCS", "OFFICIAL_API", "GITHUB", "ARXIV", "LOCAL", "USER_CONFIRMED"}
 KNOWN_IDENTITIES = {
@@ -177,6 +178,14 @@ def source_matches_preferences(source_type: str, preferences: list[str]) -> bool
     return str(source_type).upper() in normalized
 
 
+def _is_swiss_topic(topic: str) -> bool:
+    lowered = "".join(
+        char for char in unicodedata.normalize("NFKD", (topic or "").casefold())
+        if not unicodedata.combining(char)
+    )
+    return any(name in lowered for name in ("isviçre", "isvicre", "switzerland", "schweiz", "suisse", "svizzera"))
+
+
 class ResearchCollector:
 
     def __init__(self) -> None:
@@ -196,7 +205,22 @@ class ResearchCollector:
         # ``_wants_academic_sources`` above. GENERAL_WEB always runs (the
         # base "any topic" channel, appropriate for every intent including
         # current-events/news).
-        searches = [{"search_channel": "GENERAL_WEB", "query": topic}]
+        # A generic web result normally has no publication timestamp. Current
+        # missions therefore get a dated NEWS pass first; GENERAL_WEB remains
+        # as supplemental context, never as proof of freshness on its own.
+        from src.research.manager import topic_wants_current_information
+
+        searches = []
+        if topic_wants_current_information(topic) and hasattr(self.web, "search_news"):
+            if _is_swiss_topic(topic):
+                searches.extend((
+                    {"search_channel": "NEWS_DE", "query": "Schweiz aktuelle Nachrichten letzte 7 Tage", "news": True, "source_language": "de"},
+                    {"search_channel": "NEWS_FR", "query": "Suisse actualités des sept derniers jours", "news": True, "source_language": "fr"},
+                    {"search_channel": "NEWS_IT", "query": "Svizzera ultime notizie degli ultimi sette giorni", "news": True, "source_language": "it"},
+                ))
+            else:
+                searches.append({"search_channel": "NEWS", "query": topic, "news": True})
+        searches.append({"search_channel": "GENERAL_WEB", "query": topic})
         if _wants_tooling_sources(topic, preferences):
             searches.append({"search_channel": "GITHUB", "query": f"site:github.com {topic}"})
         if _wants_academic_sources(topic, preferences):
@@ -214,7 +238,8 @@ class ResearchCollector:
             remaining = None if deadline is None else deadline - time.monotonic()
             if remaining is not None and remaining <= 0:
                 raise TimeoutError("RESEARCH_CYCLE_MAX_RUNTIME_EXCEEDED")
-            response = self.web.search(
+            search_method = self.web.search_news if search.get("news") else self.web.search
+            response = search_method(
                 query=search["query"], max_results=max_results_per_source,
                 timeout_seconds=remaining if remaining is not None else 15.0,
             )
@@ -240,6 +265,11 @@ class ResearchCollector:
                     "title": str(item.get("title", "")).strip(),
                     "url": url,
                     "summary": str(item.get("summary", "")).strip(),
+                    "published_at": str(
+                        item.get("published_at") or item.get("date") or item.get("published") or ""
+                    ).strip(),
+                    "publisher": str(item.get("publisher") or item.get("source") or "").strip(),
+                    "source_language": str(search.get("source_language") or item.get("source_language") or "").strip(),
                     **quality,
                     "source_quality_reason": reason,
                     "source_preference_match": preference_match,

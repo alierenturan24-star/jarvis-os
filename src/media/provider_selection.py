@@ -133,6 +133,7 @@ def _score(profile: MediaModelProfile, history: ProviderExecutionHistory, capabi
 def rank_available_providers(
     capability: str, *, quality_required: bool = False,
     require_vertical_video: bool = False, require_image_conditioning: bool = False,
+    include_free_stock: bool = False,
     history: ProviderExecutionHistory | None = None,
 ) -> tuple[list[tuple[MediaModelProfile, MediaProvider]], tuple[CandidateEvaluation, ...]]:
     """Every genuinely eligible (profile, provider) pair, best first, plus
@@ -146,7 +147,12 @@ def rank_available_providers(
     considered: list[CandidateEvaluation] = []
     eligible: list[tuple[MediaModelProfile, MediaProvider]] = []
 
-    for provider in _PROVIDERS:
+    providers = _PROVIDERS
+    if include_free_stock:
+        from src.providers.wikimedia_media_provider import WikimediaMediaProvider
+        providers = (WikimediaMediaProvider(),) + providers
+
+    for provider in providers:
         for profile in provider.profiles():
             if capability not in profile.capabilities:
                 considered.append(CandidateEvaluation(profile, False,

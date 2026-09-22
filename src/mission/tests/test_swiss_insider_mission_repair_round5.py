@@ -36,6 +36,8 @@ video was produced.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from src.jobs.task import Task
 from src.jobs.task_result import TaskResult
 from src.jobs.task_status import TaskStatus
@@ -59,6 +61,12 @@ class _FakeWeb:
         return {"success": False}
 
 
+class _FakeNewsWeb(_FakeWeb):
+    def search_news(self, **kwargs):
+        self.queries.append(kwargs["query"])
+        return {"success": False}
+
+
 def test_round5_current_events_query_does_not_auto_search_github_arxiv_hn():
     collector = ResearchCollector()
     web = _FakeWeb()
@@ -69,6 +77,18 @@ def test_round5_current_events_query_does_not_auto_search_github_arxiv_hn():
     assert not any(q.startswith("site:github.com") for q in web.queries)
     assert not any(q.startswith("site:arxiv.org") for q in web.queries)
     assert not any(q.startswith("site:news.ycombinator.com") for q in web.queries)
+
+
+def test_round5_swiss_current_research_searches_german_french_and_italian_news():
+    collector = ResearchCollector()
+    web = _FakeNewsWeb()
+    collector.web = web
+
+    collector.collect("İsviçre için son 7 gün: Almanca Fransızca İtalyanca kaynakları araştır")
+
+    assert any("Schweiz" in query for query in web.queries)
+    assert any("Suisse" in query for query in web.queries)
+    assert any("Svizzera" in query for query in web.queries)
 
 
 def test_round5_capability_software_research_can_still_use_github():
@@ -114,14 +134,69 @@ def test_round5_insufficient_market_evidence_is_not_promoted_into_a_recommendati
 
 
 def test_round5_market_relevant_current_evidence_is_sufficient():
+    today = datetime.now(timezone.utc).isoformat()
     opportunity = build_selected_opportunity(
         topic="İsviçre için güncel gündem araştır",
         location_or_market="İsviçre için",
         summary="İsviçre hükümeti bugün yeni bir enerji tasarrufu paketi açıkladı; tüm kantonlarda uygulanacak.",
-        sources=[{"url": "https://example.test/isvicre-enerji", "title": "İsviçre enerji paketi"}],
+        sources=[
+            {"url": "https://srf.ch/news/isvicre-enerji", "title": "İsviçre enerji paketi", "published_at": today},
+            {"url": "https://rts.ch/info/isvicre-enerji", "title": "Paquet énergétique suisse", "published_at": today},
+        ],
     )
     assert opportunity.sufficient is True
     assert opportunity.freshness_status == "CURRENT"
+
+
+def test_round5_current_summary_without_dated_sources_fails_closed_before_media_spend():
+    opportunity = build_selected_opportunity(
+        topic="İsviçre için son 7 günün gündemini araştır",
+        location_or_market="İsviçre için",
+        summary="İsviçre'de bugün konuşulan önemli bir enerji gelişmesi var.",
+        sources=[
+            {"url": "https://srf.ch/news/example", "title": "Undated result"},
+            {"url": "https://rts.ch/info/example", "title": "Undated result"},
+        ],
+    )
+
+    assert opportunity.sufficient is False
+    assert opportunity.freshness_status == "INSUFFICIENT_EVIDENCE"
+    assert "son 7 gün" in opportunity.reason
+    assert "ücretli medya üretimi başlatılmadı" in opportunity.reason
+
+
+def test_round5_explicit_three_language_request_requires_all_three_languages():
+    today = datetime.now(timezone.utc).isoformat()
+    opportunity = build_selected_opportunity(
+        topic="İsviçre son 7 gün: Almanca, Fransızca ve İtalyanca kaynakları araştır",
+        location_or_market="İsviçre",
+        summary="İsviçre'de bugün doğrulanan önemli bir federal karar açıklandı.",
+        sources=[
+            {"url": "https://srf.ch/news/a", "title": "Schweizer Entscheid", "published_at": today, "source_language": "de"},
+            {"url": "https://rts.ch/info/b", "title": "Décision suisse", "published_at": today, "source_language": "fr"},
+        ],
+    )
+
+    assert opportunity.sufficient is False
+    assert "it" in opportunity.reason
+
+
+def test_round5_three_language_request_passes_with_three_dated_swiss_sources():
+    today = datetime.now(timezone.utc).isoformat()
+    opportunity = build_selected_opportunity(
+        topic="İsviçre son 7 gün: Almanca, Fransızca ve İtalyanca kaynakları araştır",
+        location_or_market="İsviçre",
+        summary="İsviçre'de bugün doğrulanan önemli bir federal karar açıklandı.",
+        sources=[
+            {"url": "https://srf.ch/news/a", "title": "Schweizer Entscheid", "published_at": today, "source_language": "de"},
+            {"url": "https://rts.ch/info/b", "title": "Décision suisse", "published_at": today, "source_language": "fr"},
+            {"url": "https://rsi.ch/info/c", "title": "Decisione svizzera", "published_at": today, "source_language": "it"},
+        ],
+    )
+
+    assert opportunity.sufficient is True
+    assert opportunity.freshness_status == "CURRENT"
+    assert len(opportunity.supporting_evidence) == 3
 
 
 # --- PROBLEM B: media->research data dependency ---------------------------------

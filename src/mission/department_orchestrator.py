@@ -21,6 +21,11 @@ from src.mission.department_adapters import (
     search_target_repositories,
 )
 from src.mission.models import Mission, MissionStatus, MissionType
+from src.mission.completion import (
+    has_current_information_intent,
+    has_explicit_research_intent,
+    has_youtube_production_intent,
+)
 from src.mission.target_resolver import (
     Target, TargetKind, TargetResolver, has_acquisition_signal, target_matches_repo,
 )
@@ -431,7 +436,10 @@ def _narrow_pure_generation_youtube(
         # Açık bir "yalnızca üret" sinyali yok -- eski davranış AYNEN korunur.
         return bundle
     removable = {"github", "browser"}
-    if persisted_production or not any(cue in lowered_text for cue in _AUDIENCE_RESEARCH_CUES):
+    if (
+        not has_explicit_research_intent(lowered_text)
+        and (persisted_production or not any(cue in lowered_text for cue in _AUDIENCE_RESEARCH_CUES))
+    ):
         removable.add("research")
     return [name for name in bundle if name not in removable]
 
@@ -709,7 +717,10 @@ class DepartmentOrchestrator:
             and "research" in mission.departments
             and "media" in mission.departments
             and _media_needs_topic_research((mission.goal or mission.title).casefold())
-            and not _EXPLICIT_MEDIA_TOPIC_PATTERN.search(mission.goal or mission.title)
+            and (
+                has_current_information_intent(mission.goal or mission.title)
+                or not _EXPLICIT_MEDIA_TOPIC_PATTERN.search(mission.goal or mission.title)
+            )
         )
         # Handlers need the complete original request. GoalSpec.goal is the
         # leading semantic clause; its context/constraints must not erase
@@ -832,7 +843,6 @@ class DepartmentOrchestrator:
 
             if department_name == "media":
                 from src.media.renderer import has_production_media_capability
-                from src.mission.completion import has_youtube_production_intent
                 if has_youtube_production_intent(source_text):
                     metadata["artifact_recovery_available"] = True
                 if has_production_media_capability(source_text):

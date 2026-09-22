@@ -50,3 +50,30 @@ class TestMediaAgentExecute:
         assert captured["topic"] == "Bitcoin neden düştü"
         assert captured["duration_seconds"] == 60
         assert captured["preferred_provider"] == "ollama"
+
+    def test_plan_only_command_does_not_enable_artifact_and_preserves_full_request(self, monkeypatch):
+        captured = {}
+
+        def fake_plan(
+            self, topic, duration_seconds=60, preferred_provider=None,
+            produce_artifact=False, request_text=None,
+        ):
+            captured.update(
+                topic=topic,
+                produce_artifact=produce_artifact,
+                request_text=request_text,
+            )
+            return "SENARYO\nx\n\nSAHNELER\nx"
+
+        from src.media.manager import MediaManager
+        monkeypatch.setattr(MediaManager, "plan", fake_plan)
+
+        command = (
+            "YouTube için güncel trendleri araştır, en iyi 3 video fikrini ve "
+            "başlıklarını hazırla; video üretim planı oluştur fakat yayınlama."
+        )
+        agent = MediaAgent()
+        agent.execute(Task(agent="media", action="dispatch", target=command))
+
+        assert captured["produce_artifact"] is False
+        assert captured["request_text"] == command

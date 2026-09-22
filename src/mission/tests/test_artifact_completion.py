@@ -99,6 +99,26 @@ def test_g_research_does_not_require_video():
     assert evaluate_goal_completion(mission).satisfied
 
 
+def test_current_youtube_plan_requires_research_and_plan_but_not_video():
+    title = (
+        "YouTube için güncel trendleri araştır, en iyi 3 video fikrini ve "
+        "başlıklarını hazırla; video üretim planı oluştur fakat yayınlama."
+    )
+    research = _completed_task("research", metadata={"report": {
+        "sufficient": True,
+        "supporting_evidence": [{"url": "https://example.test/current"}],
+    }})
+    media = _completed_task("media", metadata={"youtube_content_plan": True})
+    mission = _mission(title, [research, media], ["research", "media", "automation"])
+
+    requirement_names = {item.name for item in mission.completion_requirements}
+    assert "video" not in requirement_names
+    assert requirement_names == {
+        "youtube_opportunity_or_content_plan", "current_research_grounding", "publish_not_used",
+    }
+    assert evaluate_goal_completion(mission).satisfied
+
+
 def test_h_explicit_repo_evaluation_requires_planned_evidence():
     tasks = [_completed_task(name) for name in ("research", "evaluation", "sandbox", "integration")]
     tasks[1].metadata["report"] = {"candidates": []}

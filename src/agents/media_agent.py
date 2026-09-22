@@ -108,6 +108,8 @@ class MediaAgent(BaseAgent):
             "duration_seconds": duration,
             "preferred_provider": preferred_provider,
         }
+        if "request_text" in inspect.signature(self.manager.plan).parameters:
+            plan_kwargs["request_text"] = command
         if produce_artifact and "produce_artifact" in inspect.signature(self.manager.plan).parameters:
             plan_kwargs["produce_artifact"] = True
         if "stage_sink" in inspect.signature(self.manager.plan).parameters:

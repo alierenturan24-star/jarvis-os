@@ -5,6 +5,7 @@ from src.planner.task import Task
 from src.research.local_code_manager import LocalCodeManager
 from src.research.local_code_search import is_local_code_query
 from src.research.manager import ResearchManager
+from src.research.manager import topic_wants_current_information
 from src.research.opportunity import build_selected_opportunity
 
 
@@ -85,7 +86,7 @@ class ResearchAgent(BaseAgent):
                 "güncelle",
                 "yeniden araştır",
             ]
-        )
+        ) or topic_wants_current_information(query)
 
         # Sprint 35: AI Strategy Engine'in seçtiği provider'ı (varsa,
         # DepartmentOrchestrator.create_tasks -> task.metadata) mevcut

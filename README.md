@@ -49,6 +49,7 @@ Komut satırında `çık` / `exit` ile kapatılır, `durum` ile çalışma zaman
 
 - Paneldeki görev kutusu gerçek `/api/command` hattına bağlıdır; görevler planner ve ilgili worker'a yönlenir.
 - YouTube hattı trend/konu araştırması, senaryo, başlık/açıklama, ses, altyazı, yerel MP4 render ve kalite kontrolü yapabilir. Kaynak veya trend verisi yoksa sonuç uydurmaz.
+- `GEMINI_API_KEY` tanımlıysa Gemini'nin görsel modeli sahne ve kapak görsellerinde kullanılabilir. Görsel üretimi ücretli çağrı sayıldığı için panel onayı olmadan API çağrısı yapılmaz.
 - YouTube hesabı resmi Google OAuth ile ayrıca bağlanmalıdır. Yayın otomatik değildir; kalite sonrasında insan onayı gerekir.
 - Finans hattı gerçek piyasa verisiyle araştırma, backtest ve paper pozisyon çalıştırır. Gerçek para emri kod yolu kapalıdır.
 - Claude Code yalnız kurulu ve giriş yapılmışsa kod görevlerinde; izin listesi, süre sınırı ve güvenlik politikası içinde kullanılabilir.

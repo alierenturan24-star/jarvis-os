@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 
 from src.knowledge.knowledge_base import KnowledgeBase
@@ -7,6 +8,7 @@ from src.media.renderer import LocalVideoRenderer, find_ffmpeg, has_production_m
 from src.media.learning import YouTubeLearningAgent
 from src.media.production import GeneralProductionBuilder
 from src.providers.router import ModelRouter
+from src.research.manager import topic_wants_current_information
 from src.utils.language_policy import TURKISH_OUTPUT_POLICY
 from src.utils.llm_utils import is_llm_failure
 
@@ -82,6 +84,7 @@ class MediaManager:
         stage_sink: dict | None = None,
         research_opportunity: dict | None = None,
         standing_permission: bool = False,
+        request_text: str | None = None,
     ) -> str:
         topic = topic.strip()
         self.last_capability_gap = None
@@ -113,6 +116,18 @@ class MediaManager:
         # departmanlar bağımsız olduğu için o turun SONUCUNU burada
         # DOĞRUDAN okuyamayız, bkz. Sprint 39 mimari notu).
         prior = self.knowledge.find_research(topic)
+        full_request = (request_text or topic).strip()
+        if (
+            topic_wants_current_information(full_request)
+            and research_opportunity is None
+            and prior is None
+        ):
+            if stage_sink is not None:
+                stage_sink["last_stage"] = "research_gap_stop"
+            return (
+                "RESEARCH_GAP\nGüncel/trend bilgisi istendi ancak doğrulanmış araştırma kanıtı yok. "
+                "Eski bir yılı veya uydurma bir trendi güncelmiş gibi sunmamak için içerik planı hazırlanmadı."
+            )
         # Round 5 repair (real live-mission evidence): an explicitly-passed,
         # ALREADY-SELECTED research opportunity (see
         # MediaAgent.execute()/src.research.opportunity) is authoritative
@@ -149,11 +164,17 @@ class MediaManager:
         )
         learning_plan = self.learning.production_plan(topic)
 
+        request_block = (
+            f"Kullanıcının tam isteği: {full_request}\n"
+            if full_request and full_request != topic else ""
+        )
         prompt = f"""
 Sen JARVIS YouTube İçerik Üretim Departmanı yapımcısısın.
 
 Konu: {topic}
 Hedef süre: {duration_seconds} saniye (YouTube Shorts)
+Bugünün sistem tarihi: {datetime.now().date().isoformat()}
+{request_block}
 
 {context_block}
 
@@ -172,6 +193,10 @@ FORMAT özelliklerinin işe yaradığını öğren ve konuya özgü, özgün bir
 {TURKISH_OUTPUT_POLICY}
 
 Görev: Aşağıdaki 9 başlığın HEPSİNİ, TAM OLARAK bu isimlerle ve bu sırayla üret:
+
+Kullanıcının tam isteği birden fazla video fikri/başlığı istiyorsa, önce
+"VİDEO FİKİRLERİ VE BAŞLIKLARI" bölümü altında istenen sayıda özgün seçenek ver;
+ardından aşağıdaki 9 bölümde en güçlü seçenek için uygulanabilir üretim planını yaz.
 
 SENARYO
 ({duration_seconds} saniyelik doğal konuşma dilinde anlatım metni.)
@@ -202,6 +227,8 @@ ETİKETLER
 
 Kurallar:
 - Uydurma istatistik/rakam/tarih kullanma, emin değilsen belirt.
+- Güncel/trend iddialarını yalnızca yukarıdaki araştırma bağlamı destekliyorsa yaz;
+  eski bir yılı güncelmiş gibi sunma.
 - Kesin yatırım tavsiyesi verme.
 - Var olmayan bir aracı kurulu/kullanılabilirmiş gibi anlatma.
 """

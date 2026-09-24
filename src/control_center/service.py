@@ -21,7 +21,10 @@ from src.core.runtime import JarvisRuntime
 from src.media.channel_store import ChannelScopedStore
 from src.media.learning import YouTubeLearningAgent
 from src.media.quality import validate_media_goal_artifact
-from src.media.renderer import find_ffmpeg, find_ffprobe
+from src.media.renderer import (
+    ffmpeg_has_flite, find_edge_tts, find_ffmpeg, find_ffprobe,
+    narration_capability_available,
+)
 from src.providers.execution_history import ProviderExecutionHistory
 from src.research_loop.autonomous import AutonomousResearchService
 from src.capabilities.capability_registry import CapabilityRegistry
@@ -465,8 +468,10 @@ class ControlCenterService:
             item.get("connection_status") == "CONNECTED" for item in accounts
         )
         ffmpeg_ready = bool(find_ffmpeg() and find_ffprobe())
-        speech_engine = "edge-tts" if shutil.which("edge-tts") else (
-            "windows-tts" if shutil.which("powershell.exe") else ""
+        speech_engine = "edge-tts" if find_edge_tts() else (
+            "windows-tts" if shutil.which("powershell.exe") or shutil.which("powershell") else (
+                "ffmpeg-flite" if ffmpeg_has_flite() else ""
+            )
         )
         capabilities = [
             {"id": "command_pipeline", "label": "Gerçek görev hattı", "ready": True,
@@ -477,9 +482,9 @@ class ControlCenterService:
             {"id": "video_render", "label": "Video düzenleme / MP4", "ready": ffmpeg_ready,
              "mode": "YEREL FFMPEG" if ffmpeg_ready else "FFMPEG BULUNAMADI",
              "detail": "Render, altyazı, ses ve kalite kapıları yerel makinede çalışır."},
-            {"id": "speech", "label": "Seslendirme", "ready": bool(speech_engine),
+            {"id": "speech", "label": "Seslendirme", "ready": narration_capability_available(),
              "mode": speech_engine or "SES MOTORU BULUNAMADI",
-             "detail": "edge-tts tercih edilir; Windows TTS güvenli yerel yedektir."},
+             "detail": "edge-tts tercih edilir; Windows TTS ve yerel FFmpeg güvenli yedeklerdir."},
             {"id": "youtube_account", "label": "YouTube hesabı", "ready": connected_youtube_accounts > 0,
              "mode": f"{connected_youtube_accounts} BAĞLI HESAP" if connected_youtube_accounts else "BAĞLANTI GEREKLİ",
              "detail": "Yayın otomatik değildir; kalite sonrası insan onayı zorunludur."},

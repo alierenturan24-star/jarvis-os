@@ -223,6 +223,15 @@ class ResearchCollector:
                 ))
             else:
                 searches.append({"search_channel": "NEWS", "query": topic, "news": True})
+        if "short" in (topic or "").casefold() and hasattr(self.web, "search_videos"):
+            video_query = (
+                "Schweiz aktuelle Nachrichten Wissen Unterhaltung Shorts deutsch"
+                if _is_swiss_topic(topic) else topic
+            )
+            searches.append({
+                "search_channel": "VIDEO_FORMAT_DE", "query": video_query, "video": True,
+                "source_language": "de", "reference_role": "format_only",
+            })
         searches.append({"search_channel": "GENERAL_WEB", "query": topic})
         if _wants_tooling_sources(topic, preferences):
             searches.append({"search_channel": "GITHUB", "query": f"site:github.com {topic}"})
@@ -241,7 +250,11 @@ class ResearchCollector:
             remaining = None if deadline is None else deadline - time.monotonic()
             if remaining is not None and remaining <= 0:
                 raise TimeoutError("RESEARCH_CYCLE_MAX_RUNTIME_EXCEEDED")
-            search_method = self.web.search_news if search.get("news") else self.web.search
+            search_method = (
+                self.web.search_videos if search.get("video")
+                else self.web.search_news if search.get("news")
+                else self.web.search
+            )
             response = search_method(
                 query=search["query"], max_results=max_results_per_source,
                 timeout_seconds=remaining if remaining is not None else 15.0,
@@ -273,6 +286,10 @@ class ResearchCollector:
                     ).strip(),
                     "publisher": str(item.get("publisher") or item.get("source") or "").strip(),
                     "source_language": str(search.get("source_language") or item.get("source_language") or "").strip(),
+                    "reference_role": str(search.get("reference_role") or item.get("reference_role") or "factual"),
+                    "duration": str(item.get("duration") or "").strip(),
+                    "statistics": item.get("statistics") if isinstance(item.get("statistics"), dict) else {},
+                    "provider": str(item.get("provider") or "").strip(),
                     **quality,
                     "source_quality_reason": reason,
                     "source_preference_match": preference_match,

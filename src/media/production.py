@@ -13,7 +13,9 @@ from pathlib import Path
 from src.media.capability_model import IMAGE_TO_VIDEO, MediaModelProfile, SceneProvenance, TEXT_TO_IMAGE
 from src.media.provider_selection import rank_available_providers
 from src.media.quality import REQUIRED_SECTIONS
-from src.media.renderer import _write_sapi_wav, find_ffmpeg, find_ffprobe
+from src.media.renderer import (
+    find_ffmpeg, find_ffprobe, narration_capability_available, write_narration_audio,
+)
 from src.providers.execution_history import ProviderExecutionHistory
 from src.security.action_policy import ActionPolicy
 
@@ -268,7 +270,11 @@ class GeneralProductionBuilder:
 
     @property
     def available(self) -> bool:
-        return bool(find_ffmpeg() and self._source_pairs())
+        # A fixed authored demo storyboard is no longer required.  The
+        # normal FREE_ONLY route obtains licensed Commons images per scene;
+        # this property reports the local render/audio prerequisites rather
+        # than the optional legacy asset pair.
+        return bool(find_ffmpeg() and narration_capability_available())
 
     def _source_pairs(self) -> list[tuple[str, Path, Path]]:
         pairs = []
@@ -323,7 +329,7 @@ class GeneralProductionBuilder:
               standing_permission: bool = False,
               free_only: bool = False) -> PackageBuildResult:
         video_render_available = bool(find_ffmpeg())
-        narration_available = bool(shutil.which("edge-tts") or shutil.which("powershell.exe") or shutil.which("powershell"))
+        narration_available = narration_capability_available()
         matching = self._matching_visual_assets(allow_legacy_authored_series)
         required, available, missing = self._capability_accounting(
             visual_available=bool(matching), narration_available=narration_available,
@@ -392,22 +398,12 @@ class GeneralProductionBuilder:
             )
 
             script = parsed.script
-            audio = root / "narration.wav"
-            narration_provider = "Windows System.Speech"
             voice = _resolve_tts_voice(channel_language)
-            edge_tts = shutil.which("edge-tts")
             if stage_sink is not None:
                 stage_sink["last_stage"] = "audio_narration"
-            if edge_tts:
-                audio = root / "narration.mp3"
-                spoken = subprocess.run(
-                    [edge_tts, "--voice", voice, "--text", script,
-                     "--write-media", str(audio)], capture_output=True, text=True, timeout=60, check=False,
-                )
-                audio_ok = spoken.returncode == 0 and audio.is_file() and audio.stat().st_size > 1024
-                narration_provider = f"edge-tts {voice}"
-            else:
-                audio_ok = _write_sapi_wav(audio, script)
+            audio, narration_provider, audio_ok = write_narration_audio(
+                root, script, channel_language, voice,
+            )
             if not audio_ok:
                 return PackageBuildResult(False, error="CAPABILITY_GAP: real narration generation unavailable",
                                           production_id=production_id)
@@ -595,22 +591,12 @@ class GeneralProductionBuilder:
         self._checkpoint(checkpoint, production_id, "SCENES_AND_MOTION", "completed")
 
         script = parsed.script
-        audio = root / "narration.wav"
-        narration_provider = "Windows System.Speech"
         voice = _resolve_tts_voice(channel_language)
-        edge_tts = shutil.which("edge-tts")
         if stage_sink is not None:
             stage_sink["last_stage"] = "audio_narration"
-        if edge_tts:
-            audio = root / "narration.mp3"
-            spoken = subprocess.run(
-                [edge_tts, "--voice", voice, "--text", script, "--write-media", str(audio)],
-                capture_output=True, text=True, timeout=60, check=False,
-            )
-            audio_ok = spoken.returncode == 0 and audio.is_file() and audio.stat().st_size > 1024
-            narration_provider = f"edge-tts {voice}"
-        else:
-            audio_ok = _write_sapi_wav(audio, script)
+        audio, narration_provider, audio_ok = write_narration_audio(
+            root, script, channel_language, voice,
+        )
         if not audio_ok:
             return PackageBuildResult(False, error="CAPABILITY_GAP: real narration generation unavailable",
                                        production_id=production_id, required_capabilities=required,

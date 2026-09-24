@@ -96,8 +96,25 @@ class KnowledgeBase:
             "report_path": report_path,
             "source_count": source_count,
             "sources": [
-                {"source": str(item.get("source", "")), "title": str(item.get("title", "")),
-                 "url": str(item.get("url", ""))}
+                {
+                    "source": str(item.get("source", "")),
+                    "title": str(item.get("title", "")),
+                    "url": str(item.get("url", "")),
+                    "canonical_url": str(item.get("canonical_url", "")),
+                    "summary": str(item.get("summary", "")),
+                    "search_channel": str(item.get("search_channel", "")),
+                    "published_at": str(item.get("published_at", "")),
+                    "publisher": str(item.get("publisher", "")),
+                    "source_language": str(item.get("source_language", "")),
+                    "source_identity": str(item.get("source_identity", "")),
+                    "source_type": str(item.get("source_type", "")),
+                    "verification_state": str(item.get("verification_state", "")),
+                    "rejected": item.get("rejected") is True,
+                    "reference_role": str(item.get("reference_role", "factual")),
+                    "duration": str(item.get("duration", "")),
+                    "statistics": item.get("statistics") if isinstance(item.get("statistics"), dict) else {},
+                    "provider": str(item.get("provider", "")),
+                }
                 for item in (sources or []) if str(item.get("url", "")).strip()
             ],
             "provenance": provenance,

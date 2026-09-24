@@ -173,6 +173,7 @@ class SelectedOpportunity:
     location_or_market: str
     why_current: str
     supporting_evidence: tuple[dict, ...] = field(default_factory=tuple)
+    format_references: tuple[dict, ...] = field(default_factory=tuple)
     freshness_status: str = "UNVERIFIED"  # CURRENT | STALE | UNVERIFIED | INSUFFICIENT_EVIDENCE
     freshness_window_days: int = 0
     sufficient: bool = False
@@ -184,6 +185,7 @@ class SelectedOpportunity:
             "location_or_market": self.location_or_market,
             "why_current": self.why_current,
             "supporting_evidence": list(self.supporting_evidence),
+            "format_references": list(self.format_references),
             "freshness_status": self.freshness_status,
             "freshness_window_days": self.freshness_window_days,
             "sufficient": self.sufficient,
@@ -205,6 +207,20 @@ def build_selected_opportunity(
     ``sufficient=False`` with a truthful ``reason`` instead of promoting
     unrelated content into a "selected opportunity"."""
 
+    format_references = tuple(
+        {
+            "url": str(item.get("canonical_url") or item.get("url") or ""),
+            "title": str(item.get("title", "")),
+            "publisher": str(item.get("publisher", "")),
+            "provider": str(item.get("provider", "")),
+            "duration": str(item.get("duration", "")),
+            "statistics": item.get("statistics") if isinstance(item.get("statistics"), dict) else {},
+        }
+        for item in (sources or [])
+        if item.get("reference_role") == "format_only"
+        and str(item.get("canonical_url") or item.get("url") or "").strip()
+        and item.get("rejected") is not True
+    )
     evidence = tuple(
         {
             "url": str(item.get("canonical_url") or item.get("url") or ""),
@@ -214,14 +230,17 @@ def build_selected_opportunity(
             "publisher": str(item.get("publisher") or ""),
         }
         for item in (sources or [])
-        if str(item.get("canonical_url") or item.get("url") or "").strip() and item.get("rejected") is not True
+        if item.get("reference_role") != "format_only"
+        and str(item.get("canonical_url") or item.get("url") or "").strip()
+        and item.get("rejected") is not True
     )
 
     summary = summary or ""
     if is_llm_failure(summary) or not summary.strip():
         return SelectedOpportunity(
             selected_topic="", location_or_market=location_or_market, why_current="",
-            supporting_evidence=evidence, freshness_status="INSUFFICIENT_EVIDENCE",
+            supporting_evidence=evidence, format_references=format_references,
+            freshness_status="INSUFFICIENT_EVIDENCE",
             sufficient=False, reason="araştırma sonucu üretilemedi veya boş",
         )
 
@@ -230,7 +249,8 @@ def build_selected_opportunity(
     if not _covers_market_context(location_or_market, summary):
         return SelectedOpportunity(
             selected_topic=excerpt, location_or_market=location_or_market, why_current="",
-            supporting_evidence=evidence, freshness_status="INSUFFICIENT_EVIDENCE", sufficient=False,
+            supporting_evidence=evidence, format_references=format_references,
+            freshness_status="INSUFFICIENT_EVIDENCE", sufficient=False,
             reason=(
                 f"araştırma sonucu '{location_or_market}' konum/pazarına dair somut kanıt içermiyor "
                 "(alakasız bir konuya kaymış olabilir)"
@@ -243,14 +263,16 @@ def build_selected_opportunity(
     if wants_current and stale:
         return SelectedOpportunity(
             selected_topic=excerpt, location_or_market=location_or_market, why_current=stale,
-            supporting_evidence=evidence, freshness_status="STALE", sufficient=False, reason=stale,
+            supporting_evidence=evidence, format_references=format_references,
+            freshness_status="STALE", sufficient=False, reason=stale,
         )
 
     if not evidence:
         return SelectedOpportunity(
             selected_topic=excerpt, location_or_market=location_or_market,
             why_current="güncellik doğrulanamadı" if wants_current else "",
-            supporting_evidence=evidence, freshness_status="INSUFFICIENT_EVIDENCE", sufficient=False,
+            supporting_evidence=evidence, format_references=format_references,
+            freshness_status="INSUFFICIENT_EVIDENCE", sufficient=False,
             reason="hiçbir kaynak/referans toplanamadı",
         )
 
@@ -271,6 +293,7 @@ def build_selected_opportunity(
                 selected_topic=excerpt, location_or_market=location_or_market,
                 why_current="güncellik tarihli kaynaklarla doğrulanamadı",
                 supporting_evidence=dated_evidence,
+                format_references=format_references,
                 freshness_status="INSUFFICIENT_EVIDENCE", sufficient=False,
                 reason=(
                     f"son {window_days} gün içinde yayınlanmış en az {minimum_sources} bağımsız, "
@@ -288,7 +311,7 @@ def build_selected_opportunity(
 
     return SelectedOpportunity(
         selected_topic=excerpt, location_or_market=location_or_market, why_current=why_current,
-        supporting_evidence=evidence, freshness_status=freshness,
+        supporting_evidence=evidence, format_references=format_references, freshness_status=freshness,
         freshness_window_days=window_days if wants_current else 0, sufficient=True,
         reason="",
     )

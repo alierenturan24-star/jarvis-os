@@ -139,11 +139,27 @@ class MediaManager:
         # actual query, so the KnowledgeBase containment-match never hit),
         # which is exactly why the explicit data dependency exists now.
         if research_opportunity is not None:
+            format_rows = []
+            for ref in research_opportunity.get("format_references") or []:
+                format_rows.append(
+                    "- " + str(ref.get("title") or "Başlıksız video")[:180]
+                    + f" | yayıncı: {ref.get('publisher') or ref.get('provider') or 'belirtilmedi'}"
+                    + f" | süre: {ref.get('duration') or 'belirtilmedi'}"
+                    + f" | etkileşim: {ref.get('statistics') or {}}"
+                    + f" | URL: {ref.get('url') or ''}"
+                )
+            format_context = (
+                "\nFormat referansları (YALNIZ soyut hook/tempo/hikâye/başlık kalıbı için; "
+                "başlık, metin, kapak, ses ve görüntü kopyalanamaz):\n"
+                + "\n".join(format_rows[:3]) + "\n"
+                if format_rows else ""
+            )
             context_block = (
                 "Araştırma tarafından SEÇİLMİŞ, güncel bir içerik fırsatı VAR "
                 f"(konum/pazar: {research_opportunity.get('location_or_market', '')}, "
                 f"güncellik: {research_opportunity.get('why_current', '')}):\n"
                 f"{str(research_opportunity.get('selected_topic', ''))[:800]}\n"
+                f"{format_context}"
             )
         elif prior is not None:
             context_block = (
@@ -297,6 +313,8 @@ Kurallar:
                     "location_or_market": research_opportunity.get("location_or_market"),
                     "freshness_status": research_opportunity.get("freshness_status"),
                     "source_count": len(research_opportunity.get("supporting_evidence") or []),
+                    "selected_topic": str(research_opportunity.get("selected_topic") or "")[:500],
+                    "format_reference_count": len(research_opportunity.get("format_references") or []),
                 }
             else:
                 research_grounded = prior is not None

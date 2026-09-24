@@ -329,7 +329,15 @@ def _find_production_package(topic: str, asset_root: str | Path = "workspace/ass
 
 
 def has_production_media_capability(topic: str) -> bool:
-    """Whether a goal-matching, non-placeholder production package exists."""
+    """Whether a real local/free production route can be attempted.
+
+    A pre-authored package is not required: FREE_ONLY production can acquire
+    license-filtered Commons stills at runtime, create local music/subtitles/
+    thumbnail, narrate locally, then render with FFmpeg.  Runtime network or
+    evidence failures remain fail-closed in ``GeneralProductionBuilder``;
+    this preflight must not mislabel the already-wired route as a missing
+    capability and launch unrelated capability discovery.
+    """
     package = _find_production_package(topic)
     if package is None:
         source_root = Path("workspace/assets/media/channel-default-sources")
@@ -337,7 +345,16 @@ def has_production_media_capability(topic: str) -> bool:
             (source_root / f"{story.name.removesuffix('-storyboard.png')}-running-poses.png").is_file()
             for story in source_root.glob("*-storyboard.png")
         )
-        return bool(find_ffmpeg() and paired_source and (shutil.which("edge-tts") or shutil.which("powershell.exe")))
+        local_voice = shutil.which("edge-tts") or shutil.which("powershell.exe") or shutil.which("powershell")
+        if find_ffmpeg() and local_voice:
+            try:
+                from src.providers.wikimedia_media_provider import WikimediaMediaProvider
+                free_visual_route = any(profile.availability for profile in WikimediaMediaProvider().profiles())
+            except Exception:
+                free_visual_route = False
+            if free_visual_route:
+                return True
+        return bool(find_ffmpeg() and paired_source and local_voice)
     if find_ffmpeg() is None:
         return False
     try:
@@ -387,4 +404,3 @@ def _write_sapi_wav(path: Path, narration: str) -> bool:
         return completed.returncode == 0 and path.is_file() and path.stat().st_size > 1024
     except OSError:
         return False
-

@@ -841,6 +841,18 @@ def _continue_capability_gaps(
     """
     exact_gaps = _exact_runtime_gaps(mission, plan)
     report.exact_capability_gaps.extend(exact_gaps)
+    # A downstream media task can be blocked because the upstream research
+    # evidence gate intentionally rejected undated/stale sources.  That is a
+    # data gap, not a missing encoder/generator capability.  Do not turn it
+    # into unrelated GitHub/C2PA discovery even when an older mission
+    # preflight also left a coarse ``media_artifact`` gap behind.
+    evidence_gap_task = next((
+        task for task in plan.all_tasks()
+        if str((task.metadata or {}).get("last_stage") or "") == "research_gap_stop"
+        or "research_gap" in _failure_text(task).casefold()
+    ), None)
+    if evidence_gap_task is not None:
+        return
     if not mission.capability_gaps and not exact_gaps:
         return
 
@@ -1143,6 +1155,17 @@ def recover_mission(
             and task.handler is not None
         ), None)
         if requirement.kind == "artifact" and producer is not None:
+            # One bounded retry starts at the real failed checkpoint.  When
+            # media stopped at the research gate, refresh the already-wired
+            # research task first; rerunning media against the same rejected
+            # report cannot change the outcome.
+            if str(producer.metadata.get("last_stage") or "") == "research_gap_stop":
+                research_task = producer.metadata.get("research_task")
+                if isinstance(research_task, Task) and research_task.handler is not None:
+                    research_task.status = TaskStatus.PENDING
+                    research_task.error = ""
+                    research_task.result = None
+                    job_manager.run_task(research_task)
             producer.status = TaskStatus.PENDING
             producer.error = ""
             producer.result = None

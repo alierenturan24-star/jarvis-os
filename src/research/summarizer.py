@@ -17,7 +17,10 @@ class Summarizer:
         if not results:
             return "Özetlenecek güvenilir araştırma sonucu bulunamadı."
 
-        selected = compact_results(results, limit=6)
+        # Swiss multilingual current-event collection is ordered DE/FR/IT
+        # first. Nine rows preserve at least one full primary pass across
+        # all three languages instead of truncating the Italian evidence.
+        selected = compact_results(results, limit=9)
         source_blocks = []
         for index, result in enumerate(selected, start=1):
             source_blocks.append(
@@ -25,6 +28,9 @@ class Summarizer:
                 f"Platform: {result.get('source', 'Web')}\n"
                 f"Başlık: {result.get('title', '')}\n"
                 f"Adres: {result.get('url', '')}\n"
+                f"Yayın tarihi: {result.get('published_at', '')}\n"
+                f"Kaynak dili: {result.get('source_language', '')}\n"
+                f"Yayıncı: {result.get('publisher', '')}\n"
                 f"Bilgi: {result.get('summary', '')}"
             )
 
@@ -42,6 +48,10 @@ Toplanan sonuçlar:
 
 Görev:
 - Yalnızca verilen kaynaklara dayan.
+- Güncel bir istekse genel ana sayfayı güncellik kanıtı sayma; yalnızca açık yayın tarihli makaleleri kullan.
+- İstenen kaynak dillerinin her birini ayrı ayrı kontrol et; eksik dil veya tarih varsa açıkça belirt.
+- İlk satırda "SEÇİLEN KONU:" ile tek, somut ve kaynaklarla desteklenen konuyu yaz.
+- Seçimi destekleyen makalelerin başlık, yayın tarihi, kaynak dili ve tam adresini göster; tarih/URL uydurma.
 - Ortak ve önemli noktaları birleştir.
 - Çelişki veya belirsizlik varsa açıkça belirt.
 - Kullanıcı açısından somut faydayı değerlendir.
@@ -61,4 +71,4 @@ Araştırma raporu:
             prompt=prompt, task_type=TASK_LONG_RESEARCH, preferred_provider=preferred_provider,
         )
         answer = self.last_route.output
-        return source_fallback(topic, selected, limit=6) if is_llm_failure(answer) else answer
+        return source_fallback(topic, selected, limit=9) if is_llm_failure(answer) else answer

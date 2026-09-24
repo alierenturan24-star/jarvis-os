@@ -214,9 +214,12 @@ class ResearchCollector:
         if topic_wants_current_information(topic) and hasattr(self.web, "search_news"):
             if _is_swiss_topic(topic):
                 searches.extend((
-                    {"search_channel": "NEWS_DE", "query": "Schweiz aktuelle Nachrichten letzte 7 Tage", "news": True, "source_language": "de"},
-                    {"search_channel": "NEWS_FR", "query": "Suisse actualités des sept derniers jours", "news": True, "source_language": "fr"},
-                    {"search_channel": "NEWS_IT", "query": "Svizzera ultime notizie degli ultimi sette giorni", "news": True, "source_language": "it"},
+                    {"search_channel": "NEWS_DE_SRF", "query": "site:srf.ch/news Schweiz aktuelle Nachrichten letzte 7 Tage", "news": True, "source_language": "de"},
+                    {"search_channel": "NEWS_FR_RTS", "query": "site:rts.ch/info Suisse actualités des sept derniers jours", "news": True, "source_language": "fr"},
+                    {"search_channel": "NEWS_IT_RSI", "query": "site:rsi.ch/info Svizzera ultime notizie degli ultimi sette giorni", "news": True, "source_language": "it"},
+                    {"search_channel": "NEWS_DE_NZZ", "query": "site:nzz.ch Schweiz aktuelle Nachrichten letzte 7 Tage", "news": True, "source_language": "de"},
+                    {"search_channel": "NEWS_FR_LETEMPS", "query": "site:letemps.ch Suisse actualités des sept derniers jours", "news": True, "source_language": "fr"},
+                    {"search_channel": "NEWS_IT_CDT", "query": "site:cdt.ch Svizzera ultime notizie degli ultimi sette giorni", "news": True, "source_language": "it"},
                 ))
             else:
                 searches.append({"search_channel": "NEWS", "query": topic, "news": True})

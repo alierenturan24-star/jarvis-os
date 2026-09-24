@@ -874,6 +874,18 @@ def _recovery_section(mission: Mission) -> str:
     ]
     remaining_items = still_failed_titles + list(getattr(recovery, "remaining_goals", ()))
     failure_reasons = sorted({attempt.failure_class.value for attempt in recovery.attempts})
+    # Non-retryable truthful gates (notably RESEARCH_GAP) produce no provider
+    # ladder attempt by design.  Still name their real blocker instead of
+    # printing "bilinmiyor" merely because no irrelevant provider was tried.
+    if recovery.still_failed_task_ids:
+        from src.mission.failure_classification import FailureClass, classify_failure
+        for task in mission.tasks:
+            if task.id not in recovery.still_failed_task_ids:
+                continue
+            output = str(task.result.output) if task.result is not None else str(task.error or "")
+            failure_class = classify_failure(output)
+            if failure_class is not FailureClass.UNKNOWN and failure_class.value not in failure_reasons:
+                failure_reasons.append(failure_class.value)
     approval_reasons = sorted({
         str(item.get("why") or item.get("need") or "").strip()
         for item in recovery.approval_required

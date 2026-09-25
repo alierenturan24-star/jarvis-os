@@ -647,6 +647,21 @@ class DepartmentOrchestrator:
                 bundle.append(name)
                 enriched_additions.append(name)
 
+        # Live acceptance repair: a compound request can begin with a
+        # research clause ("güncel bir konu bul") and only later ask for
+        # the concrete artifact using a natural inflection such as
+        # "9:16 test videosu oluştur".  ``classify_mission_type`` quite
+        # reasonably labels the leading/overall request RESEARCH, while the
+        # keyword table only contains a few literal phrases ("video üret",
+        # "video hazırla").  The completion layer already has the shared,
+        # tested production-intent parser and correctly requires a video for
+        # this wording.  Reuse that same parser for dispatch so routing can
+        # never require an artifact while omitting the only department that
+        # can produce it.
+        if has_youtube_production_intent(text) and "media" not in bundle:
+            bundle.append("media")
+            enriched_additions.append("media")
+
         if mission_type != MissionType.CODE:
             for name in _required_goal_departments(lowered):
                 if name not in bundle:
@@ -770,7 +785,7 @@ class DepartmentOrchestrator:
         # branch below). Drives the explicit media->research dependency
         # wired after the task-creation loop.
         media_needs_research_grounding = (
-            mission.mission_type in {MissionType.MEDIA, MissionType.YOUTUBE}
+            has_youtube_production_intent(source_text)
             and "research" in mission.departments
             and "media" in mission.departments
             and _media_needs_topic_research(source_text.casefold())

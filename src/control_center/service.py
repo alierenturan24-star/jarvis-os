@@ -302,6 +302,18 @@ class ControlCenterService:
             self._paused = False
         self.activity("COMPLETED", "Control Center START: configured engines may accept work.")
 
+    def run_finance_cycle(self, data: dict[str, Any] | None = None) -> dict[str, Any]:
+        data = data or {}
+        assets = data.get("assets") if isinstance(data.get("assets"), list) else None
+        timeframes = data.get("timeframes") if isinstance(data.get("timeframes"), list) else None
+        risk_fraction = float(data.get("risk_fraction", self.finance.DEFAULT_RISK_FRACTION))
+        self.activity("RESEARCH", "Finance: çoklu varlık strateji testi ve OOS incelemesi başladı.", worker="Finance")
+        result = self.finance.autonomous_paper_cycle(assets, timeframes, risk_fraction=risk_fraction)
+        self.activity("VALIDATION", f"Finance cycle sonucu: {result['status']}; gerçek emir 0.",
+                      worker="Finance", level="success" if result["status"] == "PAPER_POSITION_OPENED" else "warning")
+        self.notify("FINANCE PAPER CYCLE", f"{result['status']} · gerçek para kullanılmadı")
+        return result
+
     def pause(self) -> None:
         self._paused = True
         self.activity("BLOCKED", "Yeni mission kabulü duraklatıldı; çalışan mission zorla kesilmedi.", level="warning")
@@ -1022,6 +1034,8 @@ class ControlCenterService:
                 "engines": persisted["engines"], "approvals": list(reversed(persisted["approvals"][-100:])),
                 "notifications": list(reversed(persisted["notifications"][-50:])), "paper": persisted["paper"],
                 "backtests": list(reversed(persisted["backtests"][-30:])),
+                "finance_cycles": list(reversed(persisted.get("finance_cycles", [])[-30:])),
+                "finance_decisions": list(reversed(persisted.get("finance_decisions", [])[-100:])),
                 "finance_exploration": persisted.get("finance_exploration", {}),
                 "youtube_learning": persisted.get("youtube_learning", {}),
                 "workforce": {"workers": self.workforce.workers(),

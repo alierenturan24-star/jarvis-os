@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import statistics
 import urllib.parse
@@ -119,6 +120,13 @@ class FinancePaperEngine:
 
     FEE_RATE = .001
     SLIPPAGE_RATE = .0005
+    STOP_RATE = .02
+    TARGET_RATE = .04
+    DEFAULT_RISK_FRACTION = .005
+    MAX_RISK_FRACTION = .01
+    MAX_POSITION_NOTIONAL_FRACTION = .20
+    MAX_GROSS_EXPOSURE_FRACTION = .50
+    MAX_OPEN_POSITIONS = 3
 
     def __init__(self, store: ControlCenterStore, market: BinancePublicMarketData | None = None) -> None:
         self.store, self.market, self.policy = store, market or BinancePublicMarketData(), ActionPolicy()
@@ -127,23 +135,15 @@ class FinancePaperEngine:
         bars = bars or self.market.ohlcv(asset)
         if len(bars) < 80:
             raise ValueError("Backtest için en az 80 gerçek OHLCV bar gerekli.")
-        closes, split = [b.close for b in bars], int(len(bars) * .7)
-        trades, position = [], None
-        for i in range(50, len(bars)):
-            fast, slow = sum(closes[i-10:i]) / 10, sum(closes[i-50:i]) / 50
-            prev_fast, prev_slow = sum(closes[i-11:i-1]) / 10, sum(closes[i-51:i-1]) / 50
-            if position is None and prev_fast <= prev_slow and fast > slow:
-                position = (closes[i] * (1 + self.SLIPPAGE_RATE), i)
-            elif position and prev_fast >= prev_slow and fast < slow:
-                entry, opened = position; exit_price = closes[i] * (1 - self.SLIPPAGE_RATE)
-                gross = exit_price / entry - 1; net = gross - 2 * self.FEE_RATE
-                trades.append({"entry_index": opened, "exit_index": i, "return": net, "pnl_percent": net,
-                               "pnl": net, "out_of_sample": opened >= split}); position = None
+        split = int(len(bars) * .7)
+        run = self._run_candidate(self.STRATEGIES[0], bars, split)
+        trades = run.pop("_trades")
         train, oos = [x for x in trades if not x["out_of_sample"]], [x for x in trades if x["out_of_sample"]]
         result = {"id": f"bt-{uuid.uuid4().hex}", "asset": self.market._symbol(asset), "source": "Binance official OHLCV",
                   "strategy": "SMA 10/50 crossover", "regime": self._regime(bars), "sample_bars": len(bars),
                   "train_bars": split, "out_of_sample_bars": len(bars)-split, "fees_rate": self.FEE_RATE,
-                  "slippage_rate": self.SLIPPAGE_RATE, **_metrics(trades), "trades": len(trades),
+                  "slippage_rate": self.SLIPPAGE_RATE, "stop_rate": self.STOP_RATE,
+                  "target_rate": self.TARGET_RATE, **_metrics(trades), "trades": len(trades),
                   "train_metrics": _metrics(train), "out_of_sample_metrics": _metrics(oos), "qualified": False,
                   "label": "BACKTEST — NOT LIVE", "created_at": utc_now()}
         self.store.append("backtests", result)
@@ -238,13 +238,25 @@ class FinancePaperEngine:
             active = self._signal(candidate["id"], bars, index)
             if position is None and active:
                 position = (bars[index].close * (1 + self.SLIPPAGE_RATE), index)
-            elif position is not None and not active:
+                continue
+            elif position is not None:
                 entry, opened = position
-                exit_price = bars[index].close * (1 - self.SLIPPAGE_RATE)
+                stop, target = entry * (1 - self.STOP_RATE), entry * (1 + self.TARGET_RATE)
+                # If a candle touches both levels, use the adverse result. This
+                # is deliberately conservative because intrabar order is unknown.
+                if bars[index].low <= stop:
+                    raw_exit, exit_reason = stop, "STOP"
+                elif bars[index].high >= target:
+                    raw_exit, exit_reason = target, "TARGET"
+                elif not active:
+                    raw_exit, exit_reason = bars[index].close, "SIGNAL_EXIT"
+                else:
+                    continue
+                exit_price = raw_exit * (1 - self.SLIPPAGE_RATE)
                 net = exit_price / entry - 1 - 2 * self.FEE_RATE
                 trades.append({"entry_index": opened, "exit_index": index, "return": net,
                                "pnl_percent": net, "pnl": net, "out_of_sample": opened >= split,
-                               "regime": self._regime_at(bars, opened)})
+                               "regime": self._regime_at(bars, opened), "exit_reason": exit_reason})
                 position = None
         if position is not None:
             entry, opened = position
@@ -252,7 +264,7 @@ class FinancePaperEngine:
             net = exit_price / entry - 1 - 2 * self.FEE_RATE
             trades.append({"entry_index": opened, "exit_index": len(bars) - 1, "return": net,
                            "pnl_percent": net, "pnl": net, "out_of_sample": opened >= split,
-                           "regime": self._regime_at(bars, opened)})
+                           "regime": self._regime_at(bars, opened), "exit_reason": "END_OF_SAMPLE"})
         train = [trade for trade in trades if not trade["out_of_sample"]]
         oos = [trade for trade in trades if trade["out_of_sample"]]
         regimes = sorted({self._regime_at(bars, i) for i in range(max(50, warmup), len(bars))})
@@ -472,8 +484,104 @@ class FinancePaperEngine:
             return "TREND_DOWN"
         return "RANGE"
 
-    def paper_signal(self, asset: str, risk_fraction: float = .01) -> dict[str, Any]:
-        bars, market = self.market.ohlcv(asset, limit=100), self.market.price(asset)
+    @classmethod
+    def _all_strategies(cls) -> tuple[dict[str, Any], ...]:
+        return cls.STRATEGIES + cls.NOVEL_STRATEGIES
+
+    def _candidate_record(self, strategy_id: str) -> dict[str, Any] | None:
+        state = self.store.snapshot()
+        learned = state.get("finance_exploration", {}).get("candidates", {}).get(strategy_id)
+        if isinstance(learned, dict):
+            return learned
+        for lab in reversed(state.get("strategy_labs", [])):
+            for candidate in lab.get("candidates", []):
+                if candidate.get("id") == strategy_id:
+                    return candidate
+        return None
+
+    @staticmethod
+    def _evidence_fingerprint(symbol: str, timeframe: str, bars: list[MarketBar], strategy_id: str) -> str:
+        payload = {"symbol": symbol, "timeframe": timeframe, "strategy": strategy_id,
+                   "bars": [[bar.timestamp, round(bar.close, 10), round(bar.volume, 10)] for bar in bars[-80:]]}
+        return hashlib.sha256(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")).hexdigest()
+
+    def portfolio_snapshot(self) -> dict[str, Any]:
+        state = self.store.snapshot(); paper = state["paper"]
+        positions = paper.get("positions", [])
+        gross = sum(float(row.get("position_size", 0)) * float(row.get("current_price", row.get("entry", 0)))
+                    for row in positions)
+        unrealized = sum(float(row.get("unrealized_pnl", 0)) for row in positions)
+        realized_equity = float(paper.get("cash", paper.get("initial_cash", 10000)))
+        equity = realized_equity + unrealized
+        planned_risk = sum(float(row.get("max_planned_loss", 0)) for row in positions)
+        return {"currency": paper.get("currency", "USD"), "realized_equity": realized_equity,
+                "equity": equity, "unrealized_pnl": unrealized, "gross_exposure": gross,
+                "gross_exposure_percent": gross / equity if equity > 0 else 0,
+                "planned_risk": planned_risk, "open_positions": len(positions),
+                "available_exposure": max(0.0, equity * self.MAX_GROSS_EXPOSURE_FRACTION - gross),
+                "limits": {"max_open_positions": self.MAX_OPEN_POSITIONS,
+                           "max_position_notional_percent": self.MAX_POSITION_NOTIONAL_FRACTION,
+                           "max_gross_exposure_percent": self.MAX_GROSS_EXPOSURE_FRACTION,
+                           "max_risk_per_trade_percent": self.MAX_RISK_FRACTION}}
+
+    def _risk_gate(self, symbol: str, entry: float, stop: float, bars: list[MarketBar],
+                   market: dict[str, Any], risk_fraction: float) -> dict[str, Any]:
+        state = self.store.snapshot(); positions = state["paper"].get("positions", [])
+        portfolio = self.portfolio_snapshot(); reasons: list[str] = []
+        if any(row.get("asset") == symbol and row.get("status") == "OPEN" for row in positions):
+            reasons.append("Bu varlıkta zaten açık paper pozisyon var.")
+        if portfolio["open_positions"] >= self.MAX_OPEN_POSITIONS:
+            reasons.append("Açık pozisyon sınırı dolu.")
+        returns = [bars[i].close / bars[i - 1].close - 1 for i in range(max(1, len(bars) - 48), len(bars))]
+        hourly_volatility = statistics.pstdev(returns) if len(returns) > 1 else 0.0
+        volatility_scale = .5 if hourly_volatility > .02 else .75 if hourly_volatility > .01 else 1.0
+        quote_volume = float(market.get("quote_volume_24h", 0) or 0)
+        liquidity_scale = 1.0 if quote_volume <= 0 or quote_volume >= 50_000_000 else .5 if quote_volume >= 10_000_000 else 0.0
+        if liquidity_scale == 0:
+            reasons.append("24 saatlik likidite güvenlik eşiğinin altında.")
+        equity = max(0.0, float(portfolio["equity"])); stop_distance = max(entry - stop, 0.0)
+        clamped_risk = min(max(float(risk_fraction), .001), self.MAX_RISK_FRACTION)
+        risk_budget = equity * clamped_risk * volatility_scale * liquidity_scale
+        risk_size = risk_budget / stop_distance if stop_distance > 0 else 0.0
+        position_cap = equity * self.MAX_POSITION_NOTIONAL_FRACTION / entry if entry > 0 else 0.0
+        exposure_cap = float(portfolio["available_exposure"]) / entry if entry > 0 else 0.0
+        size = min(risk_size, position_cap, exposure_cap)
+        notional = size * entry
+        if equity <= 0: reasons.append("Paper portföy özkaynağı pozitif değil.")
+        if stop_distance <= 0: reasons.append("Geçerli stop mesafesi yok.")
+        if size <= 0: reasons.append("Risk ve maruziyet limitleri pozisyon boyutuna izin vermiyor.")
+        return {"approved": not reasons, "reasons": reasons, "position_size": size,
+                "position_notional": notional, "risk_budget": risk_budget,
+                "risk_fraction": clamped_risk, "hourly_volatility": hourly_volatility,
+                "volatility_scale": volatility_scale, "liquidity_scale": liquidity_scale,
+                "portfolio_before": portfolio, "correlation_bucket": "CRYPTO",
+                "policy": "PORTFOLIO_RISK_GATE_V1"}
+
+    @staticmethod
+    def _review_paper_decision(decision: dict[str, Any], candidate: dict[str, Any] | None,
+                               risk_gate: dict[str, Any], *, require_qualified: bool) -> dict[str, Any]:
+        checks = {
+            "exact_decision_version": decision.get("version") == "EREN_DECISION_V1",
+            "evidence_fingerprint_present": len(str(decision.get("evidence_fingerprint", ""))) == 64,
+            "evidence_fresh": bool(decision.get("evidence_fresh")),
+            "strategy_qualified": bool(candidate and candidate.get("qualified")) if require_qualified else True,
+            "signal_active": decision.get("proposed_direction") == "LONG",
+            "portfolio_risk_gate": bool(risk_gate.get("approved")),
+            "decision_checklist_complete": all(row.get("answer") is True for row in decision.get("decision_questions", [])),
+            "paper_only": decision.get("live_activation") is False,
+        }
+        approved = all(checks.values())
+        return {"reviewer": "CEMO_RULE_REVIEWER", "version": "CEMO_REVIEW_V1",
+                "decision_id": decision["id"], "evidence_fingerprint": decision["evidence_fingerprint"],
+                "checks": checks, "status": "APPROVED_PAPER" if approved else "REJECTED",
+                "reasons": [name for name, passed in checks.items() if not passed],
+                "self_approval": False, "live_activation": False, "reviewed_at": utc_now()}
+
+    def paper_signal(self, asset: str, risk_fraction: float = DEFAULT_RISK_FRACTION, *,
+                     bars: list[MarketBar] | None = None, market_snapshot: dict[str, Any] | None = None,
+                     timeframe: str = "1h", require_qualified: bool = False) -> dict[str, Any]:
+        bars = bars or self.market.ohlcv(asset, timeframe, limit=120)
+        market = market_snapshot or self.market.price(asset)
         finance_state = self.store.snapshot()["engines"]["finance"]
         strategy_id = finance_state.get("paper_candidate")
         lab_has_run = "strategy_lab_decision" in finance_state
@@ -482,26 +590,153 @@ class FinancePaperEngine:
                     "reason": "NO QUALIFIED STRATEGY", "live_activation": False,
                     "label": "PAPER GATE — NO REAL ORDER", "created_at": utc_now()}
         strategy_id = strategy_id or "sma_trend"
-        definition = next((item for item in self.STRATEGIES if item["id"] == strategy_id), self.STRATEGIES[0])
+        definition = next((item for item in self._all_strategies() if item["id"] == strategy_id), self.STRATEGIES[0])
+        candidate = self._candidate_record(strategy_id)
         active = self._signal(strategy_id, bars, len(bars))
         fast, slow = sum(b.close for b in bars[-10:]) / 10, sum(b.close for b in bars[-50:]) / 50
         direction = "LONG" if active else "NO_TRADE"
-        cash = float(self.store.snapshot()["paper"]["cash"]); entry = market["price"]
-        stop, target = entry * .98, entry * 1.04
-        size = (cash * min(max(risk_fraction, .001), .02)) / max(entry-stop, .000001) if direction == "LONG" else 0
+        entry = float(market["price"]); stop, target = entry * (1 - self.STOP_RATE), entry * (1 + self.TARGET_RATE)
+        fingerprint = self._evidence_fingerprint(market["symbol"], timeframe, bars, strategy_id)
+        last_bar_ms = int(bars[-1].timestamp) * (1000 if int(bars[-1].timestamp) < 10**12 else 1)
+        age_ms = max(0, int(datetime.now(timezone.utc).timestamp() * 1000) - last_bar_ms)
+        evidence_fresh = (age_ms <= 3 * 60 * 60 * 1000) if require_qualified else True
+        regime = self._regime(bars)
+        decision = {"id": f"decision-{uuid.uuid4().hex}", "version": "EREN_DECISION_V1",
+                    "asset": market["symbol"], "timeframe": timeframe, "strategy_id": strategy_id,
+                    "strategy": definition["name"], "proposed_direction": direction,
+                    "thesis": {"bull": "Aktif strateji sinyali ve kısa ortalama üstünlüğü sürüyor.",
+                               "base": "Stop ve portföy sınırı içinde yalnız paper denemesi yapılabilir.",
+                               "bear": "Sinyal bozulması veya %2 stop tezi geçersiz kılar."},
+                    "risks": ["Kripto oynaklığı", "slippage", "ücretler", "rejim değişimi"],
+                    "entry": entry, "stop": stop, "target": target, "holding_review": f"Her {timeframe} kapanışında",
+                    "evidence_fingerprint": fingerprint, "evidence_fresh": evidence_fresh,
+                    "evidence_age_seconds": round(age_ms / 1000, 2), "evidence_last_bar": bars[-1].timestamp,
+                    "market_regime": regime, "confidence": min(.90, .50 + abs(fast / slow - 1) * 10),
+                    "live_activation": False, "created_at": utc_now()}
+        risk_gate = self._risk_gate(market["symbol"], entry, stop, bars, market, risk_fraction)
+        decision["decision_questions"] = [
+            {"question": "Strateji OOS ve maliyetlerden sonra yeterli mi?",
+             "answer": bool(candidate and candidate.get("qualified")) if require_qualified else True},
+            {"question": "Piyasa kanıtı güncel mi?", "answer": evidence_fresh},
+            {"question": "Giriş sinyali şu anda aktif mi?", "answer": active},
+            {"question": "Stop ve hedef önceden tanımlı mı?", "answer": stop < entry < target},
+            {"question": "Portföy maruziyeti ve pozisyon boyutu sınırlar içinde mi?",
+             "answer": bool(risk_gate.get("approved"))},
+            {"question": "Gerçek para ve broker emri kapalı mı?", "answer": True},
+        ]
+        review = self._review_paper_decision(decision, candidate, risk_gate, require_qualified=require_qualified)
+        if review["status"] != "APPROVED_PAPER":
+            reasons = review["reasons"] + list(risk_gate.get("reasons", []))
+            no_trade = {"id": f"paper-{uuid.uuid4().hex}", "asset": market["symbol"], "direction": "NO_TRADE",
+                        "status": "NO_TRADE", "reason": " · ".join(dict.fromkeys(reasons)) or "Sinyal aktif değil.",
+                        "strategy": definition["name"], "decision": decision, "review": review,
+                        "risk_gate": risk_gate, "live_activation": False,
+                        "label": "PAPER GATE — NO REAL ORDER", "created_at": utc_now()}
+            self.store.append("finance_decisions", no_trade)
+            return no_trade
+        size = float(risk_gate["position_size"])
         signal = {"id": f"paper-{uuid.uuid4().hex}", "asset": market["symbol"], "direction": direction,
                   "entry": entry, "entry_timestamp": utc_now(), "position_size": size, "stop": stop, "target": target,
                   "fees": size * entry * self.FEE_RATE if size else 0, "slippage": self.SLIPPAGE_RATE,
-                  "strategy": definition["name"], "market_regime": self._regime(bars),
-                  "confidence": min(.95, .5 + abs(fast / slow - 1) * 10), "current_price": entry,
+                  "strategy": definition["name"], "strategy_id": strategy_id, "market_regime": regime,
+                  "confidence": decision["confidence"], "current_price": entry,
                   "unrealized_pnl": 0.0, "unrealized_pnl_percent": 0.0, "max_adverse_excursion": 0.0,
                   "max_favorable_excursion": 0.0, "leverage": 1, "max_planned_loss": size*(entry-stop),
-                  "risk_reward": 2.0, "source": market["source"], "status": "OPEN" if direction == "LONG" else "NO_TRADE",
+                  "risk_reward": 2.0, "source": market["source"], "status": "OPEN",
                   "market_conditions": {"sma10": fast, "sma50": slow, "change_percent_24h": market["change_percent_24h"]},
+                  "decision": decision, "review": review, "risk_gate": risk_gate,
+                  "evidence_fingerprint": fingerprint, "live_activation": False,
                   "label": "PAPER — NO REAL ORDER", "created_at": utc_now()}
-        if direction == "LONG":
-            self.store.update(lambda s: s["paper"]["positions"].append(signal))
+        self.store.update(lambda s: (s["paper"]["positions"].append(signal),
+                                     s.setdefault("finance_decisions", []).append(signal)))
         return signal
+
+    def autonomous_paper_cycle(self, assets: list[str] | None = None, timeframes: list[str] | None = None,
+                               *, risk_fraction: float = DEFAULT_RISK_FRACTION,
+                               bars_by_dimension: dict[tuple[str, str], list[MarketBar]] | None = None) -> dict[str, Any]:
+        """Run one bounded research -> review -> risk -> paper cycle.
+
+        The cycle intentionally has no broker, API-key or order endpoint. A
+        failed evidence/review/risk check becomes NO_TRADE and is persisted.
+        """
+        requested_assets = assets or ["BTC", "ETH", "SOL"]
+        symbols = list(dict.fromkeys(self.market._symbol(value) for value in requested_assets))[:3]
+        frames = list(dict.fromkeys(timeframes or ["1h", "4h"]))[:2]
+        started_at = utc_now(); cycle_id = f"finance-cycle-{uuid.uuid4().hex}"
+        before = self.portfolio_snapshot()
+        self.store.update(lambda state: state["engines"]["finance"].update(
+            enabled=True, mode="RESEARCH", watchlist=symbols, live_activation=False))
+
+        marked = self.mark_to_market() if before["open_positions"] else {
+            "marked_at": started_at, "closed_ids": [], "positions": [], "closed": [],
+            "performance": self.performance()["paper"]}
+        data_errors: list[str] = []
+        dimensions = dict(bars_by_dimension or {})
+        if not dimensions:
+            for symbol in symbols:
+                for timeframe in frames:
+                    try:
+                        dimensions[(symbol, timeframe)] = self.market.ohlcv(symbol, timeframe, 500)
+                    except Exception as error:
+                        data_errors.append(f"{symbol}/{timeframe}: {type(error).__name__}: {error}")
+
+        lab: dict[str, Any] | None = None
+        decisions: list[dict[str, Any]] = []
+        if data_errors or set(dimensions) != {(symbol, timeframe) for symbol in symbols for timeframe in frames}:
+            decisions.append({"status": "NO_TRADE", "reason": "Eksik veya hatalı piyasa verisi.",
+                              "data_errors": data_errors, "live_activation": False})
+        else:
+            lab = self.explore_strategies(symbols[0], asset_budget=len(symbols), candidate_budget=3,
+                                          timeframe_budget=len(frames), bars_by_dimension=dimensions,
+                                          retest_reason="autonomous paper cycle")
+            if not lab.get("paper_promoted"):
+                decisions.append({"status": "NO_TRADE", "reason": lab["bounded_exploration_outcome"],
+                                  "rejected_candidates": [{"id": row.get("candidate_id", row.get("id")),
+                                      "reasons": row.get("rejection_reasons", [])} for row in lab.get("candidates", [])],
+                                  "live_activation": False})
+            else:
+                for symbol in symbols:
+                    try:
+                        market = self.market.price(symbol)
+                        decisions.append(self.paper_signal(symbol, risk_fraction, bars=dimensions[(symbol, frames[0])],
+                                                           market_snapshot=market, timeframe=frames[0],
+                                                           require_qualified=True))
+                    except Exception as error:
+                        decisions.append({"asset": symbol, "status": "NO_TRADE",
+                                          "reason": f"Karar döngüsü güvenli kapandı: {type(error).__name__}: {error}",
+                                          "live_activation": False})
+
+        qualification = self.qualification()
+        after = self.portfolio_snapshot(); paper_performance = self.performance()["paper"]
+        opened = [row for row in decisions if row.get("status") == "OPEN"]
+        rejected = [row for row in decisions if row.get("status") != "OPEN"]
+        previous = self.store.snapshot().get("finance_cycles", [])
+        prior = previous[-1] if previous else None
+        comparison = {"previous_cycle_id": prior.get("id") if prior else None,
+                      "equity_change": after["equity"] - float(prior.get("portfolio_after", {}).get("equity", before["equity"])) if prior else 0.0,
+                      "open_position_change": after["open_positions"] - int(prior.get("portfolio_after", {}).get("open_positions", before["open_positions"])) if prior else 0,
+                      "closed_trade_change": len(marked.get("closed_ids", []))}
+        lesson = {"what_worked": [f"{len(opened)} paper fırsatı tüm kapılardan geçti."] if opened else [],
+                  "what_failed": [row.get("reason", "Risk/inceleme kapısı reddetti.") for row in rejected],
+                  "next_action": "Açık paper pozisyonları izle ve yeni veride tekrar test et."
+                                 if opened else "Yeni piyasa verisinde sınırlı keşfi tekrarla; ölçütleri gevşetme."}
+        cycle = {"id": cycle_id, "status": "PAPER_POSITION_OPENED" if opened else "NO_TRADE",
+                 "label": "AUTONOMOUS PAPER CYCLE — NO REAL ORDER", "started_at": started_at,
+                 "finished_at": utc_now(), "assets": symbols, "timeframes": frames,
+                 "strategy_lab": lab, "decisions": decisions, "marked_positions": marked,
+                 "portfolio_before": before, "portfolio_after": after, "paper_performance": paper_performance,
+                 "qualification": qualification, "comparison": comparison, "lesson": lesson,
+                 "safety": {"real_orders_sent": 0, "real_money_used": 0,
+                            "live_trading_enabled": False, "broker_client_present": False},
+                 "data_errors": data_errors}
+        def persist(state: dict[str, Any]) -> None:
+            state.setdefault("finance_cycles", []).append(cycle)
+            del state["finance_cycles"][:-100]
+            state["engines"]["finance"].update(enabled=True,
+                mode="PAPER" if opened else "RESEARCH", last_cycle_id=cycle_id,
+                last_cycle_status=cycle["status"], last_cycle_at=cycle["finished_at"], live_activation=False)
+        self.store.update(persist)
+        return cycle
 
     def mark_to_market(self, prices: dict[str, float] | None = None) -> dict[str, Any]:
         """Revalue every open paper position and close stops/targets atomically."""
@@ -583,13 +818,23 @@ class FinancePaperEngine:
         return approval
 
     def qualification(self) -> dict[str, Any]:
-        state = self.store.snapshot(); tests, closed = state.get("backtests", []), state.get("paper", {}).get("closed", [])
-        assets = {x.get("asset") for x in tests}; regimes = {x.get("regime") for x in tests}; strategies = {x.get("strategy") for x in tests}
-        total_trades = sum(int(x.get("trade_count", x.get("trades", 0))) for x in tests)
-        oos = [x for x in tests if int(x.get("out_of_sample_bars", 0)) >= 50 and int(x.get("out_of_sample_metrics", {}).get("trade_count", 0)) > 0]
+        state = self.store.snapshot(); tests = state.get("backtests", []); labs = state.get("strategy_labs", [])
+        closed = state.get("paper", {}).get("closed", [])
+        lab_candidates = [candidate for lab in labs for candidate in lab.get("candidates", [])]
+        assets = {x.get("asset") for x in tests}
+        assets.update(asset for lab in labs for asset in lab.get("assets_tested", []) if asset)
+        regimes = {x.get("regime") for x in tests}
+        regimes.update(regime for lab in labs for regime in lab.get("regimes_tested", []) if regime)
+        strategies = {x.get("strategy") for x in tests}
+        strategies.update(x.get("name") for x in lab_candidates if x.get("name"))
+        total_trades = sum(int(x.get("trade_count", x.get("trades", 0))) for x in tests + lab_candidates)
+        oos = [x for x in tests if int(x.get("out_of_sample_bars", 0)) >= 50
+               and int(x.get("out_of_sample_metrics", {}).get("trade_count", 0)) > 0]
+        oos += [x for x in lab_candidates if int(x.get("out_of_sample_metrics", {}).get("trade_count", 0)) >= 3]
         paper_metrics = _metrics(closed, float(state["paper"].get("initial_cash", 10000)))
         reasons = []
-        if len(tests) < 3: reasons.append("En az 3 backtest gerekli.")
+        evidence_runs = len(tests) + len(labs)
+        if evidence_runs < 3: reasons.append("En az 3 bağımsız backtest/strateji laboratuvarı koşusu gerekli.")
         if len(assets) < 2: reasons.append("Birden fazla varlık kanıtı gerekli.")
         if len(regimes) < 2: reasons.append("Birden fazla piyasa rejimi gerekli.")
         if total_trades < 30: reasons.append("En az 30 backtest işlemi gerekli.")
@@ -600,7 +845,8 @@ class FinancePaperEngine:
         if paper_metrics["profit_factor"] is None or paper_metrics["profit_factor"] < 1.1: reasons.append("Paper profit factor 1.10 altında.")
         overfit_risk = "HIGH" if len(strategies) == 1 and len(regimes) < 2 else "MEDIUM" if len(oos) < 5 else "LOW"
         if overfit_risk == "HIGH": reasons.append("Overfitting riski yüksek.")
-        result = {"qualified": not reasons, "reasons": reasons, "evidence": {"backtests": len(tests), "assets": sorted(assets),
+        result = {"qualified": not reasons, "reasons": reasons, "evidence": {"backtests": len(tests),
+                  "strategy_lab_runs": len(labs), "evidence_runs": evidence_runs, "assets": sorted(x for x in assets if x),
                   "regimes": sorted(x for x in regimes if x), "strategies": sorted(x for x in strategies if x),
                   "backtest_trades": total_trades, "out_of_sample_runs": len(oos), "closed_paper_trades": len(closed),
                   "paper_metrics": paper_metrics}, "overfitting_risk": overfit_risk, "live_activation": False,

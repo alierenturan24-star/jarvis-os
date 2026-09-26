@@ -174,7 +174,7 @@ class MediaManager:
 
         capability_note = (
             "Bu ortamda GERÇEKTEN kurulu olan: yerel Ollama, workspace-local "
-            "FFmpeg/ffprobe, anahtarsız ve lisans kanıtlı Wikimedia Commons görsel araması, "
+            "FFmpeg/ffprobe, anahtarsız ve lisans kanıtlı Wikimedia Commons görsel/video araması, "
             "yerel özgün kapak/altyazı/müzik kompozisyonu ve Windows System.Speech TTS. "
             "Onay yokken ücretli görsel sağlayıcısı kullanılmaz; yayınlama capability'si kullanılmaz."
             if find_ffmpeg()
@@ -205,8 +205,11 @@ Kalıcı production memory (exact script/scene/config tekrar etme; bounded varia
 FORMAT PATERNLERİ (öğrenilmiş; KOPYALAMA DEĞİL):
 Yukarıdaki "format_patterns" yalnızca SOYUT format kategorileridir (hook yapısı, tempo,
 merak açığı, başlık yapısı, görsel değişim sıklığı). Belirli bir rakibin BİREBİR
-script'ini, başlığını, görsellerini veya telif içeriğini KOPYALAMA -- yalnızca hangi
-FORMAT özelliklerinin işe yaradığını öğren ve konuya özgü, özgün bir açı üret.
+script'ini, başlığını, kapağını veya izinsiz video dosyasını KOPYALAMA. Yalnızca
+soyut hikâye/tempo yapısını öğren. Görsel ham madde olarak sadece manifestte
+kaynak+lisans kanıtı tutulabilen Public Domain, CC0 veya CC BY Commons
+klipleri/görselleri kullanılabilir; bunları yeni anlatım, kurgu, altyazı, özgün
+kapak ve özgün müzikle dönüştür.
 
 {TURKISH_OUTPUT_POLICY}
 

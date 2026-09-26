@@ -12,6 +12,8 @@ from src.mission.models import Mission, MissionType
 from src.mission.report_builder import _sandbox_section
 from src.mission.target_resolver import TargetResolver
 from src.strategy.execution_planner import build_self_check
+from src.strategy.models import TaskCategory
+from src.strategy.strategy_engine import classify_task_category
 
 
 def _repo(name: str, full_name: str) -> RepoData:
@@ -129,3 +131,36 @@ KARAR:"""
     assert mission.title == prompt
     assert mission.description == prompt
     assert mission.target.requested_name == "Agent-Reach"
+
+
+_LIVE_COMPOUND_VIDEO_REQUEST = (
+    "İsviçre’de yaşayan Türkler için güncel ve kaynaklı bir konu bul. "
+    "Başarılı videoların konu ve hikâye yapısını analiz et fakat içeriklerini kopyalama. "
+    "Özgün kısa senaryo, yeni görseller, yeni kapak, telif güvenli müzik ve altyazıyla "
+    "9:16 test videosu oluştur. Yayınlama; MP4 dosyasını, kapağı ve kalite sonucunu panelde göster."
+)
+
+
+def test_j_compound_research_then_create_video_dispatches_research_and_media():
+    departments = DepartmentOrchestrator().select_departments(_LIVE_COMPOUND_VIDEO_REQUEST)
+
+    assert "research" in departments
+    assert "media" in departments
+    assert "finance" not in departments
+
+
+def test_k_compound_video_goal_is_not_misreported_as_standalone_vision():
+    category, reason = classify_task_category(_LIVE_COMPOUND_VIDEO_REQUEST)
+
+    assert category == TaskCategory.YOUTUBE
+    assert "video" in reason.casefold()
+
+
+def test_l_compound_video_task_depends_on_current_research_result():
+    mission = MissionEngine(strategy_engine=_NoStrategy()).create_mission(_LIVE_COMPOUND_VIDEO_REQUEST)
+    plan = MissionEngine(strategy_engine=_NoStrategy()).build_task_plan(mission)
+    research = next(task for task in plan.all_tasks() if task.agent == "research")
+    media = next(task for task in plan.all_tasks() if task.agent == "media")
+
+    assert research.id in media.depends_on
+    assert media.metadata["research_task"] is research

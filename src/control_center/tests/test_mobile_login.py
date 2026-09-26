@@ -130,6 +130,27 @@ def test_authenticated_tailscale_page_keeps_csp_and_same_origin(control_server):
     assert status == 403
 
 
+def test_authenticated_finance_cycle_route_is_paper_only(control_server):
+    class Service:
+        def __init__(self):
+            self.called = False
+
+        def run_finance_cycle(self, data):
+            self.called = True
+            return {"status": "NO_TRADE", "safety": {"real_orders_sent": 0,
+                    "real_money_used": 0, "live_trading_enabled": False}}
+
+    service = Service()
+    control_server.service = service
+    host = f"127.0.0.1:{control_server.server_port}"
+    status, _, body = request(control_server, "/api/finance/cycle", {
+        "Host": host, "Origin": f"http://{host}", "Cookie": f"jarvis_session={TOKEN}",
+        "Content-Type": "application/json",
+    }, "POST")
+    assert status == 201 and service.called
+    assert b'"real_orders_sent": 0' in body and b'"live_trading_enabled": false' in body
+
+
 def test_serve_detection_requires_our_cert_https_loopback_proxy_and_no_funnel(monkeypatch):
     serve = {
         "TCP": {"443": {"HTTPS": True}},

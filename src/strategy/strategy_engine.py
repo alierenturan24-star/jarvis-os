@@ -4,6 +4,7 @@ from typing import Optional
 
 from src.mission.department import detect_mission_type
 from src.mission.department_orchestrator import DepartmentOrchestrator
+from src.mission.completion import has_youtube_production_intent
 from src.mission.models import MissionType
 from src.providers.cost_optimizer import (
     PLAN_CLI_PROVIDERS,
@@ -97,6 +98,16 @@ def classify_task_category(request: str) -> tuple[TaskCategory, str]:
 
     if any(cue in lowered for cue in _PDF_CUES):
         return TaskCategory.PDF, "Metinde PDF sinyali bulundu ('pdf')."
+
+    # A video-production goal commonly asks for visuals/cover art as one
+    # stage.  That does not turn the whole mission into a standalone image
+    # analysis task. Keep PDF's explicit document signal first, then prefer
+    # the concrete video artifact intent over incidental visual vocabulary.
+    if has_youtube_production_intent(request):
+        return (
+            TaskCategory.YOUTUBE,
+            "Metinde gerçek video artifact üretimi sinyali bulundu.",
+        )
 
     if any(cue in lowered for cue in _VISION_CUES):
         return TaskCategory.VISION, "Metinde görsel/vision sinyali bulundu."

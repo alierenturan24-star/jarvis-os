@@ -1,3 +1,5 @@
+import re
+from datetime import datetime
 from pathlib import Path
 
 from src.knowledge.knowledge_base import KnowledgeBase
@@ -7,6 +9,7 @@ from src.media.renderer import LocalVideoRenderer, find_ffmpeg, has_production_m
 from src.media.learning import YouTubeLearningAgent
 from src.media.production import GeneralProductionBuilder
 from src.providers.router import ModelRouter
+from src.research.manager import topic_wants_current_information
 from src.utils.language_policy import TURKISH_OUTPUT_POLICY
 from src.utils.llm_utils import is_llm_failure
 
@@ -37,6 +40,16 @@ _REPAIRABLE_GATES = {"audio_completeness", "av_timing", "repetition", "shorts_st
 # pattern already used for "research"/"coding" (see
 # ``department_orchestrator.MEDIA_DEPARTMENT_TASK_TIMEOUT_SECONDS``).
 MAX_REPAIR_ATTEMPTS = 2
+
+
+def _looks_predominantly_english(text: str) -> bool:
+    words = re.findall(r"[a-zA-ZçğıöşüÇĞİÖŞÜ]+", text or "")
+    if not words:
+        return False
+    english = {"the", "and", "with", "this", "that", "how", "from", "every", "into", "use", "traditional"}
+    turkish = {"ve", "ile", "bu", "nasıl", "için", "bir", "olarak", "güncel", "görsel", "anlatım"}
+    lowered = [word.casefold() for word in words]
+    return sum(word in english for word in lowered) >= 5 and sum(word in turkish for word in lowered) < 3
 
 
 class MediaManager:
@@ -82,6 +95,8 @@ class MediaManager:
         stage_sink: dict | None = None,
         research_opportunity: dict | None = None,
         standing_permission: bool = False,
+        free_only: bool = True,
+        request_text: str | None = None,
     ) -> str:
         topic = topic.strip()
         self.last_capability_gap = None
@@ -113,6 +128,18 @@ class MediaManager:
         # departmanlar bağımsız olduğu için o turun SONUCUNU burada
         # DOĞRUDAN okuyamayız, bkz. Sprint 39 mimari notu).
         prior = self.knowledge.find_research(topic)
+        full_request = (request_text or topic).strip()
+        if (
+            topic_wants_current_information(full_request)
+            and research_opportunity is None
+            and prior is None
+        ):
+            if stage_sink is not None:
+                stage_sink["last_stage"] = "research_gap_stop"
+            return (
+                "RESEARCH_GAP\nGüncel/trend bilgisi istendi ancak doğrulanmış araştırma kanıtı yok. "
+                "Eski bir yılı veya uydurma bir trendi güncelmiş gibi sunmamak için içerik planı hazırlanmadı."
+            )
         # Round 5 repair (real live-mission evidence): an explicitly-passed,
         # ALREADY-SELECTED research opportunity (see
         # MediaAgent.execute()/src.research.opportunity) is authoritative
@@ -123,11 +150,27 @@ class MediaManager:
         # actual query, so the KnowledgeBase containment-match never hit),
         # which is exactly why the explicit data dependency exists now.
         if research_opportunity is not None:
+            format_rows = []
+            for ref in research_opportunity.get("format_references") or []:
+                format_rows.append(
+                    "- " + str(ref.get("title") or "Başlıksız video")[:180]
+                    + f" | yayıncı: {ref.get('publisher') or ref.get('provider') or 'belirtilmedi'}"
+                    + f" | süre: {ref.get('duration') or 'belirtilmedi'}"
+                    + f" | etkileşim: {ref.get('statistics') or {}}"
+                    + f" | URL: {ref.get('url') or ''}"
+                )
+            format_context = (
+                "\nFormat referansları (YALNIZ soyut hook/tempo/hikâye/başlık kalıbı için; "
+                "başlık, metin, kapak, ses ve görüntü kopyalanamaz):\n"
+                + "\n".join(format_rows[:3]) + "\n"
+                if format_rows else ""
+            )
             context_block = (
                 "Araştırma tarafından SEÇİLMİŞ, güncel bir içerik fırsatı VAR "
                 f"(konum/pazar: {research_opportunity.get('location_or_market', '')}, "
                 f"güncellik: {research_opportunity.get('why_current', '')}):\n"
                 f"{str(research_opportunity.get('selected_topic', ''))[:800]}\n"
+                f"{format_context}"
             )
         elif prior is not None:
             context_block = (
@@ -142,18 +185,31 @@ class MediaManager:
 
         capability_note = (
             "Bu ortamda GERÇEKTEN kurulu olan: yerel Ollama, workspace-local "
-            "FFmpeg/ffprobe, deterministic scene-card composition ve Windows "
-            "System.Speech TTS. Yayınlama capability'si kullanılmaz."
+            "FFmpeg/ffprobe, anahtarsız ve lisans kanıtlı Wikimedia Commons görsel/video araması, "
+            "yerel özgün kapak/altyazı/müzik kompozisyonu ve Windows System.Speech TTS. "
+            "Onay yokken ücretli görsel sağlayıcısı kullanılmaz; yayınlama capability'si kullanılmaz."
             if find_ffmpeg()
             else "FFmpeg/video encoder bulunamadı; gerçek MP4 üretimi BLOCKED."
         )
         learning_plan = self.learning.production_plan(topic)
+        requested_turkish = any(
+            cue in full_request.casefold() for cue in ("türkçe", "turkce", "türkçe anlatım", "türkçe ses")
+        )
+        production_language = "tr-TR" if requested_turkish else self.channel_language
 
+        request_block = (
+            f"Kullanıcının tam isteği: {full_request}\n"
+            if full_request and full_request != topic else ""
+        )
         prompt = f"""
 Sen JARVIS YouTube İçerik Üretim Departmanı yapımcısısın.
 
 Konu: {topic}
 Hedef süre: {duration_seconds} saniye (YouTube Shorts)
+Bugünün sistem tarihi: {datetime.now().date().isoformat()}
+{request_block}
+ZORUNLU ÇIKTI DİLİ: {"Türkçe" if requested_turkish else production_language}.
+Senaryo, anlatım, ekran yazıları, altyazı, başlık ve açıklamanın tamamı bu dilde olmalıdır.
 
 {context_block}
 
@@ -166,12 +222,19 @@ Kalıcı production memory (exact script/scene/config tekrar etme; bounded varia
 FORMAT PATERNLERİ (öğrenilmiş; KOPYALAMA DEĞİL):
 Yukarıdaki "format_patterns" yalnızca SOYUT format kategorileridir (hook yapısı, tempo,
 merak açığı, başlık yapısı, görsel değişim sıklığı). Belirli bir rakibin BİREBİR
-script'ini, başlığını, görsellerini veya telif içeriğini KOPYALAMA -- yalnızca hangi
-FORMAT özelliklerinin işe yaradığını öğren ve konuya özgü, özgün bir açı üret.
+script'ini, başlığını, kapağını veya izinsiz video dosyasını KOPYALAMA. Yalnızca
+soyut hikâye/tempo yapısını öğren. Görsel ham madde olarak sadece manifestte
+kaynak+lisans kanıtı tutulabilen Public Domain, CC0 veya CC BY Commons
+klipleri/görselleri kullanılabilir; bunları yeni anlatım, kurgu, altyazı, özgün
+kapak ve özgün müzikle dönüştür.
 
 {TURKISH_OUTPUT_POLICY}
 
 Görev: Aşağıdaki 9 başlığın HEPSİNİ, TAM OLARAK bu isimlerle ve bu sırayla üret:
+
+Kullanıcının tam isteği birden fazla video fikri/başlığı istiyorsa, önce
+"VİDEO FİKİRLERİ VE BAŞLIKLARI" bölümü altında istenen sayıda özgün seçenek ver;
+ardından aşağıdaki 9 bölümde en güçlü seçenek için uygulanabilir üretim planını yaz.
 
 SENARYO
 ({duration_seconds} saniyelik doğal konuşma dilinde anlatım metni.)
@@ -189,7 +252,7 @@ ALTYAZI PLANI
 (Sahne zamanlamasına dayalı kısa altyazı satırları.)
 
 THUMBNAIL FİKRİ
-(Kısa, çarpıcı bir thumbnail açıklaması -- metin olarak, gerçek görsel ÜRETİLMEYECEK.)
+(Kısa, çarpıcı kapak metni ve kompozisyonu; sistem bunu seçilen lisanslı/özgün kare üzerinde yerelde tasarlayacak.)
 
 BAŞLIK
 (60 karakteri geçmeyen bir YouTube Shorts başlığı.)
@@ -202,8 +265,12 @@ ETİKETLER
 
 Kurallar:
 - Uydurma istatistik/rakam/tarih kullanma, emin değilsen belirt.
+- Güncel/trend iddialarını yalnızca yukarıdaki araştırma bağlamı destekliyorsa yaz;
+  eski bir yılı güncelmiş gibi sunma.
 - Kesin yatırım tavsiyesi verme.
 - Var olmayan bir aracı kurulu/kullanılabilirmiş gibi anlatma.
+- Başka bir üreticinin videosunu, kapağını veya telifli müziğini kopyalama/yeniden yükleme.
+- Görsel planında doğrulanabilir Public Domain, CC0 veya CC BY kaynakları tercih et.
 """
 
         if stage_sink is not None:
@@ -219,6 +286,25 @@ Kurallar:
             prompt=prompt, task_type="planning", preferred_provider=provider_name,
         )
         plan_text = route_result.output
+
+        if requested_turkish and not is_llm_failure(plan_text) and _looks_predominantly_english(plan_text):
+            correction = self.router.manager.route_and_generate(
+                prompt=(
+                    "Aşağıdaki üretim planı yanlışlıkla İngilizce yazılmış. Hiçbir olgu eklemeden, "
+                    "aynı dokuz bölüm başlığını ve sahne sürelerini koruyarak planın tamamını Türkçe "
+                    "yeniden yaz. Yalnızca düzeltilmiş planı döndür.\n\n" + plan_text
+                ),
+                task_type="planning", preferred_provider=route_result.provider_used,
+            )
+            if correction.success and not is_llm_failure(correction.output):
+                plan_text = correction.output
+                route_result = correction
+            if _looks_predominantly_english(plan_text):
+                return (
+                    "VIDEO RENDER: BLOCKED_LANGUAGE\n"
+                    "Kullanıcı Türkçe istedi ancak sağlayıcı Türkçe üretim planı veremedi. "
+                    "Yanlış dilde video oluşturulmadı; hiçbir şey yayınlanmadı."
+                )
 
         if is_llm_failure(plan_text) and produce_artifact:
             plan_text = self._deterministic_fallback_plan(topic, duration_seconds)
@@ -266,6 +352,8 @@ Kurallar:
                     "location_or_market": research_opportunity.get("location_or_market"),
                     "freshness_status": research_opportunity.get("freshness_status"),
                     "source_count": len(research_opportunity.get("supporting_evidence") or []),
+                    "selected_topic": str(research_opportunity.get("selected_topic") or "")[:500],
+                    "format_reference_count": len(research_opportunity.get("format_references") or []),
                 }
             else:
                 research_grounded = prior is not None
@@ -283,11 +371,12 @@ Kurallar:
                     duration_seconds=duration_seconds,
                     channel_id=self.channel_id,
                     channel_market=self.channel_market,
-                    channel_language=self.channel_language,
+                    channel_language=production_language,
                     research_grounded=research_grounded,
                     research_evidence_ref=research_evidence_ref,
                     stage_sink=stage_sink,
                     standing_permission=standing_permission,
+                    free_only=free_only,
                 )
 
             if find_goal_production_package(topic) is None:

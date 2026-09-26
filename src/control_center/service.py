@@ -15,13 +15,17 @@ from pathlib import Path
 from typing import Any
 
 from src.control_center.finance_engine import FinancePaperEngine
+from src.finance.manager import FinanceManager
 from src.control_center.observability import ControlCenterReadModel
 from src.control_center.store import ControlCenterStore, utc_now
 from src.core.runtime import JarvisRuntime
 from src.media.channel_store import ChannelScopedStore
 from src.media.learning import YouTubeLearningAgent
 from src.media.quality import validate_media_goal_artifact
-from src.media.renderer import find_ffmpeg, find_ffprobe
+from src.media.renderer import (
+    ffmpeg_has_flite, find_edge_tts, find_ffmpeg, find_ffprobe,
+    narration_capability_available,
+)
 from src.providers.execution_history import ProviderExecutionHistory
 from src.research_loop.autonomous import AutonomousResearchService
 from src.capabilities.capability_registry import CapabilityRegistry
@@ -68,6 +72,7 @@ class ControlCenterService:
         self.runtime = runtime or JarvisRuntime()
         self.store = store or ControlCenterStore()
         self.finance = FinancePaperEngine(self.store)
+        self.finance_expert = FinanceManager()
         self._lock = threading.RLock()
         self._thread: threading.Thread | None = None
         self._active: dict[str, Any] | None = None
@@ -299,6 +304,26 @@ class ControlCenterService:
             self._paused = False
         self.activity("COMPLETED", "Control Center START: configured engines may accept work.")
 
+    def run_finance_cycle(self, data: dict[str, Any] | None = None) -> dict[str, Any]:
+        data = data or {}
+        assets = data.get("assets") if isinstance(data.get("assets"), list) else None
+        timeframes = data.get("timeframes") if isinstance(data.get("timeframes"), list) else None
+        risk_fraction = float(data.get("risk_fraction", self.finance.DEFAULT_RISK_FRACTION))
+        self.activity("RESEARCH", "Finance: çoklu varlık strateji testi ve OOS incelemesi başladı.", worker="Finance")
+        result = self.finance.autonomous_paper_cycle(assets, timeframes, risk_fraction=risk_fraction)
+        if data.get("expert_ai") is True:
+            provider = str(data.get("preferred_ai_provider") or "claude_code")
+            self.activity("VALIDATION", f"Finance: {provider} uzman eleştirisi çalışıyor; karar yetkisi yok.",
+                          worker="Finance")
+            result["expert_review"] = self.finance_expert.review_paper_cycle(result, provider)
+            self.store.update(lambda state: next(
+                (row for row in state.get("finance_cycles", []) if row.get("id") == result.get("id")), {}
+            ).update(expert_review=result["expert_review"]))
+        self.activity("VALIDATION", f"Finance cycle sonucu: {result['status']}; gerçek emir 0.",
+                      worker="Finance", level="success" if result["status"] == "PAPER_POSITION_OPENED" else "warning")
+        self.notify("FINANCE PAPER CYCLE", f"{result['status']} · gerçek para kullanılmadı")
+        return result
+
     def pause(self) -> None:
         self._paused = True
         self.activity("BLOCKED", "Yeni mission kabulü duraklatıldı; çalışan mission zorla kesilmedi.", level="warning")
@@ -465,8 +490,10 @@ class ControlCenterService:
             item.get("connection_status") == "CONNECTED" for item in accounts
         )
         ffmpeg_ready = bool(find_ffmpeg() and find_ffprobe())
-        speech_engine = "edge-tts" if shutil.which("edge-tts") else (
-            "windows-tts" if shutil.which("powershell.exe") else ""
+        speech_engine = "edge-tts" if find_edge_tts() else (
+            "windows-tts" if shutil.which("powershell.exe") or shutil.which("powershell") else (
+                "ffmpeg-flite" if ffmpeg_has_flite() else ""
+            )
         )
         capabilities = [
             {"id": "command_pipeline", "label": "Gerçek görev hattı", "ready": True,
@@ -477,9 +504,9 @@ class ControlCenterService:
             {"id": "video_render", "label": "Video düzenleme / MP4", "ready": ffmpeg_ready,
              "mode": "YEREL FFMPEG" if ffmpeg_ready else "FFMPEG BULUNAMADI",
              "detail": "Render, altyazı, ses ve kalite kapıları yerel makinede çalışır."},
-            {"id": "speech", "label": "Seslendirme", "ready": bool(speech_engine),
+            {"id": "speech", "label": "Seslendirme", "ready": narration_capability_available(),
              "mode": speech_engine or "SES MOTORU BULUNAMADI",
-             "detail": "edge-tts tercih edilir; Windows TTS güvenli yerel yedektir."},
+             "detail": "edge-tts tercih edilir; Windows TTS ve yerel FFmpeg güvenli yedeklerdir."},
             {"id": "youtube_account", "label": "YouTube hesabı", "ready": connected_youtube_accounts > 0,
              "mode": f"{connected_youtube_accounts} BAĞLI HESAP" if connected_youtube_accounts else "BAĞLANTI GEREKLİ",
              "detail": "Yayın otomatik değildir; kalite sonrası insan onayı zorunludur."},
@@ -1017,6 +1044,8 @@ class ControlCenterService:
                 "engines": persisted["engines"], "approvals": list(reversed(persisted["approvals"][-100:])),
                 "notifications": list(reversed(persisted["notifications"][-50:])), "paper": persisted["paper"],
                 "backtests": list(reversed(persisted["backtests"][-30:])),
+                "finance_cycles": list(reversed(persisted.get("finance_cycles", [])[-30:])),
+                "finance_decisions": list(reversed(persisted.get("finance_decisions", [])[-100:])),
                 "finance_exploration": persisted.get("finance_exploration", {}),
                 "youtube_learning": persisted.get("youtube_learning", {}),
                 "workforce": {"workers": self.workforce.workers(),

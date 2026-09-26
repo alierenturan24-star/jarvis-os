@@ -50,3 +50,67 @@ class TestMediaAgentExecute:
         assert captured["topic"] == "Bitcoin neden düştü"
         assert captured["duration_seconds"] == 60
         assert captured["preferred_provider"] == "ollama"
+
+    def test_plan_only_command_does_not_enable_artifact_and_preserves_full_request(self, monkeypatch):
+        captured = {}
+
+        def fake_plan(
+            self, topic, duration_seconds=60, preferred_provider=None,
+            produce_artifact=False, request_text=None,
+        ):
+            captured.update(
+                topic=topic,
+                produce_artifact=produce_artifact,
+                request_text=request_text,
+            )
+            return "SENARYO\nx\n\nSAHNELER\nx"
+
+        from src.media.manager import MediaManager
+        monkeypatch.setattr(MediaManager, "plan", fake_plan)
+
+        command = (
+            "YouTube için güncel trendleri araştır, en iyi 3 video fikrini ve "
+            "başlıklarını hazırla; video üretim planı oluştur fakat yayınlama."
+        )
+        agent = MediaAgent()
+        agent.execute(Task(agent="media", action="dispatch", target=command))
+
+        assert captured["produce_artifact"] is False
+        assert captured["request_text"] == command
+
+    def test_explicit_licensed_remix_never_inherits_paid_media_permission(self):
+        captured = {}
+
+        class Manager:
+            last_artifact_path = ""
+            last_production_record = None
+            last_capability_gap = None
+
+            def plan(
+                self, topic, duration_seconds=60, preferred_provider=None,
+                produce_artifact=False, request_text=None, standing_permission=False,
+                free_only=False,
+            ):
+                captured.update(
+                    standing_permission=standing_permission,
+                    free_only=free_only,
+                    produce_artifact=produce_artifact,
+                )
+                return "SENARYO\nTürkçe\n\nSAHNELER\nSahne 1"
+
+        agent = MediaAgent()
+        agent.manager = Manager()
+        agent.execute(Task(
+            agent="media", action="dispatch",
+            target=(
+                "Public Domain, CC0 veya CC BY Wikimedia Commons videosunu seç; "
+                "Türkçe anlatımla yeniden kurgulanmış video hazırla."
+            ),
+            metadata={"paid_media_permission": "paid_media_generation"},
+        ))
+
+        assert captured == {
+            "standing_permission": False,
+            "free_only": True,
+            "produce_artifact": True,
+        }

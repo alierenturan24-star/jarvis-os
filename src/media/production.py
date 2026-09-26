@@ -13,7 +13,9 @@ from pathlib import Path
 from src.media.capability_model import IMAGE_TO_VIDEO, MediaModelProfile, SceneProvenance, TEXT_TO_IMAGE
 from src.media.provider_selection import rank_available_providers
 from src.media.quality import REQUIRED_SECTIONS
-from src.media.renderer import _write_sapi_wav, find_ffmpeg, find_ffprobe
+from src.media.renderer import (
+    find_ffmpeg, find_ffprobe, narration_capability_available, write_narration_audio,
+)
 from src.providers.execution_history import ProviderExecutionHistory
 from src.security.action_policy import ActionPolicy
 
@@ -137,6 +139,7 @@ class ScenePlan:
     visual_description: str
     duration_seconds: float
     transition: str = "cut"
+    caption_text: str = ""
 
 
 @dataclass(frozen=True)
@@ -152,9 +155,17 @@ class ParsedProductionPlan:
 
 
 def _split_sections(text: str) -> dict[str, str]:
+    # LLMs sometimes wrap the required headings in Markdown bold markers or
+    # escape those markers (``\\*\\*SENARYO\\*\\*``). Normalize only formatting
+    # punctuation; the actual section names/content remain unchanged.
+    text = re.sub(r"\\([*_~])", r"\1", text or "")
     positions = []
     for name in REQUIRED_SECTIONS:
-        match = re.search(rf"^{re.escape(name)}\s*$", text, re.MULTILINE)
+        match = re.search(
+            rf"^\s*(?:\*\*)?{re.escape(name)}(?:\*\*)?\s*:?[ \t]*$",
+            text,
+            re.MULTILINE,
+        )
         if match:
             positions.append((match.start(), match.end(), name))
     positions.sort()
@@ -201,6 +212,7 @@ def parse_plan_text(plan_text: str) -> ParsedProductionPlan | None:
             narration_segment=narration,
             visual_description=visual,
             duration_seconds=float(match.group("seconds")),
+            caption_text=match.group("caption").strip(),
         ))
     if len(scenes) < 4:
         return None
@@ -258,7 +270,11 @@ class GeneralProductionBuilder:
 
     @property
     def available(self) -> bool:
-        return bool(find_ffmpeg() and self._source_pairs())
+        # A fixed authored demo storyboard is no longer required.  The
+        # normal FREE_ONLY route obtains licensed Commons images per scene;
+        # this property reports the local render/audio prerequisites rather
+        # than the optional legacy asset pair.
+        return bool(find_ffmpeg() and narration_capability_available())
 
     def _source_pairs(self) -> list[tuple[str, Path, Path]]:
         pairs = []
@@ -310,9 +326,10 @@ class GeneralProductionBuilder:
               allow_legacy_authored_series: bool = False,
               enable_scene_motion: bool = False,
               stage_sink: dict | None = None,
-              standing_permission: bool = False) -> PackageBuildResult:
+              standing_permission: bool = False,
+              free_only: bool = False) -> PackageBuildResult:
         video_render_available = bool(find_ffmpeg())
-        narration_available = bool(shutil.which("edge-tts") or shutil.which("powershell.exe") or shutil.which("powershell"))
+        narration_available = narration_capability_available()
         matching = self._matching_visual_assets(allow_legacy_authored_series)
         required, available, missing = self._capability_accounting(
             visual_available=bool(matching), narration_available=narration_available,
@@ -344,7 +361,7 @@ class GeneralProductionBuilder:
                 research_grounded=research_grounded, research_evidence_ref=research_evidence_ref,
                 required=required, available=available, missing=missing,
                 enable_scene_motion=enable_scene_motion, stage_sink=stage_sink,
-                standing_permission=standing_permission)
+                standing_permission=standing_permission, free_only=free_only)
 
         previous = list(memory.get("productions", []))
         used = {row.get("visual", {}).get("source_generation_fingerprint") for row in previous}
@@ -381,22 +398,12 @@ class GeneralProductionBuilder:
             )
 
             script = parsed.script
-            audio = root / "narration.wav"
-            narration_provider = "Windows System.Speech"
             voice = _resolve_tts_voice(channel_language)
-            edge_tts = shutil.which("edge-tts")
             if stage_sink is not None:
                 stage_sink["last_stage"] = "audio_narration"
-            if edge_tts:
-                audio = root / "narration.mp3"
-                spoken = subprocess.run(
-                    [edge_tts, "--voice", voice, "--text", script,
-                     "--write-media", str(audio)], capture_output=True, text=True, timeout=60, check=False,
-                )
-                audio_ok = spoken.returncode == 0 and audio.is_file() and audio.stat().st_size > 1024
-                narration_provider = f"edge-tts {voice}"
-            else:
-                audio_ok = _write_sapi_wav(audio, script)
+            audio, narration_provider, audio_ok = write_narration_audio(
+                root, script, channel_language, voice,
+            )
             if not audio_ok:
                 return PackageBuildResult(False, error="CAPABILITY_GAP: real narration generation unavailable",
                                           production_id=production_id)
@@ -415,13 +422,19 @@ class GeneralProductionBuilder:
                 except (OSError, ValueError, subprocess.TimeoutExpired):
                     narration_seconds = None
 
-            thumbnail = root / "thumbnail-final.png"
-            shutil.copy2(scenes[-1], thumbnail)
+            thumbnail = self._build_thumbnail(scenes[-1], parsed.title, root)
+            music = self._create_original_music_bed(
+                root, narration_seconds or sum(scene.duration_seconds for scene in parsed.scenes),
+            )
+            subtitles = self._write_subtitles(
+                root, parsed.scenes, narration_seconds or sum(scene.duration_seconds for scene in parsed.scenes),
+            )
 
             scene_plan = [{
                 "scene_id": s.scene_id, "script_beat_id": s.script_beat_id, "purpose": s.purpose,
                 "narration_segment": s.narration_segment, "visual_description": s.visual_description,
                 "duration_seconds": s.duration_seconds, "transition": s.transition,
+                "caption_text": s.caption_text,
             } for s in parsed.scenes]
 
             manifest = {
@@ -485,7 +498,11 @@ class GeneralProductionBuilder:
                     "crop_order": list(range(len(scenes))), "production_id": production_id},
                 "source_generation_fingerprint": source_hash,
                 "tested_variation": f"goal-driven script ({len(scenes)} scenes) over authored '{prefix}' visual asset",
-                "music": None, "publish_used": False,
+                "music_file": music.name if music else "",
+                "music": ({"provider": "ffmpeg_local_procedural", "license": "original",
+                           "copyright_safe": True} if music else None),
+                "subtitle_file": subtitles.name,
+                "publish_used": False,
             }
             if stage_sink is not None:
                 stage_sink["last_stage"] = "package"
@@ -506,7 +523,8 @@ class GeneralProductionBuilder:
                                      missing: tuple[str, ...],
                                      enable_scene_motion: bool = False,
                                      stage_sink: dict | None = None,
-                                     standing_permission: bool = False) -> PackageBuildResult:
+                                     standing_permission: bool = False,
+                                     free_only: bool = False) -> PackageBuildResult:
         """Real per-scene generation via whichever genuinely available,
         ranked text_to_image provider exists (see
         ``src.media.provider_selection``) -- e.g. NVIDIA NIM once
@@ -517,7 +535,9 @@ class GeneralProductionBuilder:
         fixed character identity -- content and provenance are entirely
         goal/provider-driven.
         """
-        ranked, considered = rank_available_providers(TEXT_TO_IMAGE)
+        ranked, considered = rank_available_providers(TEXT_TO_IMAGE, include_free_stock=free_only)
+        if free_only:
+            ranked = [(profile, provider) for profile, provider in ranked if profile.cost_class != "paid"]
         if not ranked:
             evidence = "; ".join(f"{c.profile.provider_id}/{c.profile.model_id}: {c.reason}" for c in considered) \
                 or "no media provider is registered for text_to_image"
@@ -543,9 +563,22 @@ class GeneralProductionBuilder:
                 # as soon as a specific candidate is actually attempted. Kept as
                 # a fallback in case the loop below throws before recording one.
                 stage_sink["last_stage"] = f"{capability_label}_scene_{index}_of_{len(parsed.scenes)}"
-            image_path, entry = self._generate_scene_image(
-                ranked, scene, index, root, enable_motion=enable_scene_motion, stage_sink=stage_sink,
-                standing_permission=standing_permission)
+            image_path = None
+            entry = None
+            # The user's low-cost remix workflow: prefer a genuinely
+            # reusable Commons VIDEO clip when one exists, then fall back to
+            # the already-wired licensed still-image route. This never
+            # downloads arbitrary YouTube/social videos and every accepted
+            # source carries author/license/URL evidence into the manifest.
+            if free_only:
+                image_path, entry = self._licensed_commons_clip(
+                    scene, index, root, stage_sink=stage_sink,
+                )
+            if image_path is None:
+                image_path, entry = self._generate_scene_image(
+                    ranked, scene, index, root, enable_motion=enable_scene_motion, stage_sink=stage_sink,
+                    standing_permission=standing_permission)
+            assert entry is not None
             provenance.append(entry.as_dict())
             if image_path is None:
                 reason = entry.quality_evidence.get("reason", "")
@@ -571,22 +604,12 @@ class GeneralProductionBuilder:
         self._checkpoint(checkpoint, production_id, "SCENES_AND_MOTION", "completed")
 
         script = parsed.script
-        audio = root / "narration.wav"
-        narration_provider = "Windows System.Speech"
         voice = _resolve_tts_voice(channel_language)
-        edge_tts = shutil.which("edge-tts")
         if stage_sink is not None:
             stage_sink["last_stage"] = "audio_narration"
-        if edge_tts:
-            audio = root / "narration.mp3"
-            spoken = subprocess.run(
-                [edge_tts, "--voice", voice, "--text", script, "--write-media", str(audio)],
-                capture_output=True, text=True, timeout=60, check=False,
-            )
-            audio_ok = spoken.returncode == 0 and audio.is_file() and audio.stat().st_size > 1024
-            narration_provider = f"edge-tts {voice}"
-        else:
-            audio_ok = _write_sapi_wav(audio, script)
+        audio, narration_provider, audio_ok = write_narration_audio(
+            root, script, channel_language, voice,
+        )
         if not audio_ok:
             return PackageBuildResult(False, error="CAPABILITY_GAP: real narration generation unavailable",
                                        production_id=production_id, required_capabilities=required,
@@ -606,13 +629,19 @@ class GeneralProductionBuilder:
             except (OSError, ValueError, subprocess.TimeoutExpired):
                 narration_seconds = None
 
-        thumbnail = root / "thumbnail-final.png"
-        shutil.copy2(self._thumbnail_source(scene_files, root), thumbnail)
+        thumbnail = self._build_thumbnail(self._thumbnail_source(scene_files, root), parsed.title, root)
+        music = self._create_original_music_bed(
+            root, narration_seconds or sum(scene.duration_seconds for scene in parsed.scenes),
+        )
+        subtitles = self._write_subtitles(
+            root, parsed.scenes, narration_seconds or sum(scene.duration_seconds for scene in parsed.scenes),
+        )
 
         scene_plan = [{
             "scene_id": s.scene_id, "script_beat_id": s.script_beat_id, "purpose": s.purpose,
             "narration_segment": s.narration_segment, "visual_description": s.visual_description,
             "duration_seconds": s.duration_seconds, "transition": s.transition,
+            "caption_text": s.caption_text,
         } for s in parsed.scenes]
 
         used_providers = sorted({row["provider"] for row in provenance if row.get("success")})
@@ -626,6 +655,7 @@ class GeneralProductionBuilder:
             "target_audience": "general", "target_country_language": f"{channel_market} / {channel_language}",
             "video_type": "generated_short",
             "production_backend": f"dynamic_provider:{'+'.join(used_providers) or 'unknown'}",
+            "budget_mode": "FREE_ONLY" if free_only else "APPROVAL_GATED_PAID_ALLOWED",
             "image_provider": "+".join(sorted({f"{row['provider']}/{row['model']}" for row in provenance if row.get("success")})),
             "narration_provider": narration_provider, "narration_language": channel_language,
             "narration_seconds": narration_seconds,
@@ -650,7 +680,7 @@ class GeneralProductionBuilder:
             "audio_file": audio.name,
             "thumbnail_path": str(thumbnail.resolve()),
             "thumbnail_concepts": [parsed.thumbnail_concept], "selected_thumbnail": parsed.thumbnail_concept,
-            "thumbnail_selection_reason": "final generated scene reused as thumbnail",
+            "thumbnail_selection_reason": "local FFmpeg title-card design over licensed/generated scene",
             "title_candidates": [parsed.title], "selected_title": parsed.title,
             "description": parsed.description, "tags": list(parsed.tags),
             "opportunity_selection": {"bounded": True, "trend_claim": False,
@@ -671,7 +701,11 @@ class GeneralProductionBuilder:
             "source_generation_fingerprint": fingerprint,
             "tested_variation": f"goal-driven script ({len(scene_files)} scenes) via dynamic provider "
                                  f"({'+'.join(used_providers) or 'unknown'})",
-            "music": None, "publish_used": False,
+            "music_file": music.name if music else "",
+            "music": ({"provider": "ffmpeg_local_procedural", "license": "original",
+                       "copyright_safe": True} if music else None),
+            "subtitle_file": subtitles.name,
+            "publish_used": False,
             "scene_provenance": provenance,
         }
         if stage_sink is not None:
@@ -682,6 +716,67 @@ class GeneralProductionBuilder:
         return PackageBuildResult(True, str(manifest_path.resolve()), production_id=production_id,
                                    required_capabilities=required, available_capabilities=required,
                                    missing_capabilities=())
+
+    @staticmethod
+    def _licensed_commons_clip(scene: ScenePlan, index: int, root: Path,
+                               *, stage_sink: dict | None = None) -> tuple[Path | None, SceneProvenance | None]:
+        from src.providers.wikimedia_media_provider import WikimediaMediaProvider
+
+        if stage_sink is not None:
+            stage_sink["last_stage"] = f"licensed_video_scene_{index}"
+        description = str(scene.visual_description or "").strip()
+        words = re.findall(r"[\wÀ-ÿ'-]+", description, flags=re.UNICODE)
+        stop = {
+            "with", "from", "into", "showing", "inside", "outside", "close", "view",
+            "footage", "photo", "video", "scene", "gösteren", "içinde", "dışında",
+            "yakın", "çekim", "görüntü", "sahne", "kullan", "uygun",
+        }
+        content_words = [word for word in words if len(word) >= 4 and word.casefold() not in stop]
+        queries = list(dict.fromkeys(filter(None, (
+            description,
+            " ".join(content_words[:7]),
+            " ".join(content_words[-5:]),
+        ))))[:3]
+        provider = WikimediaMediaProvider()
+        result = None
+        for attempt, query in enumerate(queries, 1):
+            if stage_sink is not None:
+                stage_sink["last_stage"] = f"licensed_video_scene_{index}_search_{attempt}_of_{len(queries)}"
+            candidate = provider.generate_video_clip(query)
+            result = candidate
+            if candidate.success and candidate.content_bytes:
+                break
+        if result is None:
+            return None, None
+        if not result.success or not result.content_bytes:
+            return None, None
+        provenance = dict(result.provenance or {})
+        mime = str(provenance.get("mime") or "video/webm").casefold()
+        source_suffix = ".mp4" if "mp4" in mime else ".ogv" if "ogg" in mime else ".webm"
+        source = root / f"scene-{index:02d}-licensed-source{source_suffix}"
+        source.write_bytes(result.content_bytes)
+        output = root / f"scene-{index:02d}.mp4"
+        seconds = max(2.0, float(scene.duration_seconds or 5.0))
+        command = [
+            find_ffmpeg(), "-y", "-hide_banner", "-loglevel", "error",
+            "-stream_loop", "-1", "-i", str(source),
+            "-t", f"{seconds:.3f}", "-an", "-vf", "fps=25,format=yuv420p",
+            "-c:v", "libx264", "-preset", "veryfast", str(output),
+        ]
+        try:
+            completed = subprocess.run(command, capture_output=True, text=True, timeout=60, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            return None, None
+        if completed.returncode != 0 or not output.is_file() or output.stat().st_size <= 10_000:
+            return None, None
+        generation_type = str(provenance.pop("generation_type", "licensed_stock_video_retrieval"))
+        return output, SceneProvenance(
+            scene_id=scene.scene_id, capability="text_to_video", provider=result.provider_id,
+            model=result.model_id, generation_type=generation_type,
+            output_path=str(output.resolve()), success=True, fallback_used=False,
+            cost_class=result.cost_class, input_reference=scene.visual_description[:200],
+            duration_seconds=result.duration_seconds, quality_evidence=provenance,
+        )
 
     @staticmethod
     def _generate_scene_image(ranked, scene: ScenePlan, index: int, root: Path,
@@ -757,11 +852,14 @@ class GeneralProductionBuilder:
                         return motion_path, motion_entry
                 path = root / f"scene-{index:02d}.png"
                 path.write_bytes(result.content_bytes)
+                provenance = dict(result.provenance or {})
+                generation_type = str(provenance.pop("generation_type", TEXT_TO_IMAGE))
                 return path, SceneProvenance(
                     scene_id=scene.scene_id, capability=TEXT_TO_IMAGE, provider=profile.provider_id,
-                    model=profile.model_id, generation_type=TEXT_TO_IMAGE, output_path=str(path.resolve()),
+                    model=profile.model_id, generation_type=generation_type, output_path=str(path.resolve()),
                     success=True, fallback_used=fallback_used, cost_class=result.cost_class,
-                    input_reference=scene.visual_description[:200], duration_seconds=result.duration_seconds)
+                    input_reference=scene.visual_description[:200], duration_seconds=result.duration_seconds,
+                    quality_evidence=provenance)
         if not attempted and approval_blocked:
             # EVERY genuinely eligible candidate was paid and unapproved --
             # no provider was ever actually called. Truthfully distinct
@@ -844,6 +942,91 @@ class GeneralProductionBuilder:
                    "-i", str(last), "-frames:v", "1", str(frame)]
         subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
         return frame if frame.is_file() else last
+
+    @staticmethod
+    def _ffmpeg_filter_path(path: Path) -> str:
+        return path.resolve().as_posix().replace(":", r"\:").replace("'", r"\'")
+
+    @classmethod
+    def _build_thumbnail(cls, source: Path, title: str, root: Path) -> Path:
+        """Create a new vertical cover locally; never copy another cover."""
+        target = root / "thumbnail-final.png"
+        text_file = root / "thumbnail-title.txt"
+        words = str(title or "Swiss Insider").split()
+        lines: list[str] = []
+        current = ""
+        for word in words:
+            proposed = f"{current} {word}".strip()
+            if current and len(proposed) > 22:
+                lines.append(current)
+                current = word
+            else:
+                current = proposed
+        if current:
+            lines.append(current)
+        text_file.write_text("\n".join(lines[:3]), encoding="utf-8")
+
+        font_candidates = (
+            Path("C:/Windows/Fonts/arialbd.ttf"),
+            Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+        )
+        font = next((item for item in font_candidates if item.is_file()), None)
+        font_part = f"fontfile='{cls._ffmpeg_filter_path(font)}':" if font else ""
+        text_path = cls._ffmpeg_filter_path(text_file)
+        video_filter = (
+            "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,"
+            "drawbox=x=0:y=1180:w=1080:h=740:color=black@0.62:t=fill,"
+            f"drawtext={font_part}textfile='{text_path}':fontcolor=white:fontsize=76:"
+            "line_spacing=18:x=(w-text_w)/2:y=1280:borderw=5:bordercolor=black"
+        )
+        command = [find_ffmpeg(), "-y", "-hide_banner", "-loglevel", "error", "-i", str(source),
+                   "-vf", video_filter, "-frames:v", "1", str(target)]
+        completed = subprocess.run(command, capture_output=True, text=True, timeout=45, check=False)
+        if completed.returncode != 0 or not target.is_file() or target.stat().st_size <= 10_000:
+            shutil.copy2(source, target)
+        return target
+
+    @staticmethod
+    def _create_original_music_bed(root: Path, duration_seconds: float) -> Path | None:
+        """Generate a quiet original pulse bed locally (no copyrighted song)."""
+        target = root / "music-original.wav"
+        duration = max(5.0, float(duration_seconds or 0))
+        command = [
+            find_ffmpeg(), "-y", "-hide_banner", "-loglevel", "error",
+            "-f", "lavfi", "-i", f"sine=frequency=110:sample_rate=44100:duration={duration:.3f}",
+            "-f", "lavfi", "-i", f"sine=frequency=220:sample_rate=44100:duration={duration:.3f}",
+            "-filter_complex",
+            f"[0:a]volume=0.035,tremolo=f=2.2:d=0.72[a0];"
+            f"[1:a]volume=0.014,tremolo=f=4.4:d=0.55[a1];"
+            f"[a0][a1]amix=inputs=2:normalize=0,afade=t=in:st=0:d=0.8,"
+            f"afade=t=out:st={max(0.0, duration - 1.2):.3f}:d=1.2[out]",
+            "-map", "[out]", "-c:a", "pcm_s16le", str(target),
+        ]
+        completed = subprocess.run(command, capture_output=True, text=True, timeout=45, check=False)
+        return target if completed.returncode == 0 and target.is_file() and target.stat().st_size > 1024 else None
+
+    @staticmethod
+    def _write_subtitles(root: Path, scenes: tuple[ScenePlan, ...], duration_seconds: float) -> Path:
+        target = root / "subtitles.srt"
+        raw = [max(0.5, float(scene.duration_seconds)) for scene in scenes]
+        scale = max(1.0, float(duration_seconds or sum(raw))) / max(sum(raw), 0.1)
+
+        def stamp(seconds: float) -> str:
+            millis = max(0, round(seconds * 1000))
+            hours, millis = divmod(millis, 3_600_000)
+            minutes, millis = divmod(millis, 60_000)
+            secs, millis = divmod(millis, 1000)
+            return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
+
+        cursor = 0.0
+        blocks = []
+        for index, (scene, seconds) in enumerate(zip(scenes, raw), 1):
+            end = cursor + seconds * scale
+            caption = scene.caption_text or scene.narration_segment
+            blocks.append(f"{index}\n{stamp(cursor)} --> {stamp(end)}\n{caption.strip()}\n")
+            cursor = end
+        target.write_text("\n".join(blocks), encoding="utf-8")
+        return target
 
     def _split_storyboard(self, source: Path, root: Path, scene_count: int) -> list[Path]:
         width, height = self._dimensions(source)

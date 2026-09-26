@@ -117,7 +117,7 @@ $token = if (Test-Path -LiteralPath $TokenPath -PathType Leaf) {
 if (-not (Test-ControlCenterHealth $token)) {
     Write-Host '[5/5] JARVIS Control Center baslatiliyor...' -ForegroundColor Cyan
     Start-Process -FilePath $VenvPython -ArgumentList @(
-        "`"$ControlCenter`"", '--host', '127.0.0.1', '--port', $Port, '--no-bootstrap-output'
+        "`"$ControlCenter`"", '--host', '127.0.0.1', '--port', $Port, '--no-bootstrap-output', '--fresh-session'
     ) -WorkingDirectory $ProjectRoot -RedirectStandardOutput $StdoutPath `
       -RedirectStandardError $StderrPath -WindowStyle Hidden | Out-Null
 

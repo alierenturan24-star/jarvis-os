@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Optional
 
 from src.core.plan_executor import PlanExecutionReport, PlanExecutor
@@ -21,6 +22,11 @@ from src.mission.department_adapters import (
     search_target_repositories,
 )
 from src.mission.models import Mission, MissionStatus, MissionType
+from src.mission.completion import (
+    has_current_information_intent,
+    has_explicit_research_intent,
+    has_youtube_production_intent,
+)
 from src.mission.target_resolver import (
     Target, TargetKind, TargetResolver, has_acquisition_signal, target_matches_repo,
 )
@@ -350,6 +356,48 @@ _MEDIA_PRODUCTION_VERB_PATTERN = re.compile(
     r"|\b(?:üret\w*|hazırla\w*|oluştur\w*)\b",
     re.IGNORECASE,
 )
+_MEDIA_RECENCY_PATTERN = re.compile(r"\bson\s+(\d+)\s+gün\w*", re.IGNORECASE)
+_MEDIA_DATED_SOURCE_PATTERN = re.compile(r"\b(?:tarihli|yayın\s+tarih\w*)\b", re.IGNORECASE)
+_MEDIA_TRUSTED_SOURCE_PATTERN = re.compile(r"\b(?:güvenilir|doğrulan\w*)\b", re.IGNORECASE)
+_MEDIA_LANGUAGE_CUES = (
+    ("Almanca", ("almanca", "german", "deutsch")),
+    ("Fransızca", ("fransızca", "fransizca", "french", "francais")),
+    ("İtalyanca", ("italyanca", "italian", "italiano")),
+)
+_SWISS_COUNTRY_PATTERN = re.compile(
+    r"\b(?:isviçre|isvicre|switzerland|schweiz|suisse|svizzera)\b",
+    re.IGNORECASE,
+)
+
+
+def _media_research_requirements(source_text: str) -> str:
+    """Keep evidence constraints while dropping production instructions.
+
+    The research task used to keep only a short market prefix and silently
+    lose an explicit window/language requirement from a multi-sentence user
+    request.  The deterministic freshness/language gate then quite correctly
+    rejected the resulting generic evidence -- but reported a 14-day default
+    instead of the requested 7 days.  Preserve only the narrow research
+    constraints here; media/publish instructions still never enter the query.
+    """
+
+    source = source_text or ""
+    lowered = "".join(
+        char for char in unicodedata.normalize("NFKD", source.casefold())
+        if not unicodedata.combining(char)
+    )
+    requirements: list[str] = []
+    window = _MEDIA_RECENCY_PATTERN.search(source)
+    if window:
+        requirements.append(f"son {window.group(1)} gün içinde")
+    languages = [label for label, aliases in _MEDIA_LANGUAGE_CUES if any(alias in lowered for alias in aliases)]
+    if languages:
+        requirements.append(", ".join(languages) + " kaynaklardan")
+    if _MEDIA_DATED_SOURCE_PATTERN.search(source):
+        requirements.append("yayın tarihi açıkça görünen")
+    if _MEDIA_TRUSTED_SOURCE_PATTERN.search(source):
+        requirements.append("güvenilir")
+    return " ".join(requirements)
 
 
 def _media_research_query(source_text: str) -> str:
@@ -374,8 +422,10 @@ def _media_research_query(source_text: str) -> str:
     # capability/tool research stay separate; no GitHub/tool search is
     # requested here.
     context = _media_research_context(source_text)
+    requirements = _media_research_requirements(source_text)
+    evidence_clause = f" {requirements}" if requirements else ""
     return (
-        f"{context} güncel gündem: bugün öne çıkan haberler, kamuoyunun ilgisini çeken "
+        f"{context}{evidence_clause} güncel gündem: bugün öne çıkan haberler, kamuoyunun ilgisini çeken "
         "gelişmeler ve trend olan konular. Kısa video (Shorts) anlatımına uygun, "
         "güncelliği kaynaklarla doğrulanabilir TEK bir içerik fırsatı belirle."
     )
@@ -399,7 +449,15 @@ def _media_research_context(source_text: str) -> str:
     # "araştır/seç" instead of the requested market.
     market_prefix = re.match(r"^(.{1,120}?\biçin\b)", stripped, re.IGNORECASE)
     if market_prefix:
-        return market_prefix.group(1).strip()
+        prefix = market_prefix.group(1).strip()
+        # "Swiss Insider için İsviçre'nin ...": the first ``için`` phrase
+        # is a channel name, not the requested country.  Prefer the explicit
+        # country when the prefix itself does not contain it; otherwise keep
+        # the richer phrase (e.g. "İsviçre pazarı için").
+        country = _SWISS_COUNTRY_PATTERN.search(stripped)
+        if country and not _SWISS_COUNTRY_PATTERN.search(prefix):
+            return country.group(0)
+        return prefix
     return stripped or "genel"
 
 
@@ -431,7 +489,10 @@ def _narrow_pure_generation_youtube(
         # Açık bir "yalnızca üret" sinyali yok -- eski davranış AYNEN korunur.
         return bundle
     removable = {"github", "browser"}
-    if persisted_production or not any(cue in lowered_text for cue in _AUDIENCE_RESEARCH_CUES):
+    if (
+        not has_explicit_research_intent(lowered_text)
+        and (persisted_production or not any(cue in lowered_text for cue in _AUDIENCE_RESEARCH_CUES))
+    ):
         removable.add("research")
     return [name for name in bundle if name not in removable]
 
@@ -586,6 +647,21 @@ class DepartmentOrchestrator:
                 bundle.append(name)
                 enriched_additions.append(name)
 
+        # Live acceptance repair: a compound request can begin with a
+        # research clause ("güncel bir konu bul") and only later ask for
+        # the concrete artifact using a natural inflection such as
+        # "9:16 test videosu oluştur".  ``classify_mission_type`` quite
+        # reasonably labels the leading/overall request RESEARCH, while the
+        # keyword table only contains a few literal phrases ("video üret",
+        # "video hazırla").  The completion layer already has the shared,
+        # tested production-intent parser and correctly requires a video for
+        # this wording.  Reuse that same parser for dispatch so routing can
+        # never require an artifact while omitting the only department that
+        # can produce it.
+        if has_youtube_production_intent(text) and "media" not in bundle:
+            bundle.append("media")
+            enriched_additions.append("media")
+
         if mission_type != MissionType.CODE:
             for name in _required_goal_departments(lowered):
                 if name not in bundle:
@@ -698,6 +774,10 @@ class DepartmentOrchestrator:
         kategori/URL çözümlemesi yapmak zorunda kalmaz."""
 
         tasks: list[Task] = []
+        # Handlers need the complete original request. GoalSpec.goal is the
+        # leading semantic clause; its context/constraints must not erase
+        # later execution cues such as bounded exploration and timeframes.
+        source_text = mission.title or mission.goal or mission.description
         # Round 5 repair: set True only when media genuinely needs
         # research's SELECTED opportunity to know what to make a video
         # about (implicit topic discovery, not an explicit research ask or
@@ -705,16 +785,15 @@ class DepartmentOrchestrator:
         # branch below). Drives the explicit media->research dependency
         # wired after the task-creation loop.
         media_needs_research_grounding = (
-            mission.mission_type in {MissionType.MEDIA, MissionType.YOUTUBE}
+            has_youtube_production_intent(source_text)
             and "research" in mission.departments
             and "media" in mission.departments
-            and _media_needs_topic_research((mission.goal or mission.title).casefold())
-            and not _EXPLICIT_MEDIA_TOPIC_PATTERN.search(mission.goal or mission.title)
+            and _media_needs_topic_research(source_text.casefold())
+            and (
+                has_current_information_intent(source_text)
+                or not _EXPLICIT_MEDIA_TOPIC_PATTERN.search(source_text)
+            )
         )
-        # Handlers need the complete original request. GoalSpec.goal is the
-        # leading semantic clause; its context/constraints must not erase
-        # later execution cues such as bounded exploration and timeframes.
-        source_text = mission.title or mission.goal or mission.description
         # Geriye dönük uyumluluk: ``mission.target`` zaten ``MissionEngine.
         # create_mission()`` içinde BİR KEZ dolduruluyor; Mission'ı
         # doğrudan (MissionEngine'i atlayarak) oluşturan eski/test kodu
@@ -832,7 +911,6 @@ class DepartmentOrchestrator:
 
             if department_name == "media":
                 from src.media.renderer import has_production_media_capability
-                from src.mission.completion import has_youtube_production_intent
                 if has_youtube_production_intent(source_text):
                     metadata["artifact_recovery_available"] = True
                 if has_production_media_capability(source_text):
@@ -846,13 +924,13 @@ class DepartmentOrchestrator:
                 # Use the clean primary goal, never the raw title whose
                 # conditional recovery/safety clauses can contain names
                 # of local modules (for example ``recovery``).
-                task_target = _media_research_query(mission.goal or source_text)
+                task_target = _media_research_query(source_text)
                 # Round 5 repair: media needs this SAME market/location
                 # context (not the query's boilerplate wording) to
                 # judge whether research's evidence actually covers the
                 # requested market -- see
                 # src.research.opportunity.build_selected_opportunity.
-                metadata["market_context"] = _media_research_context(mission.goal or source_text)
+                metadata["market_context"] = _media_research_context(source_text)
 
             department_timeout = _DEPARTMENT_TASK_TIMEOUTS.get(department_name, DEPARTMENT_TASK_TIMEOUT_SECONDS)
             tasks.append(Task(

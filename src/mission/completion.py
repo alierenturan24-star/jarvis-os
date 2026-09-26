@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Iterable
 
 from src.jobs.task_status import TaskStatus
+from src.research.opportunity import selected_opportunity_has_verified_current_evidence
 
 
 class ArtifactType(str, Enum):
@@ -76,13 +77,77 @@ class GoalCompletion:
         return tuple(item for item in self.requirements if not item.satisfied)
 
 
+_MEDIA_NOUN_PATTERN = r"(?:youtube\s+videosu|youtube\s+shorts?|çizgi\s+film|video\w*|shorts?\w*)"
+_DIRECT_MEDIA_PRODUCTION_PATTERN = re.compile(
+    rf"\b{_MEDIA_NOUN_PATTERN}\s+"
+    r"(?:üret(?!im\b)\w*|oluştur\w*|hazırla\w*|render\w*|kaydet\w*)\b",
+    re.IGNORECASE,
+)
+_DEFERRED_MEDIA_PRODUCTION_PATTERN = re.compile(
+    rf"\b{_MEDIA_NOUN_PATTERN}\b[^.;!?]{{0,48}}\b"
+    r"(?:üret(?!im\b)\w*|render\w*|kaydet\w*)\b",
+    re.IGNORECASE,
+)
+_PRODUCTION_BEFORE_MEDIA_PATTERN = re.compile(
+    rf"\b(?:üret(?!im\b)\w*|oluştur\w*|hazırla\w*|render\w*|kaydet\w*)\b"
+    rf"[^.;!?]{{0,30}}\b{_MEDIA_NOUN_PATTERN}\b",
+    re.IGNORECASE,
+)
+
+
 def has_youtube_production_intent(text: str) -> bool:
-    """Recognise real production even when noun and verb are not adjacent."""
+    """Return True only when the user asks for a real video artifact.
+
+    Planning objects such as ``video üretim planı`` and ``video fikri`` are
+    deliberately not treated as render commands.  This is a safety boundary:
+    a planning request must never start the production/paid-media pipeline.
+    """
+
     lowered = (text or "").casefold()
-    return (
-        any(cue in lowered for cue in ("youtube", "video", "short", "çizgi film"))
-        and any(cue in lowered for cue in ("üret", "oluştur", "hazırla", "render", "kaydet"))
+    if _DIRECT_MEDIA_PRODUCTION_PATTERN.search(lowered) or _PRODUCTION_BEFORE_MEDIA_PATTERN.search(lowered):
+        return True
+
+    deferred = _DEFERRED_MEDIA_PRODUCTION_PATTERN.search(lowered)
+    if deferred is None:
+        return False
+    # ``Shorts başlığı üret`` and ``video fikri üret`` use the strong verb
+    # "üret" but still produce text, not a video file.  Inspect only the
+    # matched noun→verb span so an unrelated planning clause elsewhere in
+    # the request cannot hide a genuine render command.
+    planning_objects = (
+        "başlık", "başlı", "fikir", "fikri", "senaryo", "script", "üretim plan",
+        "prodüksiyon plan", "içerik plan", "video plan",
     )
+    return not any(cue in deferred.group(0) for cue in planning_objects)
+
+
+def has_explicit_research_intent(text: str) -> bool:
+    """Recognise an explicit research/discovery request, including trends."""
+
+    lowered = (text or "").casefold()
+    return any(cue in lowered for cue in (
+        "araştır", "incele", "research", "trend", "güncel", "bugün",
+        "son gelişme", "şu an", "bu hafta",
+    ))
+
+
+def has_current_information_intent(text: str) -> bool:
+    lowered = (text or "").casefold()
+    return any(cue in lowered for cue in (
+        "trend", "güncel", "bugün", "current", "today", "şu an", "bu hafta",
+        "son gelişme",
+    ))
+
+
+def has_youtube_content_plan_intent(text: str) -> bool:
+    """Recognise ideas/titles/scripts/plans without implying an artifact."""
+
+    lowered = (text or "").casefold()
+    has_media_context = any(cue in lowered for cue in ("youtube", "video", "short", "çizgi film"))
+    return has_media_context and any(cue in lowered for cue in (
+        "video fik", "içerik fik", "başlık", "senaryo", "script",
+        "üretim plan", "prodüksiyon plan", "içerik plan", "video plan", "planla",
+    ))
 
 
 def infer_completion_requirements(text: str, departments: Iterable[str] = ()) -> tuple[CompletionRequirement, ...]:
@@ -97,21 +162,13 @@ def infer_completion_requirements(text: str, departments: Iterable[str] = ()) ->
     requirements: list[CompletionRequirement] = []
 
     production = r"(?:üret|oluştur|hazırla|render|kaydet)"
-    if re.search(rf"(?:video|youtube\s+videosu|shorts?|Ã§izgi\s+film)\w*\s+{production}", lowered) or re.search(
-        rf"{production}\w*[^.!?]{{0,30}}(?:video|shorts?|Ã§izgi\s+film)", lowered
-    ):
+    video_production = has_youtube_production_intent(text)
+    if video_production:
         requirements.append(_artifact_requirement(ArtifactType.VIDEO))
-
-    # Keep the correctly encoded Turkish form explicit for live UTF-8 input;
-    # older source fixtures also exercise the legacy mojibake spellings above.
-    if "çizgi film" in lowered and any(cue in lowered for cue in ("üret", "oluştur", "hazırla", "render", "kaydet")):
-        video_requirement = _artifact_requirement(ArtifactType.VIDEO)
-        if video_requirement not in requirements:
-            requirements.append(video_requirement)
 
     # Generic "Video üret" keeps the established artifact-only contract.
     # The richer evidence contract is for an explicit YouTube production.
-    youtube_production = has_youtube_production_intent(text) and any(
+    youtube_production = video_production and any(
         cue in lowered for cue in ("youtube", "short", "çizgi film")
     )
     if youtube_production:
@@ -131,6 +188,29 @@ def infer_completion_requirements(text: str, departments: Iterable[str] = ()) ->
             ("youtube_learning_persisted", "YouTube learning persistence eksik"),
             ("publish_not_used", "publish-not-used güvenlik kanıtı eksik"),
         ))
+    else:
+        # A plan-only YouTube request has a compact, truthful completion
+        # contract: a real content plan, current-source grounding when the
+        # user asked for trends/current information, and the explicit
+        # no-publish safety outcome.  It must not inherit render/QC/audio/
+        # thumbnail requirements from full production.
+        if has_youtube_content_plan_intent(text):
+            requirements.append(CompletionRequirement(
+                "youtube_evidence", "youtube_opportunity_or_content_plan",
+                "YouTube fırsat/içerik planı eksik", "youtube",
+            ))
+            if has_current_information_intent(text):
+                requirements.append(CompletionRequirement(
+                    "youtube_evidence", "current_research_grounding",
+                    "güncel YouTube araştırma kanıtı eksik", "youtube",
+                ))
+        if any(cue in lowered for cue in (
+            "yayınlama", "yayın yapma", "paylaşma", "yükleme", "upload etme", "publish etme",
+        )):
+            requirements.append(CompletionRequirement(
+                "youtube_evidence", "publish_not_used",
+                "publish-not-used güvenlik kanıtı eksik", "youtube",
+            ))
 
     if re.search(rf"(?:ses|voiceover|seslendirme)\w*\s+{production}", lowered) or re.search(
         rf"{production}\w*[^.!?]{{0,30}}(?:ses|voiceover|seslendirme)", lowered
@@ -233,6 +313,11 @@ def evaluate_goal_completion(mission) -> GoalCompletion:
             statuses.append(RequirementStatus(requirement, satisfied, valid, rendered_not_approved))
         elif requirement.kind == "youtube_evidence":
             media_task = next((task for task in mission.tasks if task.agent == "media"), None)
+            research_task = next((task for task in mission.tasks if task.agent == "research"), None)
+            research_report = (
+                research_task.metadata.get("report")
+                if research_task is not None and research_task.metadata else None
+            )
             report = media_task.metadata.get("youtube_production") if media_task and media_task.metadata else None
             artifact = (report or {}).get("artifact", {}) if isinstance(report, dict) else {}
             visual = (report or {}).get("visual", {}) if isinstance(report, dict) else {}
@@ -243,6 +328,10 @@ def evaluate_goal_completion(mission) -> GoalCompletion:
                 "youtube_opportunity_or_content_plan": bool(
                     (report and (creative.get("story_concept") or creative.get("script")))
                     or (media_task and media_task.metadata.get("youtube_content_plan") is True)
+                ),
+                "current_research_grounding": bool(
+                    research_task and research_task.status == TaskStatus.COMPLETED
+                    and selected_opportunity_has_verified_current_evidence(research_report)
                 ),
                 "technical_validation": artifact.get("technical_validation") is True,
                 "semantic_validation": artifact.get("semantic_validation") is True and quality.get("production_readiness") is True,

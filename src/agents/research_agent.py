@@ -1,10 +1,12 @@
 import re
+from datetime import datetime, timezone
 
 from src.agents.base_agent import BaseAgent
 from src.planner.task import Task
 from src.research.local_code_manager import LocalCodeManager
 from src.research.local_code_search import is_local_code_query
 from src.research.manager import ResearchManager
+from src.research.manager import topic_wants_current_information
 from src.research.opportunity import build_selected_opportunity
 
 
@@ -85,7 +87,7 @@ class ResearchAgent(BaseAgent):
                 "güncelle",
                 "yeniden araştır",
             ]
-        )
+        ) or topic_wants_current_information(query)
 
         # Sprint 35: AI Strategy Engine'in seçtiği provider'ı (varsa,
         # DepartmentOrchestrator.create_tasks -> task.metadata) mevcut
@@ -119,6 +121,31 @@ class ResearchAgent(BaseAgent):
                 sources=record.get("sources", []) if record else (),
                 created_at=str(record.get("created_at", "")) if record else "",
             )
+            # A current media mission must not stop after one unlucky search
+            # result. Retry exactly once with a materially different,
+            # multilingual query shape. This is bounded, keeps the same
+            # freshness/market gates, and never upgrades stale evidence.
+            if topic_wants_current_information(query) and not opportunity.sufficient:
+                retry_query = (
+                    f"{query} ALTERNATIVE_SOURCE_PASS "
+                    f"{datetime.now(timezone.utc).date().isoformat()}"
+                )
+                retry_result = self.manager.research(
+                    topic=retry_query,
+                    force_refresh=True,
+                    preferred_provider=preferred_provider,
+                )
+                retry_record = self.manager.knowledge.find_research(retry_query)
+                retry_opportunity = build_selected_opportunity(
+                    topic=query,
+                    location_or_market=market_context,
+                    summary=str(retry_record.get("summary", "")) if retry_record else "",
+                    sources=retry_record.get("sources", []) if retry_record else (),
+                    created_at=str(retry_record.get("created_at", "")) if retry_record else "",
+                )
+                result += "\n\n--- OTOMATİK GÜNCEL KAYNAK YENİDEN DENEMESİ ---\n" + retry_result
+                if retry_opportunity.sufficient:
+                    opportunity = retry_opportunity
             task.metadata["report"] = opportunity.as_dict()
 
         return result

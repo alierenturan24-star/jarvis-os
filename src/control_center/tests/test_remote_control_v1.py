@@ -30,6 +30,13 @@ def test_session_token_survives_restart_and_is_not_weak(tmp_path):
     assert first == second and len(first) >= 32
 
 
+def test_fresh_session_rotates_old_browser_token(tmp_path):
+    path = tmp_path / "session.token"
+    old = load_or_create_token(path)
+    fresh = load_or_create_token(path, rotate=True)
+    assert fresh != old and load_or_create_token(path) == fresh and len(fresh) >= 32
+
+
 def test_startup_marks_active_mission_interrupted_and_preserves_state(tmp_path):
     store = ControlCenterStore(tmp_path / "state.json")
     def seed(state):
@@ -75,7 +82,7 @@ def test_mobile_ui_contains_voice_health_approval_and_video_controls():
     html = Path("src/control_center/web/index.html").read_text(encoding="utf-8")
     js = Path("src/control_center/web/app.js").read_text(encoding="utf-8")
     css = Path("src/control_center/web/app.css").read_text(encoding="utf-8")
-    assert all(value in html for value in ("backendKpi", "mic", "approvalList", "youtubeArtifacts"))
+    assert all(value in html for value in ("backendKpi", "mic", "approvalList", "youtubeArtifacts", "financeCycle"))
     assert "source='text'" in js and "command('voice')" in js
     assert "decision_reason" in js and "loadYoutubeArtifacts" in js
     assert "@media(max-width:390px)" in css and "min-height:44px" in css
@@ -102,3 +109,4 @@ def test_one_click_launcher_is_local_non_admin_and_preserves_env():
     assert "Test-Path -LiteralPath $EnvironmentFile" in setup
     assert "Copy-Item -LiteralPath $EnvironmentExample" in setup
     assert "RunAs" not in setup and "Start-Process $url" in setup
+    assert "--fresh-session" in setup

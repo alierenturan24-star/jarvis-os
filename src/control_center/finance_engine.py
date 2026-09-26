@@ -676,7 +676,7 @@ class FinancePaperEngine:
             for symbol in symbols:
                 for timeframe in frames:
                     try:
-                        dimensions[(symbol, timeframe)] = self.market.ohlcv(symbol, timeframe, 500)
+                        dimensions[(symbol, timeframe)] = self.market.ohlcv(symbol, timeframe, 1000)
                     except Exception as error:
                         data_errors.append(f"{symbol}/{timeframe}: {type(error).__name__}: {error}")
 
@@ -686,7 +686,9 @@ class FinancePaperEngine:
             decisions.append({"status": "NO_TRADE", "reason": "Eksik veya hatalı piyasa verisi.",
                               "data_errors": data_errors, "live_activation": False})
         else:
-            lab = self.explore_strategies(symbols[0], asset_budget=len(symbols), candidate_budget=3,
+            lab = self.explore_strategies(
+                                          symbols[0], asset_budget=len(symbols),
+                                          candidate_budget=len(self.NOVEL_STRATEGIES),
                                           timeframe_budget=len(frames), bars_by_dimension=dimensions,
                                           retest_reason="autonomous paper cycle")
             if not lab.get("paper_promoted"):

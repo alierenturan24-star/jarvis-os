@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from src.control_center.finance_engine import FinancePaperEngine
+from src.finance.manager import FinanceManager
 from src.control_center.observability import ControlCenterReadModel
 from src.control_center.store import ControlCenterStore, utc_now
 from src.core.runtime import JarvisRuntime
@@ -71,6 +72,7 @@ class ControlCenterService:
         self.runtime = runtime or JarvisRuntime()
         self.store = store or ControlCenterStore()
         self.finance = FinancePaperEngine(self.store)
+        self.finance_expert = FinanceManager()
         self._lock = threading.RLock()
         self._thread: threading.Thread | None = None
         self._active: dict[str, Any] | None = None
@@ -309,6 +311,14 @@ class ControlCenterService:
         risk_fraction = float(data.get("risk_fraction", self.finance.DEFAULT_RISK_FRACTION))
         self.activity("RESEARCH", "Finance: çoklu varlık strateji testi ve OOS incelemesi başladı.", worker="Finance")
         result = self.finance.autonomous_paper_cycle(assets, timeframes, risk_fraction=risk_fraction)
+        if data.get("expert_ai") is True:
+            provider = str(data.get("preferred_ai_provider") or "claude_code")
+            self.activity("VALIDATION", f"Finance: {provider} uzman eleştirisi çalışıyor; karar yetkisi yok.",
+                          worker="Finance")
+            result["expert_review"] = self.finance_expert.review_paper_cycle(result, provider)
+            self.store.update(lambda state: next(
+                (row for row in state.get("finance_cycles", []) if row.get("id") == result.get("id")), {}
+            ).update(expert_review=result["expert_review"]))
         self.activity("VALIDATION", f"Finance cycle sonucu: {result['status']}; gerçek emir 0.",
                       worker="Finance", level="success" if result["status"] == "PAPER_POSITION_OPENED" else "warning")
         self.notify("FINANCE PAPER CYCLE", f"{result['status']} · gerçek para kullanılmadı")

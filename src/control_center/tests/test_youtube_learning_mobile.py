@@ -10,7 +10,8 @@ def test_youtube_learning_mobile_contract_has_preview_thumbnail_and_fields():
         "youtubeHistory", "youtubeLearning", "youtubeCharacters",
         "youtubeExperiments", "youtubeAnalytics", "youtubeArtifacts", "videoDemo",
     ))
-    assert "youtube-one-click-test" in js
+    assert "youtube-one-click-remix" in js
+    assert "TEK TIK: LİSANSLI VİDEOYU YENİDEN KURGULA" in js
     assert "Public Domain, CC0 veya CC BY" in html
     assert "thumbnail_path" in js and "WHAT CHANGED" in js
     assert "@media(max-width:390px)" in css

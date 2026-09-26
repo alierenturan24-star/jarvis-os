@@ -3,6 +3,7 @@ from __future__ import annotations
 import ipaddress
 import time
 import unicodedata
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
@@ -213,14 +214,28 @@ class ResearchCollector:
         searches = []
         if topic_wants_current_information(topic) and hasattr(self.web, "search_news"):
             if _is_swiss_topic(topic):
-                searches.extend((
-                    {"search_channel": "NEWS_DE_SRF", "query": "site:srf.ch/news Schweiz aktuelle Nachrichten letzte 7 Tage", "news": True, "source_language": "de"},
-                    {"search_channel": "NEWS_FR_RTS", "query": "site:rts.ch/info Suisse actualités des sept derniers jours", "news": True, "source_language": "fr"},
-                    {"search_channel": "NEWS_IT_RSI", "query": "site:rsi.ch/info Svizzera ultime notizie degli ultimi sette giorni", "news": True, "source_language": "it"},
-                    {"search_channel": "NEWS_DE_NZZ", "query": "site:nzz.ch Schweiz aktuelle Nachrichten letzte 7 Tage", "news": True, "source_language": "de"},
-                    {"search_channel": "NEWS_FR_LETEMPS", "query": "site:letemps.ch Suisse actualités des sept derniers jours", "news": True, "source_language": "fr"},
-                    {"search_channel": "NEWS_IT_CDT", "query": "site:cdt.ch Svizzera ultime notizie degli ultimi sette giorni", "news": True, "source_language": "it"},
-                ))
+                today = datetime.now(timezone.utc).date().isoformat()
+                alternate = "alternative_source_pass" in (topic or "").casefold()
+                if alternate:
+                    # A bounded second pass deliberately changes the query
+                    # shape. Some news backends return nothing for a single
+                    # site: filter but do return dated rows for a small OR
+                    # set. The opportunity gate below still accepts only
+                    # explicitly dated, trusted Swiss sources.
+                    searches.extend((
+                        {"search_channel": "NEWS_DE_BROAD", "query": f"(site:srf.ch OR site:nzz.ch OR site:swissinfo.ch) Schweiz Nachrichten {today}", "news": True, "source_language": "de"},
+                        {"search_channel": "NEWS_FR_BROAD", "query": f"(site:rts.ch OR site:letemps.ch OR site:swissinfo.ch) Suisse actualités {today}", "news": True, "source_language": "fr"},
+                        {"search_channel": "NEWS_IT_BROAD", "query": f"(site:rsi.ch OR site:cdt.ch OR site:swissinfo.ch) Svizzera ultime notizie {today}", "news": True, "source_language": "it"},
+                    ))
+                else:
+                    searches.extend((
+                        {"search_channel": "NEWS_DE_SRF", "query": "site:srf.ch/news Schweiz aktuelle Nachrichten letzte 7 Tage", "news": True, "source_language": "de"},
+                        {"search_channel": "NEWS_FR_RTS", "query": "site:rts.ch/info Suisse actualités des sept derniers jours", "news": True, "source_language": "fr"},
+                        {"search_channel": "NEWS_IT_RSI", "query": "site:rsi.ch/info Svizzera ultime notizie degli ultimi sette giorni", "news": True, "source_language": "it"},
+                        {"search_channel": "NEWS_DE_NZZ", "query": "site:nzz.ch Schweiz aktuelle Nachrichten letzte 7 Tage", "news": True, "source_language": "de"},
+                        {"search_channel": "NEWS_FR_LETEMPS", "query": "site:letemps.ch Suisse actualités des sept derniers jours", "news": True, "source_language": "fr"},
+                        {"search_channel": "NEWS_IT_CDT", "query": "site:cdt.ch Svizzera ultime notizie degli ultimi sette giorni", "news": True, "source_language": "it"},
+                    ))
             else:
                 searches.append({"search_channel": "NEWS", "query": topic, "news": True})
         if "short" in (topic or "").casefold() and hasattr(self.web, "search_videos"):

@@ -8,6 +8,7 @@ import pytest
 
 from src.media.capability_model import MediaGenerationResult, MediaModelProfile, TEXT_TO_IMAGE, TEXT_TO_VIDEO
 from src.media.production import GeneralProductionBuilder
+from src.media.manager import _looks_predominantly_english
 from src.media.renderer import LocalVideoRenderer, find_ffmpeg
 from src.providers.wikimedia_media_provider import WikimediaMediaProvider
 
@@ -89,6 +90,15 @@ def test_wikimedia_clip_requires_and_persists_reusable_license(monkeypatch):
     assert result.provenance["license"] == "CC BY 4.0"
     assert result.provenance["source_url"].startswith("https://commons.wikimedia.org/")
     assert result.provenance["attribution_required"] is True
+
+
+def test_wrong_english_plan_is_detected_for_turkish_remix_request():
+    assert _looks_predominantly_english(
+        "Have you ever wondered how the traditional instrument is made and how every detail works?"
+    ) is True
+    assert _looks_predominantly_english(
+        "Bu geleneksel çalgının nasıl yapıldığını ve ustaların çalışmalarını anlatıyoruz."
+    ) is False
 
 
 @pytest.mark.skipif(find_ffmpeg() is None, reason="ffmpeg unavailable")

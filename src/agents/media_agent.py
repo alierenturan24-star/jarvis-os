@@ -19,6 +19,10 @@ _TOPIC_PATTERN = re.compile(r"^(.*?)\s+konusunda\b", re.IGNORECASE)
 _DURATION_PATTERN = re.compile(r"(\d+)\s*saniye")
 _DEFAULT_DURATION_SECONDS = 60
 _CHANNEL_PATTERN = re.compile(r"\[WORKFORCE_CHANNEL:([a-z0-9-]+)\]", re.IGNORECASE)
+_LICENSED_FREE_CUES = (
+    "public domain", "cc0", "cc by", "wikimedia commons", "lisanslı video",
+    "lisansli video", "yeniden kullanıma açık", "yeniden kullanima acik",
+)
 
 
 class MediaAgent(BaseAgent):
@@ -115,11 +119,13 @@ class MediaAgent(BaseAgent):
         if "stage_sink" in inspect.signature(self.manager.plan).parameters:
             plan_kwargs["stage_sink"] = task.metadata
         if "standing_permission" in inspect.signature(self.manager.plan).parameters:
+            explicit_free_remix = any(cue in command.casefold() for cue in _LICENSED_FREE_CUES)
             plan_kwargs["standing_permission"] = bool(
                 task.metadata.get("paid_media_permission") == "paid_media_generation"
-            )
+            ) and not explicit_free_remix
         if "free_only" in inspect.signature(self.manager.plan).parameters:
-            plan_kwargs["free_only"] = not bool(
+            explicit_free_remix = any(cue in command.casefold() for cue in _LICENSED_FREE_CUES)
+            plan_kwargs["free_only"] = explicit_free_remix or not bool(
                 task.metadata.get("paid_media_permission") == "paid_media_generation"
             )
         if research_opportunity is not None and "research_opportunity" in inspect.signature(self.manager.plan).parameters:

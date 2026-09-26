@@ -724,7 +724,30 @@ class GeneralProductionBuilder:
 
         if stage_sink is not None:
             stage_sink["last_stage"] = f"licensed_video_scene_{index}"
-        result = WikimediaMediaProvider().generate_video_clip(scene.visual_description)
+        description = str(scene.visual_description or "").strip()
+        words = re.findall(r"[\wÀ-ÿ'-]+", description, flags=re.UNICODE)
+        stop = {
+            "with", "from", "into", "showing", "inside", "outside", "close", "view",
+            "footage", "photo", "video", "scene", "gösteren", "içinde", "dışında",
+            "yakın", "çekim", "görüntü", "sahne", "kullan", "uygun",
+        }
+        content_words = [word for word in words if len(word) >= 4 and word.casefold() not in stop]
+        queries = list(dict.fromkeys(filter(None, (
+            description,
+            " ".join(content_words[:7]),
+            " ".join(content_words[-5:]),
+        ))))[:3]
+        provider = WikimediaMediaProvider()
+        result = None
+        for attempt, query in enumerate(queries, 1):
+            if stage_sink is not None:
+                stage_sink["last_stage"] = f"licensed_video_scene_{index}_search_{attempt}_of_{len(queries)}"
+            candidate = provider.generate_video_clip(query)
+            result = candidate
+            if candidate.success and candidate.content_bytes:
+                break
+        if result is None:
+            return None, None
         if not result.success or not result.content_bytes:
             return None, None
         provenance = dict(result.provenance or {})

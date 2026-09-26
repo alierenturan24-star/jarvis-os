@@ -1,3 +1,4 @@
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -39,6 +40,16 @@ _REPAIRABLE_GATES = {"audio_completeness", "av_timing", "repetition", "shorts_st
 # pattern already used for "research"/"coding" (see
 # ``department_orchestrator.MEDIA_DEPARTMENT_TASK_TIMEOUT_SECONDS``).
 MAX_REPAIR_ATTEMPTS = 2
+
+
+def _looks_predominantly_english(text: str) -> bool:
+    words = re.findall(r"[a-zA-ZçğıöşüÇĞİÖŞÜ]+", text or "")
+    if not words:
+        return False
+    english = {"the", "and", "with", "this", "that", "how", "from", "every", "into", "use", "traditional"}
+    turkish = {"ve", "ile", "bu", "nasıl", "için", "bir", "olarak", "güncel", "görsel", "anlatım"}
+    lowered = [word.casefold() for word in words]
+    return sum(word in english for word in lowered) >= 5 and sum(word in turkish for word in lowered) < 3
 
 
 class MediaManager:
@@ -181,6 +192,10 @@ class MediaManager:
             else "FFmpeg/video encoder bulunamadı; gerçek MP4 üretimi BLOCKED."
         )
         learning_plan = self.learning.production_plan(topic)
+        requested_turkish = any(
+            cue in full_request.casefold() for cue in ("türkçe", "turkce", "türkçe anlatım", "türkçe ses")
+        )
+        production_language = "tr-TR" if requested_turkish else self.channel_language
 
         request_block = (
             f"Kullanıcının tam isteği: {full_request}\n"
@@ -193,6 +208,8 @@ Konu: {topic}
 Hedef süre: {duration_seconds} saniye (YouTube Shorts)
 Bugünün sistem tarihi: {datetime.now().date().isoformat()}
 {request_block}
+ZORUNLU ÇIKTI DİLİ: {"Türkçe" if requested_turkish else production_language}.
+Senaryo, anlatım, ekran yazıları, altyazı, başlık ve açıklamanın tamamı bu dilde olmalıdır.
 
 {context_block}
 
@@ -270,6 +287,25 @@ Kurallar:
         )
         plan_text = route_result.output
 
+        if requested_turkish and not is_llm_failure(plan_text) and _looks_predominantly_english(plan_text):
+            correction = self.router.manager.route_and_generate(
+                prompt=(
+                    "Aşağıdaki üretim planı yanlışlıkla İngilizce yazılmış. Hiçbir olgu eklemeden, "
+                    "aynı dokuz bölüm başlığını ve sahne sürelerini koruyarak planın tamamını Türkçe "
+                    "yeniden yaz. Yalnızca düzeltilmiş planı döndür.\n\n" + plan_text
+                ),
+                task_type="planning", preferred_provider=route_result.provider_used,
+            )
+            if correction.success and not is_llm_failure(correction.output):
+                plan_text = correction.output
+                route_result = correction
+            if _looks_predominantly_english(plan_text):
+                return (
+                    "VIDEO RENDER: BLOCKED_LANGUAGE\n"
+                    "Kullanıcı Türkçe istedi ancak sağlayıcı Türkçe üretim planı veremedi. "
+                    "Yanlış dilde video oluşturulmadı; hiçbir şey yayınlanmadı."
+                )
+
         if is_llm_failure(plan_text) and produce_artifact:
             plan_text = self._deterministic_fallback_plan(topic, duration_seconds)
             plan_text += "\n\nPROVIDER RECOVERY\nYerel deterministik üretim planı kullanıldı."
@@ -335,7 +371,7 @@ Kurallar:
                     duration_seconds=duration_seconds,
                     channel_id=self.channel_id,
                     channel_market=self.channel_market,
-                    channel_language=self.channel_language,
+                    channel_language=production_language,
                     research_grounded=research_grounded,
                     research_evidence_ref=research_evidence_ref,
                     stage_sink=stage_sink,

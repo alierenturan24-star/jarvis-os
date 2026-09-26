@@ -563,9 +563,22 @@ class GeneralProductionBuilder:
                 # as soon as a specific candidate is actually attempted. Kept as
                 # a fallback in case the loop below throws before recording one.
                 stage_sink["last_stage"] = f"{capability_label}_scene_{index}_of_{len(parsed.scenes)}"
-            image_path, entry = self._generate_scene_image(
-                ranked, scene, index, root, enable_motion=enable_scene_motion, stage_sink=stage_sink,
-                standing_permission=standing_permission)
+            image_path = None
+            entry = None
+            # The user's low-cost remix workflow: prefer a genuinely
+            # reusable Commons VIDEO clip when one exists, then fall back to
+            # the already-wired licensed still-image route. This never
+            # downloads arbitrary YouTube/social videos and every accepted
+            # source carries author/license/URL evidence into the manifest.
+            if free_only:
+                image_path, entry = self._licensed_commons_clip(
+                    scene, index, root, stage_sink=stage_sink,
+                )
+            if image_path is None:
+                image_path, entry = self._generate_scene_image(
+                    ranked, scene, index, root, enable_motion=enable_scene_motion, stage_sink=stage_sink,
+                    standing_permission=standing_permission)
+            assert entry is not None
             provenance.append(entry.as_dict())
             if image_path is None:
                 reason = entry.quality_evidence.get("reason", "")
@@ -703,6 +716,44 @@ class GeneralProductionBuilder:
         return PackageBuildResult(True, str(manifest_path.resolve()), production_id=production_id,
                                    required_capabilities=required, available_capabilities=required,
                                    missing_capabilities=())
+
+    @staticmethod
+    def _licensed_commons_clip(scene: ScenePlan, index: int, root: Path,
+                               *, stage_sink: dict | None = None) -> tuple[Path | None, SceneProvenance | None]:
+        from src.providers.wikimedia_media_provider import WikimediaMediaProvider
+
+        if stage_sink is not None:
+            stage_sink["last_stage"] = f"licensed_video_scene_{index}"
+        result = WikimediaMediaProvider().generate_video_clip(scene.visual_description)
+        if not result.success or not result.content_bytes:
+            return None, None
+        provenance = dict(result.provenance or {})
+        mime = str(provenance.get("mime") or "video/webm").casefold()
+        source_suffix = ".mp4" if "mp4" in mime else ".ogv" if "ogg" in mime else ".webm"
+        source = root / f"scene-{index:02d}-licensed-source{source_suffix}"
+        source.write_bytes(result.content_bytes)
+        output = root / f"scene-{index:02d}.mp4"
+        seconds = max(2.0, float(scene.duration_seconds or 5.0))
+        command = [
+            find_ffmpeg(), "-y", "-hide_banner", "-loglevel", "error",
+            "-stream_loop", "-1", "-i", str(source),
+            "-t", f"{seconds:.3f}", "-an", "-vf", "fps=25,format=yuv420p",
+            "-c:v", "libx264", "-preset", "veryfast", str(output),
+        ]
+        try:
+            completed = subprocess.run(command, capture_output=True, text=True, timeout=60, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            return None, None
+        if completed.returncode != 0 or not output.is_file() or output.stat().st_size <= 10_000:
+            return None, None
+        generation_type = str(provenance.pop("generation_type", "licensed_stock_video_retrieval"))
+        return output, SceneProvenance(
+            scene_id=scene.scene_id, capability="text_to_video", provider=result.provider_id,
+            model=result.model_id, generation_type=generation_type,
+            output_path=str(output.resolve()), success=True, fallback_used=False,
+            cost_class=result.cost_class, input_reference=scene.visual_description[:200],
+            duration_seconds=result.duration_seconds, quality_evidence=provenance,
+        )
 
     @staticmethod
     def _generate_scene_image(ranked, scene: ScenePlan, index: int, root: Path,

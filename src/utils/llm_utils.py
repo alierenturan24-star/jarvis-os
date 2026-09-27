@@ -49,7 +49,10 @@ def compact_results(results: list[dict], limit: int = 5) -> list[dict]:
     return compact
 
 
-def source_fallback(topic: str, results: list[dict], limit: int = 5) -> str:
+def source_fallback(
+    topic: str, results: list[dict], limit: int = 5,
+    exclude_topics: list[str] | None = None,
+) -> str:
     """Build a truthful provider-free research handoff from collected rows.
 
     The fallback intentionally does not invent a synthesis.  It selects the
@@ -68,7 +71,15 @@ def source_fallback(topic: str, results: list[dict], limit: int = 5) -> str:
         if item.get("reference_role") != "format_only" and item.get("rejected") is not True
     ]
     dated = [item for item in factual if str(item.get("published_at") or "").strip()]
-    lead = (dated or factual or selected)[0]
+    excluded = [str(item or "").casefold().strip() for item in (exclude_topics or []) if str(item or "").strip()]
+
+    def not_previously_attempted(item: dict) -> bool:
+        title = str(item.get("title") or "").casefold().strip()
+        return bool(title) and not any(title in old or old in title for old in excluded)
+
+    candidates = dated or factual or selected
+    unseen = [item for item in candidates if not_previously_attempted(item)]
+    lead = (unseen or candidates)[0]
     lead_title = str(lead.get("title") or "Güncel kaynak taraması").strip()
 
     lines = [

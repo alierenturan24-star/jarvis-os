@@ -71,6 +71,7 @@ class ResearchManager:
     def research(
         self, topic: str, force_refresh: bool = False,
         preferred_provider: str | None = None, evidence_only: bool = False,
+        exclude_topics: list[str] | None = None,
     ) -> str:
         topic = topic.strip()
         if not topic:
@@ -117,9 +118,12 @@ class ResearchManager:
         if not results:
             return "Araştırma sonucu bulunamadı. İnternet bağlantısını kontrol et."
 
-        summary = self.summarizer.summarize(
-            topic=topic, results=results, preferred_provider=preferred_provider,
-        )
+        summarize_kwargs = {
+            "topic": topic, "results": results, "preferred_provider": preferred_provider,
+        }
+        if exclude_topics:
+            summarize_kwargs["exclude_topics"] = exclude_topics
+        summary = self.summarizer.summarize(**summarize_kwargs)
         if is_llm_failure(summary):
             return "Araştırma kaynakları toplandı ancak güvenilir bir sentez üretilemedi; bilgi kalıcı hafızaya yazılmadı."
         report_path = self.report_builder.save(topic=topic, summary=summary, results=results)

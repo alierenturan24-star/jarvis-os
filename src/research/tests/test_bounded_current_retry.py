@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 from src.agents.research_agent import ResearchAgent
 from src.planner.task import Task
+from src.knowledge.knowledge_base import KnowledgeBase
 
 
 def test_current_media_research_retries_once_with_different_query_shape():
@@ -143,3 +144,16 @@ def test_media_research_passes_recent_video_topics_as_exclusions(monkeypatch):
     agent.execute(task)
 
     assert manager.kwargs["exclude_topics"] == ["Eski oylama konusu"]
+
+
+def test_failed_render_selected_topic_is_still_excluded_next_time(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    KnowledgeBase().remember_research(
+        topic="İsviçre güncel gündem",
+        summary="SEÇİLEN KONU: Aargau kantonu oylama sonuçları\n\nJARVIS Önerisi",
+        report_path="workspace/research/a.md", source_count=2,
+    )
+
+    topics = ResearchAgent._recent_video_topics()
+
+    assert "Aargau kantonu oylama sonuçları" in topics

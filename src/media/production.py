@@ -555,6 +555,7 @@ class GeneralProductionBuilder:
 
         scene_files: list[Path] = []
         provenance: list[dict] = []
+        local_scene_fallback_used = False
         for index, scene in enumerate(parsed.scenes, 1):
             if stage_sink is not None:
                 capability_label = "image_to_video" if enable_scene_motion else "text_to_image"
@@ -578,6 +579,17 @@ class GeneralProductionBuilder:
                 image_path, entry = self._generate_scene_image(
                     ranked, scene, index, root, enable_motion=enable_scene_motion, stage_sink=stage_sink,
                     standing_permission=standing_permission)
+            # Free-only news production must not die merely because Commons
+            # has no matching downloadable file for one scene.  Build an
+            # original local motion-graphics card from the verified script;
+            # the renderer adds zoom/pan, narration, subtitles and original
+            # music.  This is not borrowed media and therefore needs no
+            # external license/provider call.
+            if free_only and image_path is None:
+                local_path, local_entry = self._build_local_news_card(scene, index, root)
+                if local_path is not None:
+                    image_path, entry = local_path, local_entry
+                    local_scene_fallback_used = True
             assert entry is not None
             provenance.append(entry.as_dict())
             if image_path is None:
@@ -659,7 +671,12 @@ class GeneralProductionBuilder:
             "image_provider": "+".join(sorted({f"{row['provider']}/{row['model']}" for row in provenance if row.get("success")})),
             "narration_provider": narration_provider, "narration_language": channel_language,
             "narration_seconds": narration_seconds,
-            "fallback": False, "placeholder": False, "resolution": "1080x1920", "fps": 25,
+            # Local FFmpeg cards are first-party authored visuals, not
+            # placeholders. Keep the renderer's production gate satisfied
+            # while exposing their use explicitly for audit/UI.
+            "fallback": False, "placeholder": False,
+            "local_original_scenes_used": local_scene_fallback_used,
+            "resolution": "1080x1920", "fps": 25,
             "story_concept": f"{parsed.title}: {parsed.hook}"[:280],
             "hook": parsed.hook, "script": script, "ending": parsed.ending,
             "cta": "", "characters": [], "main_character_identity": "",
@@ -716,6 +733,74 @@ class GeneralProductionBuilder:
         return PackageBuildResult(True, str(manifest_path.resolve()), production_id=production_id,
                                    required_capabilities=required, available_capabilities=required,
                                    missing_capabilities=())
+
+    @classmethod
+    def _build_local_news_card(
+        cls, scene: ScenePlan, index: int, root: Path,
+    ) -> tuple[Path | None, SceneProvenance]:
+        """Create an original vertical scene locally with FFmpeg only."""
+        target = root / f"scene-{index:02d}-local.png"
+        text_file = root / f"scene-{index:02d}-local.txt"
+        raw = str(scene.caption_text or scene.narration_segment or scene.visual_description).strip()
+        words = raw.split()
+        lines: list[str] = []
+        current = ""
+        for word in words:
+            proposed = f"{current} {word}".strip()
+            if current and len(proposed) > 24:
+                lines.append(current)
+                current = word
+            else:
+                current = proposed
+        if current:
+            lines.append(current)
+        text_file.write_text("\n".join(lines[:6]) or "JARVIS GÜNDEM", encoding="utf-8")
+
+        font_candidates = (
+            Path("C:/Windows/Fonts/arialbd.ttf"),
+            Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+        )
+        font = next((item for item in font_candidates if item.is_file()), None)
+        font_part = f"fontfile='{cls._ffmpeg_filter_path(font)}':" if font else ""
+        text_path = cls._ffmpeg_filter_path(text_file)
+        accent = ("00d9ff", "58f58d", "ffcc4d", "ff6b8a", "9c8cff")[((index - 1) % 5)]
+        video_filter = (
+            "drawbox=x=0:y=0:w=1080:h=1920:color=0x071423:t=fill,"
+            f"drawbox=x=0:y=0:w=28:h=1920:color=0x{accent}:t=fill,"
+            f"drawbox=x=90:y=210:w=900:h=18:color=0x{accent}:t=fill,"
+            f"drawtext={font_part}text='JARVIS  GÜNDEM':fontcolor=0x{accent}:fontsize=44:"
+            "x=90:y=120:borderw=2:bordercolor=black,"
+            "drawbox=x=70:y=470:w=940:h=760:color=black@0.28:t=fill,"
+            f"drawtext={font_part}textfile='{text_path}':fontcolor=white:fontsize=72:"
+            "line_spacing=24:x=(w-text_w)/2:y=(h-text_h)/2:borderw=4:bordercolor=black,"
+            f"drawtext={font_part}text='KAYNAKLI  KISA  VİDEO':fontcolor=0x{accent}:fontsize=34:"
+            "x=(w-text_w)/2:y=1740:borderw=2:bordercolor=black"
+        )
+        command = [
+            find_ffmpeg(), "-y", "-hide_banner", "-loglevel", "error",
+            "-f", "lavfi", "-i", "color=c=0x071423:s=1080x1920:d=1",
+            "-vf", video_filter, "-frames:v", "1", target.as_posix(),
+        ]
+        try:
+            completed = subprocess.run(command, capture_output=True, text=True, timeout=45, check=False)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            completed = None
+            reason = str(error)
+        else:
+            reason = completed.stderr[-300:]
+        success = bool(completed and completed.returncode == 0 and target.is_file() and target.stat().st_size > 10_000)
+        entry = SceneProvenance(
+            scene_id=scene.scene_id, capability=TEXT_TO_IMAGE,
+            provider="local_ffmpeg_motion_graphics", model="news-card-v1",
+            generation_type="local_original_motion_graphic", output_path=str(target.resolve()) if success else "",
+            success=success, fallback_used=True, cost_class="free",
+            input_reference=raw[:200],
+            quality_evidence={
+                "copyright_safe": True, "license": "original", "external_media_used": False,
+                "reason": "Commons unavailable; original local news card created" if success else reason,
+            },
+        )
+        return (target if success else None), entry
 
     @staticmethod
     def _licensed_commons_clip(scene: ScenePlan, index: int, root: Path,

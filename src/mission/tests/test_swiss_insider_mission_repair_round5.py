@@ -89,6 +89,9 @@ def test_round5_swiss_current_research_searches_german_french_and_italian_news()
     assert any("Schweiz" in query for query in web.queries)
     assert any("Suisse" in query for query in web.queries)
     assert any("Svizzera" in query for query in web.queries)
+    joined = " ".join(web.queries).casefold()
+    assert "verkehr" in joined and "météo" in joined and "sport" in joined
+    assert "technologie" in joined and "curiosità" in joined
 
 
 def test_round5_capability_software_research_can_still_use_github():

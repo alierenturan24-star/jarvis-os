@@ -30,9 +30,10 @@ class ResearchAgent(BaseAgent):
 
     @staticmethod
     def _recent_video_topics(limit: int = 8) -> list[str]:
-        """Return recent produced topics so discovery does not loop forever."""
+        """Return recent produced *and attempted* topics to prevent loops."""
         try:
             from src.control_center.store import ControlCenterStore
+            from src.knowledge.knowledge_base import KnowledgeBase
 
             state = ControlCenterStore().snapshot()
             memories = [state.get("youtube_learning", {})]
@@ -49,6 +50,18 @@ class ResearchAgent(BaseAgent):
                         topics.append(topic)
                     if len(topics) >= limit:
                         return topics
+            # A failed render never reaches youtube_learning.productions, but
+            # its selected research topic is still durable.  Include those
+            # attempts too so the next one-click run does not select the same
+            # story forever just because Wikimedia/provider delivery failed.
+            for record in KnowledgeBase().recent_research(limit=limit * 2):
+                summary = str(record.get("summary") or "")
+                match = re.search(r"^SEÇİLEN KONU:\s*(.+)$", summary, re.IGNORECASE | re.MULTILINE)
+                topic = match.group(1).strip() if match else ""
+                if topic and topic not in topics:
+                    topics.append(topic)
+                if len(topics) >= limit:
+                    return topics
             return topics
         except (OSError, ValueError, TypeError):
             return []

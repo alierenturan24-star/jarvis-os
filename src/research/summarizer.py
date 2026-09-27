@@ -99,5 +99,5 @@ Araştırma raporu:
         # rows already collected instead of spending money or blocking.
         has_selected_topic = "seçilen konu:" in str(answer or "").casefold()
         if is_llm_failure(answer) or not has_selected_topic:
-            return source_fallback(topic, selected, limit=10)
+            return source_fallback(topic, selected, limit=10, exclude_topics=exclude_topics)
         return answer

@@ -13,7 +13,10 @@ class Summarizer:
         # için.
         self.last_route = None
 
-    def summarize(self, topic: str, results: list[dict], preferred_provider: str | None = None) -> str:
+    def summarize(
+        self, topic: str, results: list[dict], preferred_provider: str | None = None,
+        exclude_topics: list[str] | None = None,
+    ) -> str:
         if not results:
             return "Özetlenecek güvenilir araştırma sonucu bulunamadı."
 
@@ -42,10 +45,17 @@ class Summarizer:
 
         source_text = "\n\n".join(source_blocks)
 
+        excluded = "\n".join(f"- {item[:180]}" for item in (exclude_topics or [])[:8])
+        repeat_guard = (
+            "Daha önce üretilen aşağıdaki konuları tekrar seçme; farklı bir haber değeri bul:\n" + excluded
+            if excluded else "Daha önce üretilmiş konu dışlama listesi boş."
+        )
         prompt = f"""
 Sen JARVIS Araştırma Departmanısın.
 
 Araştırma konusu: {topic}
+
+{repeat_guard}
 
 Toplanan sonuçlar:
 {source_text}
@@ -60,6 +70,9 @@ Görev:
 - Güncel bir istekse genel ana sayfayı güncellik kanıtı sayma; yalnızca açık yayın tarihli makaleleri kullan.
 - İstenen kaynak dillerinin her birini ayrı ayrı kontrol et; eksik dil veya tarih varsa açıkça belirt.
 - İlk satırda "SEÇİLEN KONU:" ile tek, somut ve kaynaklarla desteklenen konuyu yaz.
+- Tek bir kategoriye saplanma. Haber değeri ve kaynak gücüne göre ekonomi/zam, ulaşım,
+  hava/afet, spor, teknoloji, bilim, kültür, günlük yaşam veya güvenli ilginç-komik
+  olaylar arasından en güçlü ve dışlama listesinde olmayan konuyu seç.
 - Seçimi destekleyen makalelerin başlık, yayın tarihi, kaynak dili ve tam adresini göster; tarih/URL uydurma.
 - Ortak ve önemli noktaları birleştir.
 - Çelişki veya belirsizlik varsa açıkça belirt.

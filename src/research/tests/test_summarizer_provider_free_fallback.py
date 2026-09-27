@@ -56,3 +56,17 @@ def test_summarizer_rejects_unstructured_but_nonempty_provider_answer():
 
     assert result.startswith("SEÇİLEN KONU:")
     assert "Here are a few ideas" not in result
+
+
+def test_provider_free_fallback_skips_previously_attempted_topic():
+    summarizer = Summarizer()
+    summarizer.router.manager.route_and_generate = lambda **kwargs: SimpleNamespace(
+        output="What would you like me to work on?"
+    )
+
+    result = summarizer.summarize(
+        "İsviçre son 30 gün güncel haber", _sources(),
+        exclude_topics=["Swiss rail timetable changes announced"],
+    )
+
+    assert result.startswith("SEÇİLEN KONU: Les nouveaux horaires ferroviaires en Suisse")

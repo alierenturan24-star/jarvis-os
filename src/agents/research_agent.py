@@ -10,6 +10,12 @@ from src.research.manager import topic_wants_current_information
 from src.research.opportunity import build_selected_opportunity
 
 
+_WINDOW_FALLBACK_PATTERN = re.compile(r"\bson\s+\d+\s+gün\w*", re.IGNORECASE)
+_WINDOW_FALLBACK_CUES = (
+    "son 30 güne genişlet", "30 günlük yedek", "30 gün yedek",
+)
+
+
 class ResearchAgent(BaseAgent):
 
     def __init__(self) -> None:
@@ -21,6 +27,31 @@ class ResearchAgent(BaseAgent):
         # ``execute()``. İkinci bir Research sistemi İCAT EDİLMEDİ, yalnızca
         # bu departmanın karar noktasına bir dal EKLENDİ.
         self.local_code_manager = LocalCodeManager()
+
+    @staticmethod
+    def _recent_video_topics(limit: int = 8) -> list[str]:
+        """Return recent produced topics so discovery does not loop forever."""
+        try:
+            from src.control_center.store import ControlCenterStore
+
+            state = ControlCenterStore().snapshot()
+            memories = [state.get("youtube_learning", {})]
+            memories.extend(
+                row.get("youtube_learning", {})
+                for row in (state.get("channels", {}) or {}).values()
+                if isinstance(row, dict)
+            )
+            topics: list[str] = []
+            for memory in memories:
+                for production in reversed(memory.get("productions", []) or []):
+                    topic = str(production.get("topic") or production.get("original_goal") or "").strip()
+                    if topic and topic not in topics:
+                        topics.append(topic)
+                    if len(topics) >= limit:
+                        return topics
+            return topics
+        except (OSError, ValueError, TypeError):
+            return []
 
     @staticmethod
     def _clean_query(text: str) -> str:
@@ -93,11 +124,15 @@ class ResearchAgent(BaseAgent):
         # DepartmentOrchestrator.create_tasks -> task.metadata) mevcut
         # ResearchManager/Summarizer/ProviderManager zincirine iletir --
         # yeni bir provider seçim mantığı İCAT EDİLMEZ.
+        market_context = getattr(task, "metadata", {}).get("market_context")
+        excluded_topics = self._recent_video_topics() if market_context is not None else []
         research_kwargs = {
             "topic": query,
             "force_refresh": force_refresh,
             "preferred_provider": preferred_provider,
         }
+        if excluded_topics:
+            research_kwargs["exclude_topics"] = excluded_topics
         if requested_name:
             research_kwargs["evidence_only"] = True
         result = self.manager.research(**research_kwargs)
@@ -111,7 +146,6 @@ class ResearchAgent(BaseAgent):
         # results (see report_builder.py) -- instead of forcing the
         # consumer (MediaAgent) to re-parse or silently ignore the long
         # natural-language report.
-        market_context = getattr(task, "metadata", {}).get("market_context")
         if market_context is not None:
             record = self.manager.knowledge.find_research(query)
             opportunity = build_selected_opportunity(
@@ -126,24 +160,34 @@ class ResearchAgent(BaseAgent):
             # multilingual query shape. This is bounded, keeps the same
             # freshness/market gates, and never upgrades stale evidence.
             if topic_wants_current_information(query) and not opportunity.sufficient:
+                allow_window_fallback = any(cue in command.casefold() for cue in _WINDOW_FALLBACK_CUES)
+                retry_base = query
+                if allow_window_fallback:
+                    widened = _WINDOW_FALLBACK_PATTERN.sub("son 30 gün", query, count=1)
+                    retry_base = widened if widened != query else f"{query} son 30 gün"
                 retry_query = (
-                    f"{query} ALTERNATIVE_SOURCE_PASS "
+                    f"{retry_base} ALTERNATIVE_SOURCE_PASS "
                     f"{datetime.now(timezone.utc).date().isoformat()}"
                 )
                 retry_result = self.manager.research(
                     topic=retry_query,
                     force_refresh=True,
                     preferred_provider=preferred_provider,
+                    exclude_topics=excluded_topics,
                 )
                 retry_record = self.manager.knowledge.find_research(retry_query)
                 retry_opportunity = build_selected_opportunity(
-                    topic=query,
+                    topic=retry_query if allow_window_fallback else query,
                     location_or_market=market_context,
                     summary=str(retry_record.get("summary", "")) if retry_record else "",
                     sources=retry_record.get("sources", []) if retry_record else (),
                     created_at=str(retry_record.get("created_at", "")) if retry_record else "",
                 )
-                result += "\n\n--- OTOMATİK GÜNCEL KAYNAK YENİDEN DENEMESİ ---\n" + retry_result
+                retry_label = (
+                    "OTOMATİK 30 GÜNLÜK YEDEK KAYNAK TARAMASI"
+                    if allow_window_fallback else "OTOMATİK GÜNCEL KAYNAK YENİDEN DENEMESİ"
+                )
+                result += f"\n\n--- {retry_label} ---\n" + retry_result
                 if retry_opportunity.sufficient:
                     opportunity = retry_opportunity
             task.metadata["report"] = opportunity.as_dict()

@@ -60,6 +60,28 @@ function Test-ControlCenterHealth([string]$Token) {
     } catch { return $false }
 }
 
+
+function Clear-StaleJarvisListener {
+    $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+    foreach ($listener in $listeners) {
+        $ownerId = [int]$listener.OwningProcess
+        if ($ownerId -le 0 -or $ownerId -eq $PID) { continue }
+        $process = Get-CimInstance Win32_Process -Filter "ProcessId = $ownerId" -ErrorAction SilentlyContinue
+        $commandLine = if ($process) { [string]$process.CommandLine } else { '' }
+        if ($commandLine -match '(?i)control_center\.py') {
+            Write-Host "      Eski JARVIS islemi kapatiliyor (PID $ownerId)..." -ForegroundColor Yellow
+            Stop-Process -Id $ownerId -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    Start-Sleep -Milliseconds 500
+    $remaining = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+    if ($remaining.Count -gt 0) {
+        $owners = ($remaining | Select-Object -ExpandProperty OwningProcess -Unique) -join ', '
+        throw "Port $Port baska bir uygulama tarafindan kullaniliyor (PID: $owners)."
+    }
+}
+
 Set-Location -LiteralPath $ProjectRoot
 $SystemPython = Resolve-JarvisPython
 Write-Host "[1/5] Python bulundu: $SystemPython" -ForegroundColor Cyan
@@ -116,6 +138,7 @@ $token = if (Test-Path -LiteralPath $TokenPath -PathType Leaf) {
 
 if (-not (Test-ControlCenterHealth $token)) {
     Write-Host '[5/5] JARVIS Control Center baslatiliyor...' -ForegroundColor Cyan
+    Clear-StaleJarvisListener
     Start-Process -FilePath $VenvPython -ArgumentList @(
         "`"$ControlCenter`"", '--host', '127.0.0.1', '--port', $Port, '--no-bootstrap-output', '--fresh-session'
     ) -WorkingDirectory $ProjectRoot -RedirectStandardOutput $StdoutPath `

@@ -93,4 +93,11 @@ Araştırma raporu:
             prompt=prompt, task_type=TASK_LONG_RESEARCH, preferred_provider=preferred_provider,
         )
         answer = self.last_route.output
-        return source_fallback(topic, selected, limit=10) if is_llm_failure(answer) else answer
+        # A generic assistant greeting can have HTTP/provider success status
+        # while containing none of the requested research.  Treat missing
+        # report structure exactly like a failed provider and use the factual
+        # rows already collected instead of spending money or blocking.
+        has_selected_topic = "seçilen konu:" in str(answer or "").casefold()
+        if is_llm_failure(answer) or not has_selected_topic:
+            return source_fallback(topic, selected, limit=10)
+        return answer

@@ -4,8 +4,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$TargetBranch = 'codex/youtube-planning-gemini-images'
-$ReadyBranch = 'jarvis-ready'
+$TargetBranch = 'main'
 $SetupScript = Join-Path $PSScriptRoot 'setup_and_start.ps1'
 
 function Invoke-Git([string[]]$Arguments, [string]$Step) {
@@ -31,6 +30,8 @@ if ($LASTEXITCODE -ne 0 -or -not $OriginalHead) {
 $OriginalBranch = [string](& git.exe branch --show-current)
 $OriginalBranch = $OriginalBranch.Trim()
 $Timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$RunId = "$Timestamp-$PID"
+$ReadyBranch = "jarvis-ready-$RunId"
 $BackupBranch = "backup/jarvis-before-update-$Timestamp"
 $StashCreated = $false
 
@@ -51,6 +52,9 @@ try {
     Invoke-Git -Arguments @('fetch', 'origin', $TargetBranch) -Step 'GitHub guncelleme'
 
     Write-Host '[3/4] Dogrulanmis JARVIS dali aciliyor...' -ForegroundColor Cyan
+    # Sabit bir dal adi baska bir Git worktree tarafindan kullaniliyor olabilir.
+    # Her calistirmada benzersiz dal kullanmak eski guvenli kurulumlara dokunmadan
+    # Windows'taki "already used by worktree" hatasini onler.
     Invoke-Git -Arguments @('switch', '-C', $ReadyBranch, "origin/$TargetBranch") -Step 'Guncel dala gecis'
 
     Write-Host '[4/4] JARVIS baslatiliyor...' -ForegroundColor Cyan

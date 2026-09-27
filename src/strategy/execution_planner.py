@@ -244,6 +244,10 @@ def build_self_check(mission, review: Optional[SelfImprovementReview]) -> SelfCh
             missing_info.append(
                 f"{task.agent}: tamamlandı ama gerçek içerik üretilemedi (hata: {output_text[:120]})"
             )
+            if "research_gap" in output_text.casefold():
+                needs_reresearch.append(
+                    "Güncel/tarihli kaynak kanıtı yetersiz -- aynı pazar ve dil şartlarıyla yeniden araştırılmalı."
+                )
             if task.agent != "research":
                 continue
             # research'ün önbellek tespiti aşağıda AYRICA çalışsın diye

@@ -83,6 +83,7 @@ class MediaGenerationResult:
     duration_seconds: float | None = None
     error: str = ""
     cost_class: str = "unknown"
+    provenance: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

@@ -1,3 +1,5 @@
+import json
+
 from src.finance.collector import FinanceCollector
 from src.finance.report_builder import FinanceReportBuilder
 from src.finance.risk_engine import FinanceRiskEngine
@@ -102,6 +104,72 @@ Finans raporu:
             f"{analysis}\n\n"
             f"Rapor kaydedildi:\n{report_path}"
         )
+
+    def review_paper_cycle(
+        self, cycle: dict, preferred_provider: str | None = "claude_code",
+    ) -> dict:
+        """Ask an available LLM to challenge a deterministic paper result.
+
+        This is deliberately advisory: the model cannot qualify a strategy,
+        open a position, change a risk limit or activate live trading. The
+        numerical OOS/risk gates remain the only decision authority.
+        """
+
+        lab = cycle.get("strategy_lab") or {}
+        candidates = []
+        for row in lab.get("candidates") or []:
+            candidates.append({
+                "name": row.get("name"),
+                "family": row.get("family"),
+                "qualified": bool(row.get("qualified")),
+                "reasons": list(row.get("qualification_reasons") or row.get("rejection_reasons") or []),
+                "net_return_after_costs": row.get("net_return_after_costs"),
+                "max_drawdown": row.get("max_drawdown"),
+                "trade_count": row.get("trade_count", row.get("trades")),
+                "out_of_sample_metrics": row.get("out_of_sample_metrics") or {},
+                "regimes_tested": list(row.get("regimes_tested") or []),
+            })
+        evidence = {
+            "assets": cycle.get("assets") or [],
+            "timeframes": cycle.get("timeframes") or [],
+            "decision": lab.get("decision"),
+            "candidates": candidates[:12],
+            "paper_performance": cycle.get("paper_performance") or {},
+            "safety": cycle.get("safety") or {},
+        }
+        prompt = f"""
+Sen JARVIS'in kıdemli finans stratejisi eleştirmenisin. Bu yalnızca PAPER testidir.
+Gerçek emir verme, kesin kazanç vaat etme, sayısal kanıt uydurma ve mevcut risk
+kapılarını gevşetme. Aşağıdaki backtest/OOS kanıtını incele:
+
+{json.dumps(evidence, ensure_ascii=False, default=str)}
+
+Türkçe ve kısa yanıtla:
+1. Kararın neden mantıklı veya yetersiz olduğunu açıkla.
+2. Overfitting, örneklem ve piyasa rejimi risklerini belirt.
+3. Bir sonraki PAPER testinde değiştirilecek en fazla üç kanıt boyutunu yaz.
+4. Son satırda yalnızca "UZMAN GÖRÜŞÜ: PAPER DEVAM" veya
+   "UZMAN GÖRÜŞÜ: NO_TRADE" yaz. Bu görüş işlem kararını değiştirmez.
+"""
+        routed = self.router.manager.route_and_generate(
+            prompt=prompt, task_type="finance", preferred_provider=preferred_provider,
+        )
+        analysis = routed.output
+        success = bool(routed.success and not is_llm_failure(analysis))
+        if not success:
+            analysis = (
+                "Yapay zekâ uzman incelemesi kullanılamadı. Deterministik backtest/OOS "
+                "kararı korundu; ölçütler gevşetilmedi."
+            )
+        return {
+            "role": "ADVISORY_ONLY",
+            "success": success,
+            "provider_requested": preferred_provider or "automatic",
+            "provider_used": routed.provider_used,
+            "analysis": analysis,
+            "can_override_trade_decision": False,
+            "live_activation": False,
+        }
 
     def _resolve_provider(self, preferred_provider: str | None) -> str:
         """Sprint 35: AI Strategy Engine'in seçtiği provider'ı yalnızca

@@ -374,7 +374,7 @@ def test_existing_media_providers_unaffected_by_the_addition():
 
     ids = [provider.provider_id for provider in _PROVIDERS]
     assert ids[:3] == ["nvidia", "fal", "ltx"]
-    assert ids == ["nvidia", "fal", "ltx", "aiml"]
+    assert ids == ["nvidia", "fal", "ltx", "aiml", "gemini_image"]
 
 
 # 12: provider health/cooldown works through the SAME existing mechanism.

@@ -125,6 +125,50 @@ class TestMediaManagerPlan:
 
         assert "uydurma istatistik" in captured_prompts[0]
 
+    def test_current_plan_without_research_evidence_fails_closed(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        calls = []
+        monkeypatch.setattr(
+            ProviderManager, "route_and_generate",
+            lambda self, prompt, task_type, **kw: calls.append(prompt) or _route_result(_complete_plan_text()),
+        )
+
+        manager = MediaManager()
+        result = manager.plan(topic="YouTube için güncel trendler")
+
+        assert "RESEARCH_GAP" in result
+        assert calls == []
+
+    def test_full_request_and_multi_idea_instruction_reach_planning_prompt(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        captured_prompts = []
+        monkeypatch.setattr(
+            ProviderManager, "route_and_generate",
+            lambda self, prompt, task_type, **kw: captured_prompts.append(prompt) or _route_result(_complete_plan_text()),
+        )
+        request = (
+            "YouTube için güncel trendleri araştır, en iyi 3 video fikrini ve "
+            "başlıklarını hazırla; video üretim planı oluştur fakat yayınlama."
+        )
+        opportunity = {
+            "selected_topic": "Bugünün doğrulanmış teknoloji gündemi",
+            "location_or_market": "YouTube",
+            "why_current": "güncel kaynaklarla doğrulandı",
+            "supporting_evidence": [{"url": "https://example.test/current"}],
+            "freshness_status": "CURRENT",
+            "sufficient": True,
+        }
+
+        MediaManager().plan(
+            topic=opportunity["selected_topic"],
+            request_text=request,
+            research_opportunity=opportunity,
+        )
+
+        assert request in captured_prompts[0]
+        assert "VİDEO FİKİRLERİ VE BAŞLIKLARI" in captured_prompts[0]
+        assert "Bugünün sistem tarihi" in captured_prompts[0]
+
     def test_unavailable_preferred_provider_falls_back_to_ollama(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         captured_preferred = []
@@ -288,6 +332,7 @@ class TestResearchOpportunityGrounding:
         )
 
         assert captured.get("research_grounded") is True
+        assert captured.get("free_only") is True
         assert captured.get("research_evidence_ref", {}).get("location_or_market") == "İsviçre için"
         assert captured.get("research_evidence_ref", {}).get("source_count") == 1
 

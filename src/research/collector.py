@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import ipaddress
 import time
+import unicodedata
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
@@ -13,7 +15,7 @@ from src.tools.web_search_tool import WebSearchTool
 # requested (see ``ResearchCollector.collect``). Exported so callers can
 # size an outer/inner timeout budget from the REAL worst-case step count
 # instead of a second, independently-maintained magic number.
-MAX_SEARCH_STEPS = 5
+MAX_SEARCH_STEPS = 8
 
 PRIMARY_SOURCE_TYPES = {"OFFICIAL_DOCS", "OFFICIAL_API", "GITHUB", "ARXIV", "LOCAL", "USER_CONFIRMED"}
 KNOWN_IDENTITIES = {
@@ -177,6 +179,14 @@ def source_matches_preferences(source_type: str, preferences: list[str]) -> bool
     return str(source_type).upper() in normalized
 
 
+def _is_swiss_topic(topic: str) -> bool:
+    lowered = "".join(
+        char for char in unicodedata.normalize("NFKD", (topic or "").casefold())
+        if not unicodedata.combining(char)
+    )
+    return any(name in lowered for name in ("isviçre", "isvicre", "switzerland", "schweiz", "suisse", "svizzera"))
+
+
 class ResearchCollector:
 
     def __init__(self) -> None:
@@ -196,7 +206,48 @@ class ResearchCollector:
         # ``_wants_academic_sources`` above. GENERAL_WEB always runs (the
         # base "any topic" channel, appropriate for every intent including
         # current-events/news).
-        searches = [{"search_channel": "GENERAL_WEB", "query": topic}]
+        # A generic web result normally has no publication timestamp. Current
+        # missions therefore get a dated NEWS pass first; GENERAL_WEB remains
+        # as supplemental context, never as proof of freshness on its own.
+        from src.research.manager import topic_wants_current_information
+
+        searches = []
+        if topic_wants_current_information(topic) and hasattr(self.web, "search_news"):
+            if _is_swiss_topic(topic):
+                today = datetime.now(timezone.utc).date().isoformat()
+                alternate = "alternative_source_pass" in (topic or "").casefold()
+                if alternate:
+                    # A bounded second pass deliberately changes the query
+                    # shape. Some news backends return nothing for a single
+                    # site: filter but do return dated rows for a small OR
+                    # set. The opportunity gate below still accepts only
+                    # explicitly dated, trusted Swiss sources.
+                    searches.extend((
+                        {"search_channel": "NEWS_DE_BROAD", "query": f"(site:srf.ch OR site:nzz.ch OR site:swissinfo.ch) Schweiz Nachrichten {today}", "news": True, "source_language": "de"},
+                        {"search_channel": "NEWS_FR_BROAD", "query": f"(site:rts.ch OR site:letemps.ch OR site:swissinfo.ch) Suisse actualités {today}", "news": True, "source_language": "fr"},
+                        {"search_channel": "NEWS_IT_BROAD", "query": f"(site:rsi.ch OR site:cdt.ch OR site:swissinfo.ch) Svizzera ultime notizie {today}", "news": True, "source_language": "it"},
+                    ))
+                else:
+                    searches.extend((
+                        {"search_channel": "NEWS_DE_SRF", "query": "site:srf.ch/news Schweiz aktuelle Nachrichten letzte 7 Tage", "news": True, "source_language": "de"},
+                        {"search_channel": "NEWS_FR_RTS", "query": "site:rts.ch/info Suisse actualités des sept derniers jours", "news": True, "source_language": "fr"},
+                        {"search_channel": "NEWS_IT_RSI", "query": "site:rsi.ch/info Svizzera ultime notizie degli ultimi sette giorni", "news": True, "source_language": "it"},
+                        {"search_channel": "NEWS_DE_NZZ", "query": "site:nzz.ch Schweiz aktuelle Nachrichten letzte 7 Tage", "news": True, "source_language": "de"},
+                        {"search_channel": "NEWS_FR_LETEMPS", "query": "site:letemps.ch Suisse actualités des sept derniers jours", "news": True, "source_language": "fr"},
+                        {"search_channel": "NEWS_IT_CDT", "query": "site:cdt.ch Svizzera ultime notizie degli ultimi sette giorni", "news": True, "source_language": "it"},
+                    ))
+            else:
+                searches.append({"search_channel": "NEWS", "query": topic, "news": True})
+        if "short" in (topic or "").casefold() and hasattr(self.web, "search_videos"):
+            video_query = (
+                "Schweiz aktuelle Nachrichten Wissen Unterhaltung Shorts deutsch"
+                if _is_swiss_topic(topic) else topic
+            )
+            searches.append({
+                "search_channel": "VIDEO_FORMAT_DE", "query": video_query, "video": True,
+                "source_language": "de", "reference_role": "format_only",
+            })
+        searches.append({"search_channel": "GENERAL_WEB", "query": topic})
         if _wants_tooling_sources(topic, preferences):
             searches.append({"search_channel": "GITHUB", "query": f"site:github.com {topic}"})
         if _wants_academic_sources(topic, preferences):
@@ -214,7 +265,12 @@ class ResearchCollector:
             remaining = None if deadline is None else deadline - time.monotonic()
             if remaining is not None and remaining <= 0:
                 raise TimeoutError("RESEARCH_CYCLE_MAX_RUNTIME_EXCEEDED")
-            response = self.web.search(
+            search_method = (
+                self.web.search_videos if search.get("video")
+                else self.web.search_news if search.get("news")
+                else self.web.search
+            )
+            response = search_method(
                 query=search["query"], max_results=max_results_per_source,
                 timeout_seconds=remaining if remaining is not None else 15.0,
             )
@@ -240,6 +296,15 @@ class ResearchCollector:
                     "title": str(item.get("title", "")).strip(),
                     "url": url,
                     "summary": str(item.get("summary", "")).strip(),
+                    "published_at": str(
+                        item.get("published_at") or item.get("date") or item.get("published") or ""
+                    ).strip(),
+                    "publisher": str(item.get("publisher") or item.get("source") or "").strip(),
+                    "source_language": str(search.get("source_language") or item.get("source_language") or "").strip(),
+                    "reference_role": str(search.get("reference_role") or item.get("reference_role") or "factual"),
+                    "duration": str(item.get("duration") or "").strip(),
+                    "statistics": item.get("statistics") if isinstance(item.get("statistics"), dict) else {},
+                    "provider": str(item.get("provider") or "").strip(),
                     **quality,
                     "source_quality_reason": reason,
                     "source_preference_match": preference_match,

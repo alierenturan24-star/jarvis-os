@@ -139,9 +139,9 @@ def print_terminal_qr(value: str) -> bool:
     return True
 
 
-def load_or_create_token(path: Path = TOKEN_PATH) -> str:
+def load_or_create_token(path: Path = TOKEN_PATH, *, rotate: bool = False) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
+    if path.exists() and not rotate:
         token = path.read_text(encoding="utf-8").strip()
         if len(token) >= 32:
             return token
@@ -426,6 +426,7 @@ class ControlCenterHandler(BaseHTTPRequestHandler):
             if path == "/api/finance/mark": return self._json(self.server.service.finance.mark_to_market(data.get("prices")), 200)
             if path == "/api/finance/close": return self._json(self.server.service.finance.close_position(data.get("position_id", ""), data.get("reason", "MANUAL"), data.get("price")), 200)
             if path == "/api/finance/qualification": return self._json(self.server.service.finance.qualification(), 201)
+            if path == "/api/finance/cycle": return self._json(self.server.service.run_finance_cycle(data), 201)
             if path == "/api/finance/live-request": return self._json(self.server.service.finance.request_live_trade(data), 201)
             if path == "/api/notifications/read": self.server.service.mark_notifications_read(); return self._json({"ok": True})
             if path == "/api/notifications/test": return self._json(self.server.service.test_notification(), 201)
@@ -436,17 +437,17 @@ class ControlCenterHandler(BaseHTTPRequestHandler):
 
 
 def run(host: str = "127.0.0.1", port: int = 8765, token: str | None = None,
-        bootstrap_output: bool = True) -> None:
+        bootstrap_output: bool = True, fresh_session: bool = False) -> None:
     if host not in {"127.0.0.1", "localhost", "::1"}:
         raise SystemExit("Direct non-loopback binding is disabled. Keep JARVIS on loopback and use an authenticated private VPN HTTPS proxy.")
     instance_lock = ControlCenterInstanceLock(host, port)
     instance_lock.acquire()
-    token = token or load_or_create_token()
+    token = token or load_or_create_token(rotate=fresh_session)
     tailscale_host = detect_tailscale_serve_host(port)
     trusted_hosts = frozenset({tailscale_host}) if tailscale_host else frozenset()
     try:
         server = ControlCenterServer((host, port), ControlCenterService(), token, trusted_hosts)
-    except Exception:
+    except BaseException:
         instance_lock.release()
         raise
     def scheduler_loop() -> None:
@@ -478,7 +479,8 @@ def run(host: str = "127.0.0.1", port: int = 8765, token: str | None = None,
 def main() -> None:
     parser = argparse.ArgumentParser(); parser.add_argument("--host", default="127.0.0.1"); parser.add_argument("--port", type=int, default=8765); parser.add_argument("--token")
     parser.add_argument("--no-bootstrap-output", action="store_true")
-    args = parser.parse_args(); run(args.host, args.port, args.token, not args.no_bootstrap_output)
+    parser.add_argument("--fresh-session", action="store_true")
+    args = parser.parse_args(); run(args.host, args.port, args.token, not args.no_bootstrap_output, args.fresh_session)
 
 
 if __name__ == "__main__":

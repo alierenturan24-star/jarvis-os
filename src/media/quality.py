@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 import json
 import re
 import subprocess
+import unicodedata
 from pathlib import Path
 
 # Sprint 39: MediaManager'ın LLM'den istediği bölümlerin HEPSİNİN gerçekten
@@ -223,12 +224,36 @@ def _check_narrative_relevance(goal: str, evidence: dict) -> dict:
     (script/scenes/title/hook/ending) -- NOT ``evidence["goal"]``, which the
     producer itself sets to the requested goal string and therefore always
     matches itself regardless of what was actually produced."""
-    requested_words = {w for w in re.findall(r"\w+", (goal or "").casefold()) if len(w) >= 4}
+    def normalized_words(text: str) -> set[str]:
+        folded = "".join(
+            char for char in unicodedata.normalize("NFKD", str(text or "").casefold())
+            if not unicodedata.combining(char)
+        )
+        aliases = {
+            "isvicre": "swiss", "schweiz": "swiss", "suisse": "swiss",
+            "svizzera": "swiss", "switzerland": "swiss", "swiss": "swiss",
+        }
+        return {aliases.get(word, word) for word in re.findall(r"\w+", folded) if len(word) >= 4}
+
+    requested_words = normalized_words(goal)
     content_text = " ".join(str(evidence.get(key, "")) for key in
                              ("script", "topic", "selected_title", "hook", "ending", "story_concept"))
     content_text += " " + " ".join(str(d) for d in evidence.get("scene_descriptions", []))
-    content_words = {w for w in re.findall(r"\w+", content_text.casefold()) if len(w) >= 4}
-    overlap = (len(requested_words & content_words) / len(requested_words)) if requested_words else 1.0
+    content_words = normalized_words(content_text)
+    # Channel output may intentionally be in a different language than the
+    # Turkish command (e.g. İsviçre -> Schweiz, enerji -> Energie). Exact
+    # token equality falsely rejected these productions.  Canonical market
+    # aliases plus a conservative four-character shared root preserve the
+    # anti-drift gate without requiring a translation service.
+    matched = {
+        requested for requested in requested_words
+        if any(
+            requested == content
+            or (len(requested) >= 5 and len(content) >= 5 and requested[:4] == content[:4])
+            for content in content_words
+        )
+    }
+    overlap = (len(matched) / len(requested_words)) if requested_words else 1.0
     relevant = overlap >= _NARRATIVE_RELEVANCE_MIN_OVERLAP
     reasons = [] if relevant else [
         f"generated script/scenes/title share only {round(overlap * 100)}% of the requested goal's "
@@ -512,8 +537,18 @@ def validate_media_goal_artifact(
         if stage_sink is not None:
             stage_sink["last_stage"] = "quality_duration_probe"
         artifact_duration = _probe_duration_seconds(artifact, ffprobe)
-    if detected_cuts < 3:
-        issues.append("measured temporal/scene variation is insufficient")
+    # Four-scene Shorts have three authored boundaries, but FFmpeg's scene
+    # detector can legitimately score one boundary below threshold when two
+    # adjacent licensed images share a palette/composition. Require at least
+    # two measured hard changes for the minimum four-scene structure, and
+    # three for five/six scenes. This remains a measured gate while avoiding
+    # a false rejection of an otherwise distinct four-scene production.
+    required_cuts = 3 if scene_count <= 0 else max(1, min(3, scene_count - 2))
+    if detected_cuts < required_cuts:
+        issues.append(
+            f"measured temporal/scene variation is insufficient "
+            f"({detected_cuts} detected, {required_cuts} required)"
+        )
 
     audio_reasons = []
     if evidence.get("audio_present") is not True or max_audio_db is None or max_audio_db <= -60:

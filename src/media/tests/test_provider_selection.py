@@ -145,6 +145,19 @@ def test_rank_available_providers_orders_full_eligible_list(tmp_path, monkeypatc
     assert len(considered) == 2
 
 
+def test_free_only_selection_can_add_keyless_licensed_stock(tmp_path, monkeypatch):
+    history = _empty_history(tmp_path, monkeypatch)
+    paid = _FakeProvider("paid", _profile(provider_id="paid", cost_class="paid"))
+    monkeypatch.setattr("src.media.provider_selection._PROVIDERS", (paid,))
+
+    ranked, _ = rank_available_providers(
+        TEXT_TO_IMAGE, history=history, include_free_stock=True,
+    )
+
+    assert ranked[0][0].provider_id == "wikimedia_commons"
+    assert ranked[0][0].cost_class == "free"
+
+
 # Sanity: the real NVIDIA/fal/LTX providers this foundation ships are
 # actually registered and reachable through the same selection path (no
 # separate, undiscoverable registry).

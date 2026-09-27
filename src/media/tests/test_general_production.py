@@ -103,6 +103,16 @@ leni, cocuk, macera, orman, fener
 """
 
 
+def test_plan_parser_accepts_escaped_markdown_headings_from_llm():
+    escaped = _leni_plan_text().replace("SENARYO\n", "\\*\\*SENARYO\\*\\*\n", 1)
+    escaped = escaped.replace("SAHNELER\n", "\\*\\*SAHNELER\\*\\*\n", 1)
+
+    parsed = parse_plan_text(escaped)
+
+    assert parsed is not None
+    assert len(parsed.scenes) == 5
+
+
 def test_generic_video_resolves_real_repository_capabilities():
     assert has_production_media_capability("YouTube için yeni video üret")
     assert set(PRODUCTION_CAPABILITIES) == {"story_generation", "scene_generation",

@@ -55,6 +55,18 @@ class TestCurrentInfoYoutubeTaskIsPreserved:
         departments = orchestrator.select_departments("YouTube otomasyonu kur.")
         assert set(departments) == {"research", "github", "browser", "media", "automation"}
 
+    def test_current_trend_plan_keeps_research_without_rendering_signal(self):
+        orchestrator = DepartmentOrchestrator()
+        departments = orchestrator.select_departments(
+            "YouTube için güncel trendleri araştır, en iyi 3 video fikrini ve "
+            "başlıklarını hazırla; video üretim planı oluştur fakat yayınlama."
+        )
+
+        assert "research" in departments
+        assert "media" in departments
+        assert "github" not in departments
+        assert "browser" not in departments
+
 
 class TestRepoResearchTaskIsPreserved:
     """TEST E: "JARVIS için YouTube automation reposu bul ve değerlendir."

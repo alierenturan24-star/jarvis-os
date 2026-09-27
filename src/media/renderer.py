@@ -6,7 +6,10 @@ import math
 import re
 import shutil
 import subprocess
+import sys
+import unicodedata
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 
@@ -55,6 +58,50 @@ def find_ffprobe() -> str | None:
         return system
     local = Path("tools/ffmpeg/bin/ffprobe.exe").resolve()
     return str(local) if local.is_file() else None
+
+
+def find_edge_tts() -> str | None:
+    """Find edge-tts even when the venv was launched without activation.
+
+    The Windows one-click launcher invokes ``.venv/Scripts/python.exe``
+    directly, so that Scripts directory is not guaranteed to be on PATH.
+    Looking next to the running interpreter fixes the real launcher case.
+    """
+    system = shutil.which("edge-tts") or shutil.which("edge-tts.exe")
+    if system:
+        return system
+    executable_dirs = (Path(sys.executable).parent, Path(sys.executable).resolve().parent)
+    for executable_dir in executable_dirs:
+        for name in ("edge-tts.exe", "edge-tts"):
+            candidate = executable_dir / name
+            if candidate.is_file():
+                return str(candidate.resolve())
+    return None
+
+
+@lru_cache(maxsize=1)
+def ffmpeg_has_flite() -> bool:
+    """Whether local FFmpeg can synthesize an offline fallback voice."""
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg:
+        return False
+    try:
+        completed = subprocess.run(
+            [ffmpeg, "-hide_banner", "-filters"], capture_output=True, text=True,
+            timeout=8, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return completed.returncode == 0 and re.search(r"\bflite\b", completed.stdout) is not None
+
+
+def narration_capability_available() -> bool:
+    return bool(
+        find_edge_tts()
+        or shutil.which("powershell.exe")
+        or shutil.which("powershell")
+        or ffmpeg_has_flite()
+    )
 
 
 class LocalVideoRenderer:
@@ -218,12 +265,39 @@ class LocalVideoRenderer:
 
         concat = job_dir / "production-scenes.txt"
         concat.write_text("".join(f"file '{path.name}'\n" for path in segment_paths), encoding="utf-8")
+        music = root / str(manifest.get("music_file", ""))
+        subtitles = root / str(manifest.get("subtitle_file", ""))
         command = [
             ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", concat.name,
-            "-i", str(audio.resolve()), "-t", str(max(total_duration, 1)), "-c:v", "copy",
-            "-af", "atempo=1.07,loudnorm=I=-16:TP=-1.5:LRA=11", "-c:a", "aac", "-b:a", "128k",
-            "-movflags", "+faststart", output_path.name,
+            "-i", str(audio.resolve()),
         ]
+        music_index = None
+        if music.is_file() and music.stat().st_size > 1024:
+            music_index = 2
+            command.extend(("-i", str(music.resolve())))
+        subtitle_index = None
+        if subtitles.is_file() and subtitles.stat().st_size > 10:
+            subtitle_index = 3 if music_index is not None else 2
+            command.extend(("-i", str(subtitles.resolve())))
+
+        command.extend(("-map", "0:v:0"))
+        if music_index is not None:
+            command.extend((
+                "-filter_complex",
+                f"[1:a]atempo=1.07[voice];[{music_index}:a]volume=0.10[music];"
+                "[voice][music]amix=inputs=2:duration=first:dropout_transition=2,"
+                "loudnorm=I=-16:TP=-1.5:LRA=11[mixed]",
+                "-map", "[mixed]",
+            ))
+        else:
+            command.extend(("-map", "1:a:0", "-af", "atempo=1.07,loudnorm=I=-16:TP=-1.5:LRA=11"))
+        if subtitle_index is not None:
+            command.extend(("-map", f"{subtitle_index}:s:0", "-c:s", "mov_text",
+                            "-metadata:s:s:0", f"language={str(manifest.get('channel_language', 'de'))[:2]}"))
+        command.extend((
+            "-t", str(max(total_duration, 1)), "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart", output_path.name,
+        ))
         if stage_sink is not None:
             stage_sink["last_stage"] = "render_ffmpeg_compose"
         completed = subprocess.run(command, cwd=job_dir, capture_output=True, text=True, timeout=180, check=False)
@@ -302,7 +376,15 @@ def _find_production_package(topic: str, asset_root: str | Path = "workspace/ass
 
 
 def has_production_media_capability(topic: str) -> bool:
-    """Whether a goal-matching, non-placeholder production package exists."""
+    """Whether a real local/free production route can be attempted.
+
+    A pre-authored package is not required: FREE_ONLY production can acquire
+    license-filtered Commons stills at runtime, create local music/subtitles/
+    thumbnail, narrate locally, then render with FFmpeg.  Runtime network or
+    evidence failures remain fail-closed in ``GeneralProductionBuilder``;
+    this preflight must not mislabel the already-wired route as a missing
+    capability and launch unrelated capability discovery.
+    """
     package = _find_production_package(topic)
     if package is None:
         source_root = Path("workspace/assets/media/channel-default-sources")
@@ -310,7 +392,16 @@ def has_production_media_capability(topic: str) -> bool:
             (source_root / f"{story.name.removesuffix('-storyboard.png')}-running-poses.png").is_file()
             for story in source_root.glob("*-storyboard.png")
         )
-        return bool(find_ffmpeg() and paired_source and (shutil.which("edge-tts") or shutil.which("powershell.exe")))
+        local_voice = narration_capability_available()
+        if find_ffmpeg() and local_voice:
+            try:
+                from src.providers.wikimedia_media_provider import WikimediaMediaProvider
+                free_visual_route = any(profile.availability for profile in WikimediaMediaProvider().profiles())
+            except Exception:
+                free_visual_route = False
+            if free_visual_route:
+                return True
+        return bool(find_ffmpeg() and paired_source and local_voice)
     if find_ffmpeg() is None:
         return False
     try:
@@ -336,15 +427,20 @@ def _safe_name(value: str) -> str:
     return (compact[:72] or "jarvis-video")
 
 
-def _write_sapi_wav(path: Path, narration: str) -> bool:
+def _write_sapi_wav(path: Path, narration: str, language: str = "") -> bool:
     powershell = shutil.which("powershell.exe") or shutil.which("powershell")
     if not powershell or not narration.strip():
         return False
     escaped_path = str(path.resolve()).replace("'", "''")
     escaped_text = " ".join(narration.split())[:4000].replace("'", "''")
+    escaped_language = str(language or "").replace("'", "''")
     script = (
         "Add-Type -AssemblyName System.Speech; "
         "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+        f"$culture='{escaped_language}'; "
+        "$v=$s.GetInstalledVoices() | Where-Object { $_.Enabled -and "
+        "$_.VoiceInfo.Culture.Name -like ($culture.Substring(0,[Math]::Min(2,$culture.Length))+'*') } "
+        "| Select-Object -First 1; if($v){$s.SelectVoice($v.VoiceInfo.Name)}; "
         f"$s.SetOutputToWaveFile('{escaped_path}'); "
         f"$s.Speak('{escaped_text}'); $s.Dispose()"
     )
@@ -352,7 +448,7 @@ def _write_sapi_wav(path: Path, narration: str) -> bool:
     try:
         completed = subprocess.run(
             [powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
-            capture_output=True, timeout=5, check=False,
+            capture_output=True, timeout=90, check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
         return False
@@ -362,3 +458,48 @@ def _write_sapi_wav(path: Path, narration: str) -> bool:
         return False
 
 
+def _write_flite_wav(path: Path, narration: str) -> bool:
+    """Last-resort, fully local narration used only when Edge/SAPI fail."""
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg or not ffmpeg_has_flite() or not narration.strip():
+        return False
+    text_path = path.with_suffix(".flite.txt")
+    ascii_text = unicodedata.normalize("NFKD", " ".join(narration.split())[:4000])
+    ascii_text = ascii_text.encode("ascii", "ignore").decode("ascii").replace("'", "")
+    try:
+        text_path.write_text(ascii_text or "Jarvis video", encoding="utf-8")
+        source = f"flite=textfile='{text_path.resolve().as_posix()}':voice=slt"
+        completed = subprocess.run(
+            [ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", source,
+             "-ar", "48000", str(path)],
+            capture_output=True, text=True, timeout=120, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    try:
+        return completed.returncode == 0 and path.is_file() and path.stat().st_size > 1024
+    except OSError:
+        return False
+
+
+def write_narration_audio(root: Path, narration: str, language: str, voice: str) -> tuple[Path, str, bool]:
+    """Create real narration with bounded free/local fallbacks."""
+    edge_tts = find_edge_tts()
+    if edge_tts:
+        path = root / "narration.mp3"
+        try:
+            completed = subprocess.run(
+                [edge_tts, "--voice", voice, "--text", narration, "--write-media", str(path)],
+                capture_output=True, text=True, timeout=120, check=False,
+            )
+            if completed.returncode == 0 and path.is_file() and path.stat().st_size > 1024:
+                return path, f"edge-tts {voice}", True
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+    path = root / "narration.wav"
+    if _write_sapi_wav(path, narration, language):
+        return path, f"Windows System.Speech ({language or 'installed voice'})", True
+    if _write_flite_wav(path, narration):
+        return path, "FFmpeg flite local fallback", True
+    return path, "unavailable", False

@@ -59,6 +59,12 @@ class ReportBuilder:
 
 - Platform: {result.get("source", "Web")}
 - Adres: {result.get("url", "")}
+- Yayın tarihi: {result.get("published_at", "") or "belirtilmedi"}
+- Kaynak dili: {result.get("source_language", "") or "belirtilmedi"}
+- Yayıncı: {result.get("publisher", "") or "belirtilmedi"}
+- Rol: {result.get("reference_role", "factual")}
+- Süre: {result.get("duration", "") or "belirtilmedi"}
+- Etkileşim metadatası: {result.get("statistics", {})}
 - Açıklama: {result.get("summary", "")}
 """.strip()
             )

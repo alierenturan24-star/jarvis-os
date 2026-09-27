@@ -267,7 +267,10 @@ class ControlCenterReadModel:
         return {"mode": "PAPER / SIMULATION", "live_execution": False,
                 "workers": [row for row in self.workers() if row["department"] in {"finance", "learning"}],
                 "watchlist": state.get("engines", {}).get("finance", {}).get("watchlist", []),
-                "paper_positions": paper.get("positions", []), "decision_history": state.get("finance_exploration", {}).get("runs", []),
+                "paper_positions": paper.get("positions", []),
+                "decision_history": state.get("finance_decisions", []),
+                "cycles": state.get("finance_cycles", []),
+                "portfolio": self.service.finance.portfolio_snapshot(),
                 "has_real_portfolio": False}
 
     def research(self) -> dict[str, Any]:

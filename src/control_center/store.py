@@ -13,12 +13,15 @@ from typing import Any, Callable
 
 
 DEFAULT_STATE: dict[str, Any] = {
-    "schema_version": 5,
+    "schema_version": 6,
     "engines": {
         "youtube": {"enabled": False, "queue": [], "policy": {"research": True, "production": True, "publish_requires_approval": True}},
-        "finance": {"enabled": False, "mode": "RESEARCH", "watchlist": [], "live_activation": False,
+        "finance": {"enabled": True, "mode": "RESEARCH", "watchlist": ["BTCUSDT", "ETHUSDT", "SOLUSDT"], "live_activation": False,
                     "policy": {"research": True, "backtest": True, "paper": True, "real_orders": False,
-                               "live_requires_human_approval": True}},
+                               "live_requires_human_approval": True},
+                    "risk_policy": {"risk_per_trade": 0.005, "max_risk_per_trade": 0.01,
+                                    "max_position_notional": 0.20, "max_gross_exposure": 0.50,
+                                    "max_open_positions": 3}},
     },
     "missions": [],
     "approvals": [],
@@ -28,6 +31,8 @@ DEFAULT_STATE: dict[str, Any] = {
               "performance": {}},
     "backtests": [],
     "strategy_labs": [],
+    "finance_cycles": [],
+    "finance_decisions": [],
     "finance_exploration": {"candidates": {}, "runs": [], "last_learning": None,
                             "next_exploration": []},
     "youtube_learning": {
@@ -116,12 +121,22 @@ class ControlCenterStore:
             if not isinstance(value, dict):
                 return deepcopy(DEFAULT_STATE)
             # Forward-fill newly introduced fields without discarding persisted history.
+            original_version = int(value.get("schema_version", 0) or 0)
             merged = deepcopy(DEFAULT_STATE)
             for key, item in value.items():
                 if isinstance(item, dict) and isinstance(merged.get(key), dict): merged[key].update(item)
                 else: merged[key] = item
             merged["engines"]["finance"].setdefault("policy", deepcopy(DEFAULT_STATE["engines"]["finance"]["policy"]))
+            merged["engines"]["finance"].setdefault("risk_policy", deepcopy(DEFAULT_STATE["engines"]["finance"]["risk_policy"]))
+            if original_version < 6:
+                # Schema 6 makes the safe finance lab available by default;
+                # live execution remains impossible and explicitly disabled.
+                merged["schema_version"] = 6
+                merged["engines"]["finance"].update(enabled=True, live_activation=False)
+                if not merged["engines"]["finance"].get("watchlist"):
+                    merged["engines"]["finance"]["watchlist"] = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
             merged["paper"].setdefault("initial_cash", 10000.0); merged["paper"].setdefault("performance", {})
+            merged.setdefault("finance_cycles", []); merged.setdefault("finance_decisions", [])
             research = merged.setdefault("autonomous_research", {})
             for key in ("topics", "cycles", "findings", "tools", "capabilities", "evaluations", "capability_audit", "proposals",
                         "integration_plans", "integration_verifications", "mission_continuations"):

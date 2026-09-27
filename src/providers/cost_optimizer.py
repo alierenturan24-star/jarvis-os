@@ -120,6 +120,9 @@ _PAID_COST_PER_1K: dict[str, float] = {
     "nvidia": 0.004,
     "ltx": 0.01,
     "fal": 0.003,
+    # Separate from the free-quota Gemini TEXT provider. Native image
+    # output is billed and must pass the paid-media approval gate.
+    "gemini_image": 0.045,
 }
 
 # Doğrulanabilir ücret sınıfları (raporlama/Control Center için). "free"

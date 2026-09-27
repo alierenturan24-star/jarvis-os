@@ -22,6 +22,7 @@ class FailureClass(str, Enum):
     NETWORK_FAILURE = "network_failure"
     AUTH_REQUIRED = "auth_required"
     CAPABILITY_MISMATCH = "capability_mismatch"
+    EVIDENCE_INSUFFICIENT = "evidence_insufficient"
     QUALITY_INSUFFICIENT = "quality_insufficient"
     UNKNOWN = "unknown"
 
@@ -44,6 +45,14 @@ _CLASS_MARKERS: dict[FailureClass, tuple[str, ...]] = {
     FailureClass.TOOL_FAILURE: ("handler tanımlı değil", "tool hatası", "araç hatası"),
     FailureClass.CAPABILITY_MISMATCH: (
         "desteklenmeyen provider", "desteklenmeyen işlem", "kapsamı dışında",
+    ),
+    # A truthful research gate is not a missing software capability and a
+    # different text/media provider cannot manufacture the absent dated
+    # evidence.  Keep it out of both the provider ladder and GitHub
+    # capability discovery; the correct continuation is bounded re-research.
+    FailureClass.EVIDENCE_INSUFFICIENT: (
+        "research_gap", "insufficient_evidence", "güncellik tarihli kaynaklarla doğrulanamadı",
+        "tarihli ve istenen pazara ait güvenilir kaynak doğrulanamadı",
     ),
     FailureClass.QUALITY_INSUFFICIENT: ("kalite yetersiz",),
     # Genel yakalayıcı -- yukarıdaki DAHA SPESİFİK sınıflardan hiçbiri

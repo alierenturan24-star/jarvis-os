@@ -8,6 +8,15 @@ FAILURE_MARKERS = (
     "ollama hata verdi",
     "model cevap üretmedi",
     "provider bulunamadı",
+    # Some hosted chat providers occasionally answer the system's research
+    # prompt with their generic welcome message.  That is a transport-level
+    # success but a task-level failure and must never be persisted as a
+    # completed research report.
+    "what would you like me to work on",
+    "how can i help you today",
+    "how may i assist you",
+    "nasıl yardımcı olabilirim",
+    "size nasıl yardımcı olabilirim",
 )
 
 
@@ -41,26 +50,50 @@ def compact_results(results: list[dict], limit: int = 5) -> list[dict]:
 
 
 def source_fallback(topic: str, results: list[dict], limit: int = 5) -> str:
+    """Build a truthful provider-free research handoff from collected rows.
+
+    The fallback intentionally does not invent a synthesis.  It selects the
+    first usable, dated factual headline and exposes every source field the
+    downstream evidence gate needs (date, language and URL).  This keeps the
+    free pipeline moving when a provider times out or returns a greeting,
+    while the existing freshness/source-count gates still decide whether
+    media production may proceed.
+    """
     selected = compact_results(results, limit=limit)
     if not selected:
         return "Kaynaklardan güvenilir bir özet oluşturulamadı."
 
+    factual = [
+        item for item in selected
+        if item.get("reference_role") != "format_only" and item.get("rejected") is not True
+    ]
+    dated = [item for item in factual if str(item.get("published_at") or "").strip()]
+    lead = (dated or factual or selected)[0]
+    lead_title = str(lead.get("title") or "Güncel kaynak taraması").strip()
+
     lines = [
-        "Yerel model zamanında yanıt veremediği için kaynak tabanlı kısa özet gösteriliyor.",
+        f"SEÇİLEN KONU: {lead_title}",
         "",
-        f"Konu: {topic}",
+        "AI sağlayıcısı uygun araştırma özeti döndürmediği için doğrulanabilir kaynaklardan "
+        "sağlayıcısız yedek rapor oluşturuldu.",
+        f"Araştırma isteği ve pazarı: {topic}",
         "",
-        "Öne çıkan kaynaklar:",
+        "Destekleyen kaynaklar:",
     ]
 
     for index, item in enumerate(selected, start=1):
         title = item.get("title") or "Başlıksız kaynak"
         snippet = item.get("summary") or "Açıklama bulunamadı."
-        lines.append(f"{index}. {title}")
-        lines.append(f"   {snippet[:280]}")
+        lines.append(f"{index}. Başlık: {title}")
+        lines.append(f"   Yayın tarihi: {item.get('published_at') or 'Belirtilmedi'}")
+        lines.append(f"   Kaynak dili: {item.get('source_language') or 'Belirtilmedi'}")
+        lines.append(f"   Adres: {item.get('url') or 'Belirtilmedi'}")
+        lines.append(f"   Bilgi: {snippet[:280]}")
 
     lines.extend([
         "",
-        "Not: Ayrıntılı yapay zekâ özeti sonraki çalıştırmada yeniden denenebilir.",
+        "JARVIS Önerisi",
+        "Yalnızca yukarıdaki tarihli kaynaklar güncellik kanıtı olarak kullanılsın; "
+        "medya üretimi mevcut kaynak ve lisans kapılarından geçmeden başlatılmasın.",
     ])
     return "\n".join(lines)

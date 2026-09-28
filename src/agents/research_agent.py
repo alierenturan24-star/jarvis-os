@@ -12,7 +12,7 @@ from src.research.opportunity import build_selected_opportunity
 
 _WINDOW_FALLBACK_PATTERN = re.compile(r"\bson\s+\d+\s+gün\w*", re.IGNORECASE)
 _WINDOW_FALLBACK_CUES = (
-    "son 30 güne genişlet", "30 günlük yedek", "30 gün yedek",
+    "son 30 güne genişlet", "30 güne genişlet", "30 günlük yedek", "30 gün yedek",
 )
 
 

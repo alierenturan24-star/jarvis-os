@@ -45,7 +45,7 @@ from src.workforce.publisher import artifact_id
 
 STAGE_NAMES = {"UNDERSTANDING", "PLANNING", "RESEARCH", "GITHUB", "BROWSER", "EVALUATION", "SANDBOX",
                "INTEGRATION", "PROVIDER", "MEDIA", "AUTOMATION", "FINANCE", "RECOVERY", "VALIDATION",
-               "COMPLETED", "BLOCKED", "CODING", "AI_DISCOVERY"}
+               "COMPLETED", "BLOCKED", "CANCELLED", "CODING", "AI_DISCOVERY"}
 
 
 class CapabilityCandidateNotFound(LookupError):
@@ -332,6 +332,22 @@ class ControlCenterService:
         self._paused = True
         self.runtime.shutdown()
         self.activity("BLOCKED", "EMERGENCY STOP" if emergency else "JARVIS stopped", level="error" if emergency else "warning")
+
+    def cancel_active_mission(self) -> dict[str, Any]:
+        """Persist cancellation before the HTTP layer restarts the process."""
+        with self._lock:
+            if not self._active or not self.busy:
+                return {"ok": True, "cancelled": False, "message": "Çalışan görev yok."}
+            record = self._active
+            record.update(status="CANCELLED", stage="CANCELLED", finished_at=utc_now(),
+                          error="Kullanıcı tarafından panelden iptal edildi.")
+            self._persist_mission(record)
+            self.runtime.shutdown()
+            self.activity("CANCELLED", "Aktif görev iptal edildi; temiz restart hazırlanıyor.",
+                          level="warning", mission_id=record["id"])
+            self.notify("MISSION CANCELLED", record["goal"], record["id"])
+            return {"ok": True, "cancelled": True, "mission_id": record["id"],
+                    "message": "Görev iptal edildi; JARVIS yeniden başlatılıyor."}
 
     def create_approval(self, kind: str, details: dict[str, Any], mission_id: str = "") -> dict[str, Any]:
         action, task_id = details.get("action"), details.get("task_id")

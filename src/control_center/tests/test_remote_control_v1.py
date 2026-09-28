@@ -108,5 +108,7 @@ def test_one_click_launcher_is_local_non_admin_and_preserves_env():
     assert "127.0.0.1" in setup and "0.0.0.0" not in setup
     assert "Test-Path -LiteralPath $EnvironmentFile" in setup
     assert "Copy-Item -LiteralPath $EnvironmentExample" in setup
-    assert "RunAs" not in setup and "Start-Process $url" in setup
+    assert "RunAs" not in setup and "Open-JarvisPanel $url" in setup
+    assert "Google\\Chrome\\Application\\chrome.exe" in setup
+    assert "Microsoft\\Edge\\Application\\msedge.exe" in setup
     assert "--fresh-session" in setup

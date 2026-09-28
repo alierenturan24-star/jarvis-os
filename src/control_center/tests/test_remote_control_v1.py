@@ -112,3 +112,16 @@ def test_one_click_launcher_is_local_non_admin_and_preserves_env():
     assert "Google\\Chrome\\Application\\chrome.exe" in setup
     assert "Microsoft\\Edge\\Application\\msedge.exe" in setup
     assert "--fresh-session" in setup
+
+
+def test_panel_exposes_cancel_and_safe_restart_controls():
+    html = Path("src/control_center/web/index.html").read_text(encoding="utf-8")
+    js = Path("src/control_center/web/app.js").read_text(encoding="utf-8")
+    server = Path("src/control_center/server.py").read_text(encoding="utf-8")
+    service = Path("src/control_center/service.py").read_text(encoding="utf-8")
+    helper = Path("tools/restart_control_center.ps1").read_text(encoding="utf-8")
+    assert 'id="cancelMission"' in html and 'id="restartJarvis"' in html
+    assert "/api/control/cancel-mission" in js and "/api/control/restart" in js
+    assert "cancel_active_mission" in service and 'status="CANCELLED"' in service
+    assert "_schedule_restart" in server and "restart_control_center.ps1" in server
+    assert "Start-Sleep -Seconds 3" in helper and "setup_and_start.ps1" in helper

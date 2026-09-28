@@ -60,6 +60,29 @@ function Test-ControlCenterHealth([string]$Token) {
     } catch { return $false }
 }
 
+function Open-JarvisPanel([string]$Url) {
+    $browserCandidates = @(
+        (Join-Path $env:LOCALAPPDATA 'Google\Chrome\Application\chrome.exe'),
+        (Join-Path $env:ProgramFiles 'Google\Chrome\Application\chrome.exe'),
+        (Join-Path ${env:ProgramFiles(x86)} 'Google\Chrome\Application\chrome.exe'),
+        (Join-Path $env:ProgramFiles 'Microsoft\Edge\Application\msedge.exe'),
+        (Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application\msedge.exe')
+    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) }
+
+    foreach ($browser in $browserCandidates) {
+        try {
+            Start-Process -FilePath $browser -ArgumentList @('--new-window', $Url) -ErrorAction Stop | Out-Null
+            return
+        } catch { continue }
+    }
+
+    try {
+        Start-Process $Url -ErrorAction Stop | Out-Null
+    } catch {
+        Start-Process -FilePath 'explorer.exe' -ArgumentList $Url -ErrorAction Stop | Out-Null
+    }
+}
+
 
 function Clear-StaleJarvisListener {
     $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
@@ -160,6 +183,6 @@ if (-not (Test-ControlCenterHealth $token)) {
 }
 
 $url = "http://127.0.0.1:$Port/?token=$token"
-Start-Process $url
+Open-JarvisPanel $url
 Write-Host 'JARVIS HAZIR. Panel tarayicida acildi.' -ForegroundColor Green
 Write-Host 'Guvenlik: yalnizca bu bilgisayarda 127.0.0.1 adresinde calisiyor.' -ForegroundColor DarkGray

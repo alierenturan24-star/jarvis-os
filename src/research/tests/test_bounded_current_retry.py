@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from src.agents.research_agent import ResearchAgent
+from src.agents.research_agent import ResearchAgent, _WINDOW_FALLBACK_CUES
 from src.planner.task import Task
 from src.knowledge.knowledge_base import KnowledgeBase
 
@@ -109,6 +109,11 @@ def test_current_media_research_can_widen_to_declared_30_day_fallback():
     assert "OTOMATİK 30 GÜNLÜK YEDEK" in output
     assert task.metadata["report"]["sufficient"] is True
     assert task.metadata["report"]["freshness_window_days"] == 30
+
+
+def test_concise_one_click_wording_also_enables_30_day_fallback():
+    command = "İsviçre için son 7 günü tara; iki güvenilir kaynak yoksa 30 güne genişlet."
+    assert any(cue in command.casefold() for cue in _WINDOW_FALLBACK_CUES)
 
 
 def test_media_research_passes_recent_video_topics_as_exclusions(monkeypatch):

@@ -280,6 +280,23 @@ class ControlCenterHandler(BaseHTTPRequestHandler):
         trusted_origin = trusted_request_origin(self.headers, self.server.trusted_tailscale_hosts)
         return bool(trusted_origin and (not origin or origin == trusted_origin))
 
+    def _schedule_restart(self) -> None:
+        if os.name != "nt":
+            raise RuntimeError("Panel restart is available on the Windows launcher.")
+        script = Path(__file__).resolve().parents[2] / "tools" / "restart_control_center.ps1"
+        if not script.is_file():
+            raise RuntimeError("Restart helper bulunamadı.")
+        subprocess.Popen(
+            ["powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass",
+             "-File", str(script), "-Port", str(self.server.server_port)],
+            cwd=str(script.parent.parent), creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        def stop_old_server() -> None:
+            time.sleep(0.5)
+            self.server.shutdown()
+        threading.Thread(target=stop_old_server, daemon=True, name="jarvis-safe-restart").start()
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         origin = trusted_request_origin(self.headers, self.server.trusted_tailscale_hosts)
@@ -401,6 +418,16 @@ class ControlCenterHandler(BaseHTTPRequestHandler):
             if path == "/api/control/pause": self.server.service.pause(); return self._json({"ok": True})
             if path == "/api/control/stop": self.server.service.stop(False); return self._json({"ok": True})
             if path == "/api/control/emergency-stop": self.server.service.stop(True); return self._json({"ok": True})
+            if path == "/api/control/cancel-mission":
+                result = self.server.service.cancel_active_mission()
+                if result.get("cancelled"):
+                    self._schedule_restart()
+                return self._json(result, 202)
+            if path == "/api/control/restart":
+                self.server.service.activity("RECOVERY", "Panelden güvenli JARVIS restart istendi.", level="warning")
+                self._schedule_restart()
+                return self._json({"ok": True, "restarting": True,
+                                   "message": "JARVIS yeniden başlatılıyor."}, 202)
             if path == "/api/workers/stop-all": return self._json(self.server.service.workforce.stop_all())
             if path.startswith("/api/workers/"):
                 parts = path.strip("/").split("/")

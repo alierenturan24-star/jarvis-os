@@ -342,7 +342,8 @@ class ControlCenterHandler(BaseHTTPRequestHandler):
         if not self._authenticated(): return self._json({"error": "Unauthorized"}, 401)
         if parsed.path == "/app.css" or parsed.path == "/app.js":
             file = WEB_ROOT / parsed.path[1:]; body = file.read_bytes(); mime = "text/css" if file.suffix == ".css" else "text/javascript"
-            self.send_response(200); self.send_header("Content-Type", f"{mime}; charset=utf-8"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+            self.send_response(200); self.send_header("Content-Type", f"{mime}; charset=utf-8"); self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
         if parsed.path == "/api/status": return self._json(self.server.service.snapshot())
         if parsed.path == "/api/health": return self._json(self.server.service.health())
         if parsed.path == "/api/dashboard": return self._json(self.server.service.read_model.dashboard())

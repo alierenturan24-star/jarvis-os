@@ -312,6 +312,7 @@ class TestBoundedRepairLoop:
 
     def test_repairable_failure_triggers_bounded_retry_then_succeeds(self, tmp_path, monkeypatch):
         manager, build_calls = self._manager(tmp_path, monkeypatch)
+        stage_sink = {}
         render_calls: list[int] = []
         monkeypatch.setattr(
             LocalVideoRenderer, "render",
@@ -323,11 +324,16 @@ class TestBoundedRepairLoop:
         monkeypatch.setattr("src.media.manager.validate_media_goal_artifact",
                              lambda path, goal, **kw: checks.pop(0))
 
-        result = manager.plan(topic="Bitcoin neden düştü", produce_artifact=True)
+        result = manager.plan(
+            topic="Bitcoin neden düştü", produce_artifact=True,
+            stage_sink=stage_sink,
+        )
 
         assert len(render_calls) == 2
         assert len(build_calls) == 2  # initial build + one bounded rebuild
         assert "GERÇEK VIDEO ARTIFACT" in result
+        assert stage_sink["artifact_quality_validation"]["passed"] is True
+        assert stage_sink["artifact_quality_validation"]["artifact_path"].endswith("artifact-2.mp4")
         assert "REPAIR LOG" in result
         assert "attempt 1: regenerated due to audio_completeness" in result
 

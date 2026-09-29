@@ -602,6 +602,25 @@ Kurallar:
                 Path(render.artifact_path), quality_goal or topic, stage_sink=stage_sink,
             )
             failing = [name for name in check.critical_failures if name != "publication_readiness"]
+            # Preserve the exact result of the quality gate that decided
+            # whether this render may leave the media pipeline.  Mission
+            # completion used to re-run the same validator against the much
+            # broader *original command* (for example: "find current Swiss
+            # news, make a Short...") rather than the selected story title
+            # used here.  A genuinely approved render could therefore be
+            # reported as RENDERED_NOT_APPROVED even though this method had
+            # just returned ``GERÇEK VIDEO ARTIFACT``.  The shared stage sink
+            # is task.metadata, so this records a path-bound, non-transferable
+            # approval without weakening or skipping any gate.
+            if stage_sink is not None:
+                stage_sink["artifact_quality_validation"] = {
+                    "artifact_path": render.artifact_path,
+                    "validation_goal": quality_goal or topic,
+                    "passed": not failing,
+                    "technical_passed": check.technical_passed,
+                    "semantic_passed": check.semantic_passed,
+                    "critical_failures": list(failing),
+                }
             self.last_production_record = self.learning.record(
                 goal=topic, artifact_path=render.artifact_path, plan_text=plan_text,
             )

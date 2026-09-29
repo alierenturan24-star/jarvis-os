@@ -23,12 +23,12 @@ title JARVIS AC
 set "POINTER=C:\Projects\JARVIS_ACTIVE_PATH.txt"
 if not exist "%POINTER%" goto :missing
 set /p "JARVIS_ROOT="<"%POINTER%"
-if not exist "%JARVIS_ROOT%\START_JARVIS.bat" goto :missing
-call "%JARVIS_ROOT%\START_JARVIS.bat"
+if not exist "%JARVIS_ROOT%\tools\update_active_install.ps1" goto :missing
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%JARVIS_ROOT%\tools\update_active_install.ps1"
 exit /b %ERRORLEVEL%
 :missing
 echo JARVIS aktif kurulum yolu bulunamadi.
-echo JARVIS Video Surumunu Kur ve Ac dosyasini bir kez calistirin.
+echo JARVIS Tamir ve Ac dosyasini bir kez calistirin.
 pause
 exit /b 1
 '@
@@ -41,7 +41,7 @@ if ($desktop) {
     $shortcut = $shell.CreateShortcut($shortcutPath)
     $shortcut.TargetPath = $launcherPath
     $shortcut.WorkingDirectory = $projectsRoot
-    $shortcut.Description = 'Guncel aktif JARVIS Control Center'
+    $shortcut.Description = 'JARVIS guncelle ve Control Center ac'
     $shortcut.Save()
 }
 

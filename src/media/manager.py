@@ -41,6 +41,46 @@ _REPAIRABLE_GATES = {"audio_completeness", "av_timing", "repetition", "shorts_st
 # ``department_orchestrator.MEDIA_DEPARTMENT_TASK_TIMEOUT_SECONDS``).
 MAX_REPAIR_ATTEMPTS = 2
 
+_SPORTS_DOMAIN_SIGNALS = (
+    "futbol", "football", "calcio", "maç", "match", "gol", "stadyum",
+    "stadium", "stadio", "taraftar", "supporters",
+)
+_NEWS_MEDIA_DOMAIN_SIGNALS = (
+    "corriere", "gazete", "giornale", "newspaper", "editör", "editor",
+    "redazione", "newsroom", "journalist", "gazeteci", "direzione del",
+)
+
+
+def _research_evidence_text(opportunity: dict | None) -> str:
+    if not opportunity:
+        return ""
+    parts = [str(opportunity.get("selected_topic") or "")]
+    for item in opportunity.get("supporting_evidence") or ():
+        if isinstance(item, dict):
+            parts.extend((str(item.get("title") or ""), str(item.get("summary") or "")))
+    return "\n".join(part for part in parts if part.strip())
+
+
+def _research_domain_drift(plan_text: str, opportunity: dict | None) -> str | None:
+    """Catch an observed cross-domain hallucination before rendering.
+
+    This deliberately uses only strong domain words. Generic words such as
+    ``team/squadra`` are excluded because editorial and company teams use
+    them too.  The gate therefore catches a football story invented from a
+    newspaper-management article without rejecting ordinary wording.
+    """
+    evidence = _research_evidence_text(opportunity).casefold()
+    plan = (plan_text or "").casefold()
+    evidence_sports = sum(signal in evidence for signal in _SPORTS_DOMAIN_SIGNALS)
+    evidence_news = sum(signal in evidence for signal in _NEWS_MEDIA_DOMAIN_SIGNALS)
+    plan_sports = sum(signal in plan for signal in _SPORTS_DOMAIN_SIGNALS)
+    if evidence_news >= 1 and evidence_sports == 0 and plan_sports >= 2:
+        return (
+            "Kaynak bir gazete/medya kariyerini anlatırken plan desteklenmeyen "
+            "bir futbol hikâyesi üretti."
+        )
+    return None
+
 
 def _looks_predominantly_english(text: str) -> bool:
     words = re.findall(r"[a-zA-ZçğıöşüÇĞİÖŞÜ]+", text or "")
@@ -150,6 +190,19 @@ class MediaManager:
         # actual query, so the KnowledgeBase containment-match never hit),
         # which is exactly why the explicit data dependency exists now.
         if research_opportunity is not None:
+            evidence_rows = []
+            for ref in research_opportunity.get("supporting_evidence") or []:
+                evidence_rows.append(
+                    "- Başlık: " + str(ref.get("title") or "Başlıksız kaynak")[:220]
+                    + "\n  Kaynak özeti: " + str(ref.get("summary") or "Özet yok")[:1200]
+                    + "\n  Yayın tarihi: " + str(ref.get("published_at") or "belirtilmedi")
+                    + "\n  URL: " + str(ref.get("url") or "")
+                )
+            evidence_context = (
+                "\nDoğrulanmış haber kanıtı (olgular için yalnızca bunu esas al):\n"
+                + "\n".join(evidence_rows[:5]) + "\n"
+                if evidence_rows else ""
+            )
             format_rows = []
             for ref in research_opportunity.get("format_references") or []:
                 format_rows.append(
@@ -170,6 +223,7 @@ class MediaManager:
                 f"(konum/pazar: {research_opportunity.get('location_or_market', '')}, "
                 f"güncellik: {research_opportunity.get('why_current', '')}):\n"
                 f"{str(research_opportunity.get('selected_topic', ''))[:800]}\n"
+                f"{evidence_context}"
                 f"{format_context}"
             )
         elif prior is not None:
@@ -265,6 +319,8 @@ ETİKETLER
 
 Kurallar:
 - Uydurma istatistik/rakam/tarih kullanma, emin değilsen belirt.
+- Kaynak özetinde bulunmayan meslek, takım, kişi rolü veya olay türü UYDURMA.
+- Çok anlamlı bir başlık kelimesinden çıkarım yapma; kaynak özetindeki somut olguları esas al.
 - Güncel/trend iddialarını yalnızca yukarıdaki araştırma bağlamı destekliyorsa yaz;
   eski bir yılı güncelmiş gibi sunma.
 - Kesin yatırım tavsiyesi verme.
@@ -317,6 +373,30 @@ Kurallar:
                 "Gerçek bir plan uydurulmadı -- bu, boş/başarısız bir sonuçtur."
             )
 
+        drift_reason = _research_domain_drift(plan_text, research_opportunity)
+        if drift_reason:
+            correction = self.router.manager.route_and_generate(
+                prompt=(
+                    "Aşağıdaki video planı doğrulanmış haber kaynağının alanından sapmış. "
+                    "Hiçbir yeni olgu eklemeden, dokuz bölüm başlığını ve istenen dili koruyarak "
+                    "planı yalnızca aşağıdaki kaynak kanıtına göre düzelt. Çok anlamlı başlık "
+                    "kelimelerinden meslek veya olay türü çıkarma.\n\n"
+                    "DOĞRULANMIŞ KAYNAK KANITI:\n"
+                    + _research_evidence_text(research_opportunity)[:5000]
+                    + "\n\nYANLIŞ PLAN:\n" + plan_text
+                ),
+                task_type="planning", preferred_provider=route_result.provider_used,
+            )
+            if correction.success and not is_llm_failure(correction.output):
+                plan_text = correction.output
+                route_result = correction
+            drift_reason = _research_domain_drift(plan_text, research_opportunity)
+            if drift_reason:
+                return (
+                    "VIDEO RENDER: BLOCKED_RESEARCH_DRIFT\n"
+                    f"{drift_reason} Yanlış bilgiyle video oluşturulmadı; hiçbir şey yayınlanmadı."
+                )
+
         if route_result.fallback_used:
             plan_text += (
                 f"\n\n(Not: birincil sağlayıcı ({route_result.chosen_provider}) başarısız oldu, "
@@ -354,6 +434,16 @@ Kurallar:
                     "source_count": len(research_opportunity.get("supporting_evidence") or []),
                     "selected_topic": str(research_opportunity.get("selected_topic") or "")[:500],
                     "format_reference_count": len(research_opportunity.get("format_references") or []),
+                    "supporting_evidence": [
+                        {
+                            "title": str(item.get("title") or "")[:300],
+                            "summary": str(item.get("summary") or "")[:1200],
+                            "url": str(item.get("url") or ""),
+                            "published_at": str(item.get("published_at") or ""),
+                        }
+                        for item in (research_opportunity.get("supporting_evidence") or [])[:5]
+                        if isinstance(item, dict)
+                    ],
                 }
             else:
                 research_grounded = prior is not None

@@ -169,6 +169,64 @@ class TestMediaManagerPlan:
         assert "VİDEO FİKİRLERİ VE BAŞLIKLARI" in captured_prompts[0]
         assert "Bugünün sistem tarihi" in captured_prompts[0]
 
+    def test_research_source_summary_reaches_planning_prompt(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        prompts = []
+        monkeypatch.setattr(
+            ProviderManager, "route_and_generate",
+            lambda self, prompt, task_type, **kw: prompts.append(prompt) or _route_result(_complete_plan_text()),
+        )
+        opportunity = {
+            "selected_topic": "Paride Pelli: Orgoglioso della squadra che lascio",
+            "location_or_market": "İsviçre",
+            "why_current": "iki tarihli kaynakla doğrulandı",
+            "supporting_evidence": [{
+                "url": "https://www.cdt.ch/news/ticino/example",
+                "title": "Paride Pelli lascia la direzione",
+                "summary": "Paride Pelli lascerà la direzione del Corriere del Ticino.",
+                "published_at": "2026-09-18T17:11:37+00:00",
+            }],
+            "freshness_status": "CURRENT",
+            "sufficient": True,
+        }
+
+        MediaManager().plan(topic=opportunity["selected_topic"], research_opportunity=opportunity)
+
+        assert "Paride Pelli lascerà la direzione del Corriere del Ticino" in prompts[0]
+        assert "Çok anlamlı bir başlık kelimesinden çıkarım yapma" in prompts[0]
+
+    def test_persistent_news_to_football_drift_is_blocked_before_render(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        calls = []
+        wrong_plan = _complete_plan_text() + (
+            "\nFutbol kariyeri boyunca oynadığı maç ve attığı gol taraftarı etkiledi."
+        )
+        monkeypatch.setattr(
+            ProviderManager, "route_and_generate",
+            lambda self, prompt, task_type, **kw: calls.append(prompt) or _route_result(wrong_plan),
+        )
+        opportunity = {
+            "selected_topic": "Paride Pelli: Orgoglioso della squadra che lascio",
+            "location_or_market": "İsviçre",
+            "why_current": "iki tarihli kaynakla doğrulandı",
+            "supporting_evidence": [{
+                "url": "https://www.cdt.ch/news/ticino/example",
+                "title": "Paride Pelli lascia la direzione",
+                "summary": "Paride Pelli lascerà la direzione del Corriere del Ticino.",
+            }],
+            "freshness_status": "CURRENT",
+            "sufficient": True,
+        }
+
+        result = MediaManager().plan(
+            topic=opportunity["selected_topic"], research_opportunity=opportunity,
+            produce_artifact=True,
+        )
+
+        assert len(calls) == 2
+        assert "BLOCKED_RESEARCH_DRIFT" in result
+        assert "hiçbir şey yayınlanmadı" in result
+
     def test_unavailable_preferred_provider_falls_back_to_ollama(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         captured_preferred = []

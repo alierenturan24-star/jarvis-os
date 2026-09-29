@@ -5,6 +5,7 @@ import json
 import mimetypes
 import os
 import shutil
+import subprocess
 import sys
 import threading
 import traceback
@@ -48,6 +49,25 @@ STAGE_NAMES = {"UNDERSTANDING", "PLANNING", "RESEARCH", "GITHUB", "BROWSER", "EV
                "COMPLETED", "BLOCKED", "CANCELLED", "CODING", "AI_DISCOVERY"}
 
 
+def _source_build_identity() -> str:
+    """Return the exact checkout identity without exposing repository details."""
+    configured = os.getenv("JARVIS_BUILD_ID", "").strip()
+    if configured:
+        return configured[:80]
+    try:
+        root = Path(__file__).resolve().parents[2]
+        result = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--short=12", "HEAD"],
+            capture_output=True, text=True, timeout=2, check=False,
+        )
+        value = result.stdout.strip()
+        if result.returncode == 0 and value:
+            return value[:12]
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return "source-unknown"
+
+
 class CapabilityCandidateNotFound(LookupError):
     pass
 
@@ -79,6 +99,7 @@ class ControlCenterService:
         self._activities: list[dict[str, Any]] = []
         self._paused = False
         self._provider_health: dict[str, bool] = {}
+        self._build_identity = _source_build_identity()
         self._started_at = utc_now()
         self._interrupted = self.store.recover_interrupted()
         self.workforce = WorkforceManager(self.store, notifier=self.notify)
@@ -543,7 +564,7 @@ class ControlCenterService:
         return {"backend_alive": True, "checked_at": utc_now(), "started_at": self._started_at,
                 "process": {"pid": os.getpid(), "instance_id": self._started_at,
                             "runtime_started_at": runtime_started_at,
-                            "build_identity": "jarvis-os-source"},
+                            "build_identity": self._build_identity},
                 "runtime_state": self.runtime.state, "finance": {"enabled": finance.get("enabled"),
                 "mode": finance.get("mode"), "live_activation": False},
                 "youtube": {"enabled": youtube.get("enabled"), "queued": sum(

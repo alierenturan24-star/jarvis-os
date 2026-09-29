@@ -183,6 +183,10 @@ if (-not (Test-ControlCenterHealth $token)) {
 }
 
 $url = "http://127.0.0.1:$Port/?token=$token"
+$registerActive = Join-Path $ProjectRoot 'tools\register_active_install.ps1'
+if (Test-Path -LiteralPath $registerActive -PathType Leaf) {
+    & $registerActive -ProjectRoot $ProjectRoot
+}
 Open-JarvisPanel $url
 Write-Host 'JARVIS HAZIR. Panel tarayicida acildi.' -ForegroundColor Green
 Write-Host 'Guvenlik: yalnizca bu bilgisayarda 127.0.0.1 adresinde calisiyor.' -ForegroundColor DarkGray

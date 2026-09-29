@@ -57,6 +57,7 @@ def test_health_exposes_real_process_identity(tmp_path):
     assert process["pid"] == os.getpid()
     assert process["instance_id"] == service._started_at
     assert process["runtime_started_at"]
+    assert process["build_identity"] and process["build_identity"] != "jarvis-os-source"
 
 
 def test_chat_prompt_contains_true_runtime_time_and_state():

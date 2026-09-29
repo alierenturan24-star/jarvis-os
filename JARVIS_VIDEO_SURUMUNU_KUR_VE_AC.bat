@@ -73,6 +73,7 @@ echo.
 echo ============================================================
 echo JARVIS HAZIR
 echo Kurulum klasoru: %NEW_REPO%
+echo Bundan sonra masaustundeki JARVIS AC kisayolunu kullanin.
 echo Eski proje ve degisiklikleriniz aynen korundu.
 echo ============================================================
 pause

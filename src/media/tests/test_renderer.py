@@ -87,3 +87,11 @@ def test_renderer_mixes_original_music_and_embeds_subtitles(tmp_path, monkeypatc
     assert "video" in probe.stdout
     assert "audio" in probe.stdout
     assert "subtitle" in probe.stdout
+    durations = subprocess.run([
+        shutil.which("ffprobe") or "ffprobe", "-v", "error", "-show_entries",
+        "stream=codec_type,duration", "-of", "json", result.artifact_path,
+    ], capture_output=True, text=True, check=True, timeout=30)
+    streams = json.loads(durations.stdout)["streams"]
+    video_seconds = float(next(row["duration"] for row in streams if row["codec_type"] == "video"))
+    audio_seconds = float(next(row["duration"] for row in streams if row["codec_type"] == "audio"))
+    assert abs(video_seconds - audio_seconds) < 0.12

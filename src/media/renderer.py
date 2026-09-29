@@ -284,13 +284,22 @@ class LocalVideoRenderer:
         if music_index is not None:
             command.extend((
                 "-filter_complex",
-                f"[1:a]atempo=1.07[voice];[{music_index}:a]volume=0.10[music];"
+                # Keep narration at its measured duration. The old 1.07x
+                # tempo shortened voice by ~6.5% while the video timeline
+                # still used the original narration_seconds, leaving an
+                # audio-less tail that correctly failed audio_completeness
+                # on every rebuild.
+                # Avoid loudnorm's analysis/look-ahead buffering here: on
+                # short tracks it can emit no frames before the fixed video
+                # cutoff. The final limiter is zero-latency and preserves the
+                # measured narration duration.
+                f"[1:a]volume=1.0[voice];[{music_index}:a]volume=0.10[music];"
                 "[voice][music]amix=inputs=2:duration=first:dropout_transition=2,"
-                "loudnorm=I=-16:TP=-1.5:LRA=11[mixed]",
+                "alimiter=limit=0.95[mixed]",
                 "-map", "[mixed]",
             ))
         else:
-            command.extend(("-map", "1:a:0", "-af", "atempo=1.07,loudnorm=I=-16:TP=-1.5:LRA=11"))
+            command.extend(("-map", "1:a:0", "-af", "alimiter=limit=0.95"))
         if subtitle_index is not None:
             command.extend(("-map", f"{subtitle_index}:s:0", "-c:s", "mov_text",
                             "-metadata:s:s:0", f"language={str(manifest.get('channel_language', 'de'))[:2]}"))

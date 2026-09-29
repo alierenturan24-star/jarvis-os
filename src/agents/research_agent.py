@@ -167,6 +167,7 @@ class ResearchAgent(BaseAgent):
                 summary=str(record.get("summary", "")) if record else "",
                 sources=record.get("sources", []) if record else (),
                 created_at=str(record.get("created_at", "")) if record else "",
+                exclude_topics=excluded_topics,
             )
             # A current media mission must not stop after one unlucky search
             # result. Retry exactly once with a materially different,
@@ -197,6 +198,7 @@ class ResearchAgent(BaseAgent):
                     summary=str(retry_record.get("summary", "")) if retry_record else "",
                     sources=retry_record.get("sources", []) if retry_record else (),
                     created_at=str(retry_record.get("created_at", "")) if retry_record else "",
+                    exclude_topics=excluded_topics,
                 )
                 retry_label = (
                     "OTOMATİK 30 GÜNLÜK YEDEK KAYNAK TARAMASI"

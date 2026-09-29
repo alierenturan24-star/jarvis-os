@@ -39,6 +39,10 @@ from src.utils.llm_utils import is_llm_failure
 _MIN_MARKET_OVERLAP_RATIO = 0.15  # matches quality.py's _NARRATIVE_RELEVANCE_MIN_OVERLAP
 _DEFAULT_CURRENT_WINDOW_DAYS = 14
 _MIN_CURRENT_SOURCES = 2
+_EXPLICIT_SAME_STORY_SOURCE_PATTERN = re.compile(
+    r"\b(?:en\s+az\s+)?(?:iki|2)\s+(?:bağımsız\s+)?(?:güvenilir\s+)?kaynak\w*\b",
+    re.IGNORECASE,
+)
 _WINDOW_PATTERNS = (
     re.compile(r"\bson\s+(\d+)\s+gün\w*", re.IGNORECASE),
     re.compile(r"\b(?:last|past)\s+(\d+)\s+days?", re.IGNORECASE),
@@ -146,6 +150,54 @@ def _source_summary(item: dict) -> str:
     ).strip()[:1200]
 
 
+def _normalized_distinctive_words(text: str) -> set[str]:
+    normalized = "".join(
+        char for char in unicodedata.normalize("NFKD", (text or "").casefold())
+        if not unicodedata.combining(char)
+    )
+    generic = _GENERIC_CONNECTOR_WORDS | {
+        "isvicre", "switzerland", "schweiz", "suisse", "svizzera",
+        "haber", "haberi", "guncel", "bugun", "today", "news",
+    }
+    return {word for word in re.findall(r"\w+", normalized) if len(word) >= 4 and word not in generic}
+
+
+def _same_story_evidence(selected_topic: str, evidence: tuple[dict, ...]) -> tuple[dict, ...]:
+    """Keep only sources that actually corroborate the selected headline.
+
+    This narrow gate is used when the user explicitly asks for two sources.
+    Shared proper nouns/numbers or two distinctive content words are enough
+    for multilingual reporting, while unrelated headlines from the same
+    search result page no longer count as corroboration.
+    """
+    selected_words = _normalized_distinctive_words(selected_topic)
+    if not selected_words:
+        return ()
+    matched: list[dict] = []
+    for item in evidence:
+        source_words = _normalized_distinctive_words(
+            f"{item.get('title', '')} {item.get('summary', '')}"
+        )
+        overlap = selected_words & source_words
+        if len(overlap) >= 2 or any(word.isdigit() for word in overlap):
+            matched.append(item)
+    return tuple(matched)
+
+
+def _topic_repeats(selected_topic: str, excluded_topics: list[str] | tuple[str, ...]) -> bool:
+    selected = _normalized_distinctive_words(selected_topic)
+    if not selected:
+        return False
+    for old in excluded_topics or ():
+        previous = _normalized_distinctive_words(str(old))
+        if not previous:
+            continue
+        overlap = len(selected & previous) / max(1, min(len(selected), len(previous)))
+        if overlap >= 0.75:
+            return True
+    return False
+
+
 def _current_evidence(
     sources: list[dict] | tuple[dict, ...], *, topic: str, location_or_market: str,
     now: datetime | None = None,
@@ -222,6 +274,7 @@ def build_selected_opportunity(
     summary: str,
     sources: list[dict] | tuple[dict, ...] = (),
     created_at: str = "",
+    exclude_topics: list[str] | tuple[str, ...] = (),
 ) -> SelectedOpportunity:
     """Deterministic (no LLM call) truthfulness gate over an ALREADY-run
     research result. Never invents/upgrades relevance -- when the evidence
@@ -275,6 +328,14 @@ def build_selected_opportunity(
     # visual_relevance gate. Preserve the fallback for older report formats,
     # but hand the exact selected headline to media whenever it is present.
     excerpt = _selected_topic_from_summary(summary)
+
+    if _topic_repeats(excerpt, exclude_topics):
+        return SelectedOpportunity(
+            selected_topic=excerpt, location_or_market=location_or_market, why_current="",
+            supporting_evidence=(), format_references=format_references,
+            freshness_status="INSUFFICIENT_EVIDENCE", sufficient=False,
+            reason="seçilen konu yakın geçmişte zaten denendi/üretildi; farklı bir haber seçilmelidir",
+        )
 
     if not _covers_market_context(location_or_market, summary):
         return SelectedOpportunity(
@@ -331,6 +392,21 @@ def build_selected_opportunity(
                     f"ücretli medya üretimi başlatılmadı.{language_reason}"
                 ),
             )
+        if _EXPLICIT_SAME_STORY_SOURCE_PATTERN.search(topic):
+            same_story = _same_story_evidence(excerpt, dated_evidence)
+            if len(same_story) < minimum_sources:
+                return SelectedOpportunity(
+                    selected_topic=excerpt, location_or_market=location_or_market,
+                    why_current="aynı haber iki bağımsız kaynakla doğrulanamadı",
+                    supporting_evidence=same_story,
+                    format_references=format_references,
+                    freshness_status="INSUFFICIENT_EVIDENCE", sufficient=False,
+                    reason=(
+                        f"seçilen haberi doğrudan doğrulayan en az {minimum_sources} bağımsız kaynak "
+                        "bulunamadı; alakasız güncel başlıklar aynı haberin kanıtı sayılmadı"
+                    ),
+                )
+            dated_evidence = same_story
         evidence = dated_evidence
 
     freshness = "CURRENT" if wants_current else "UNVERIFIED"

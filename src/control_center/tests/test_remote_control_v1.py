@@ -132,3 +132,15 @@ def test_panel_assets_are_never_stale_cached():
     asset_branch = server.split('if parsed.path == "/app.css" or parsed.path == "/app.js":', 1)[1]
     asset_branch = asset_branch.split('if parsed.path == "/api/status":', 1)[0]
     assert 'send_header("Cache-Control", "no-store")' in asset_branch
+
+
+def test_active_install_is_visible_and_has_one_stable_desktop_launcher():
+    html = Path("src/control_center/web/index.html").read_text(encoding="utf-8")
+    js = Path("src/control_center/web/app.js").read_text(encoding="utf-8")
+    setup = Path("tools/setup_and_start.ps1").read_text(encoding="utf-8")
+    launcher = Path("tools/register_active_install.ps1").read_text(encoding="utf-8")
+    assert 'id="buildVersion"' in html
+    assert "process?.build_identity" in js
+    assert "register_active_install.ps1" in setup
+    assert "JARVIS_ACTIVE_PATH.txt" in launcher
+    assert "JARVIS AC.lnk" in launcher

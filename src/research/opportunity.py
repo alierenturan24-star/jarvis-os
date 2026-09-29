@@ -125,6 +125,14 @@ def _trusted_for_requested_market(host: str, location_or_market: str) -> bool:
     return any(host == domain or host.endswith("." + domain) for domain in _TRUSTED_SWISS_DOMAINS)
 
 
+def _selected_topic_from_summary(summary: str) -> str:
+    """Extract the actual chosen headline instead of passing report prose downstream."""
+    match = re.search(r"(?im)^\s*SEÇİLEN\s+KONU\s*:\s*(.+?)\s*$", summary or "")
+    if match:
+        return match.group(1).strip()[:500]
+    return (summary or "").strip()[:240]
+
+
 def _current_evidence(
     sources: list[dict] | tuple[dict, ...], *, topic: str, location_or_market: str,
     now: datetime | None = None,
@@ -244,7 +252,13 @@ def build_selected_opportunity(
             sufficient=False, reason="araştırma sonucu üretilemedi veya boş",
         )
 
-    excerpt = summary.strip()[:240]
+    # Provider-free research reports begin with ``SEÇİLEN KONU:`` and then
+    # continue with routing/fallback prose. Feeding the first 240 characters
+    # of that whole report to MediaManager inflated the QC goal with unrelated
+    # words and caused a genuinely on-topic Turkish render to fail the
+    # visual_relevance gate. Preserve the fallback for older report formats,
+    # but hand the exact selected headline to media whenever it is present.
+    excerpt = _selected_topic_from_summary(summary)
 
     if not _covers_market_context(location_or_market, summary):
         return SelectedOpportunity(

@@ -143,12 +143,14 @@ def test_round5_market_relevant_current_evidence_is_sufficient():
         location_or_market="İsviçre için",
         summary="İsviçre hükümeti bugün yeni bir enerji tasarrufu paketi açıkladı; tüm kantonlarda uygulanacak.",
         sources=[
-            {"url": "https://srf.ch/news/isvicre-enerji", "title": "İsviçre enerji paketi", "published_at": today},
+            {"url": "https://srf.ch/news/isvicre-enerji", "title": "İsviçre enerji paketi", "published_at": today,
+             "summary": "Federal enerji paketi kantonlarda uygulanacak."},
             {"url": "https://rts.ch/info/isvicre-enerji", "title": "Paquet énergétique suisse", "published_at": today},
         ],
     )
     assert opportunity.sufficient is True
     assert opportunity.freshness_status == "CURRENT"
+    assert opportunity.supporting_evidence[0]["summary"] == "Federal enerji paketi kantonlarda uygulanacak."
 
 
 def test_round5_current_summary_without_dated_sources_fails_closed_before_media_spend():

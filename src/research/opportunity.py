@@ -133,6 +133,19 @@ def _selected_topic_from_summary(summary: str) -> str:
     return (summary or "").strip()[:240]
 
 
+def _source_summary(item: dict) -> str:
+    """Keep the factual excerpt that explains what a headline is about.
+
+    Headlines are often ambiguous across languages (for example ``squadra``
+    can mean a work team, not a football team).  Dropping this field at the
+    research -> media handoff lets a planning model invent the missing
+    context, so preserve a bounded excerpt with every evidence row.
+    """
+    return str(
+        item.get("summary") or item.get("snippet") or item.get("description") or ""
+    ).strip()[:1200]
+
+
 def _current_evidence(
     sources: list[dict] | tuple[dict, ...], *, topic: str, location_or_market: str,
     now: datetime | None = None,
@@ -164,6 +177,7 @@ def _current_evidence(
             "source_identity": str(item.get("source_identity") or host).strip(),
             "publisher": str(item.get("publisher") or "").strip(),
             "source_language": str(item.get("source_language") or "").strip().casefold(),
+            "summary": _source_summary(item),
         })
     return tuple(evidence), window_days
 
@@ -236,6 +250,8 @@ def build_selected_opportunity(
             "published_at": str(item.get("published_at") or item.get("date") or ""),
             "source_identity": str(item.get("source_identity") or ""),
             "publisher": str(item.get("publisher") or ""),
+            "source_language": str(item.get("source_language") or "").strip().casefold(),
+            "summary": _source_summary(item),
         }
         for item in (sources or [])
         if item.get("reference_role") != "format_only"

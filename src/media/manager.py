@@ -92,6 +92,19 @@ def _looks_predominantly_english(text: str) -> bool:
     return sum(word in english for word in lowered) >= 5 and sum(word in turkish for word in lowered) < 3
 
 
+def _normalize_plan_headings(text: str) -> str:
+    """Accept common provider spelling variants of required Turkish headings."""
+    normalized = text or ""
+    replacements = {
+        "GÖRSEL/VIDEO PLANI": "GÖRSEL/VİDEO PLANI",
+        "GORSEL/VIDEO PLANI": "GÖRSEL/VİDEO PLANI",
+        "GÖRSEL / VİDEO PLANI": "GÖRSEL/VİDEO PLANI",
+    }
+    for source, target in replacements.items():
+        normalized = normalized.replace(source, target)
+    return normalized
+
+
 class MediaManager:
     """Sprint 39: JARVIS'in araştırdığını GERÇEK bir üretim planına
     dönüştüren YouTube içerik departmanı yöneticisi.
@@ -333,6 +346,13 @@ Kurallar:
             stage_sink["last_stage"] = "planning"
 
         provider_name = self._resolve_provider(preferred_provider)
+        # The desktop installer already detects Claude Code. When it is
+        # installed/authenticated, use the user's subscription-backed local
+        # CLI worker for media planning before Ollama/AIML. A quota/login
+        # failure still falls through the existing bounded provider chain.
+        claude_code = self.router.manager.get("claude_code")
+        if claude_code is not None and claude_code.is_available():
+            provider_name = "claude_code"
 
         # Sprint 40: Research'ün (Summarizer) zaten kullandığı
         # ``route_and_generate``'e geçildi -- otomatik Ollama fallback'i
@@ -372,6 +392,8 @@ Kurallar:
                 f"Hata: {plan_text}\n\n"
                 "Gerçek bir plan uydurulmadı -- bu, boş/başarısız bir sonuçtur."
             )
+
+        plan_text = _normalize_plan_headings(plan_text)
 
         drift_reason = _research_domain_drift(plan_text, research_opportunity)
         if drift_reason:

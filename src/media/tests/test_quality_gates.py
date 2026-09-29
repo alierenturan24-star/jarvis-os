@@ -135,7 +135,7 @@ def test_narration_shorter_than_final_timeline_fails_av_timing(tmp_path):
 
 
 # E: unexpected silence at the end of the final artifact is detected.
-def test_unexpected_end_silence_is_detected(tmp_path):
+def test_unexpected_end_silence_is_detected(tmp_path, monkeypatch):
     video = tmp_path / "e.mp4"
     subprocess.run([
         FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
@@ -146,10 +146,45 @@ def test_unexpected_end_silence_is_detected(tmp_path):
         "-map", "0:v", "-map", "[aout]", "-pix_fmt", "yuv420p", "-shortest", str(video),
     ], check=True, timeout=20)
     _write_sidecar(video, _base_evidence(duration_seconds=6))
+    # FFmpeg builds differ in whether volumedetect emits a numeric
+    # ``max_volume`` or ``-inf`` for an all-silent tail. Exercise the gate
+    # deterministically instead of making the unit test codec-build-specific.
+    monkeypatch.setattr(
+        "src.media.quality._measure_tail_silence",
+        lambda *args, **kwargs: {"tail_max_db": None, "unexpected_end_silence": True},
+    )
     check = validate_media_goal_artifact(video, "Adventure story A")
     assert check.gates["audio_completeness"]["passed"] is False
     assert any("silence" in r for r in check.gates["audio_completeness"]["reasons"])
     assert check.passed is False
+
+
+def test_natural_quiet_tail_is_allowed_when_narration_covers_timeline(tmp_path):
+    root = tmp_path / "source"
+    root.mkdir()
+    video = tmp_path / "natural-ending.mp4"
+    narration = root / "narration.wav"
+    subprocess.run([
+        FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
+        "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+        "-f", "lavfi", "-t", "3", "-i", "anullsrc=r=44100:cl=mono",
+        "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1[aout]",
+        "-map", "[aout]", str(narration),
+    ], check=True, timeout=20)
+    subprocess.run([
+        FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
+        "-f", "lavfi", "-i", "color=c=blue:s=64x64:d=6",
+        "-i", str(narration), "-map", "0:v", "-map", "1:a",
+        "-pix_fmt", "yuv420p", "-shortest", str(video),
+    ], check=True, timeout=20)
+    _write_sidecar(video, _base_evidence(
+        audio_file="narration.wav", source_root=str(root.resolve()), duration_seconds=6,
+    ))
+
+    check = validate_media_goal_artifact(video, "Adventure story A")
+
+    assert check.gates["av_timing"]["passed"] is True
+    assert check.gates["audio_completeness"]["passed"] is True
 
 
 # F: invalid/missing final video fails closed.

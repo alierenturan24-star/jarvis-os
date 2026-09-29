@@ -240,6 +240,35 @@ class TestMediaManagerPlan:
 
         assert captured_preferred == ["ollama"]
 
+    def test_installed_claude_code_is_preferred_for_media_planning(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        captured_preferred = []
+        manager = MediaManager()
+        claude = manager.router.manager.get("claude_code")
+        monkeypatch.setattr(claude, "is_available", lambda: True)
+        monkeypatch.setattr(
+            ProviderManager, "route_and_generate",
+            lambda self, prompt, task_type, **kw: captured_preferred.append(kw.get("preferred_provider"))
+            or _route_result(_complete_plan_text(), provider="claude_code"),
+        )
+
+        manager.plan(topic="İsviçre gündem videosu", preferred_provider="ollama")
+
+        assert captured_preferred == ["claude_code"]
+
+    def test_common_video_heading_spelling_is_normalized(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        plan = _complete_plan_text().replace("GÖRSEL/VİDEO PLANI", "GÖRSEL/VIDEO PLANI")
+        monkeypatch.setattr(
+            ProviderManager, "route_and_generate",
+            lambda self, prompt, task_type, **kw: _route_result(plan),
+        )
+
+        result = MediaManager().plan(topic="Bitcoin neden düştü")
+
+        assert "Eksik bölüm" not in result
+        assert "GÖRSEL/VİDEO PLANI" in result
+
     def test_task_type_identifies_media_planning(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         captured_task_types = []

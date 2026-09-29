@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from src.agents.research_agent import ResearchAgent, _WINDOW_FALLBACK_CUES
 from src.planner.task import Task
@@ -114,6 +114,42 @@ def test_current_media_research_can_widen_to_declared_30_day_fallback():
 def test_concise_one_click_wording_also_enables_30_day_fallback():
     command = "İsviçre için son 7 günü tara; iki güvenilir kaynak yoksa 30 güne genişlet."
     assert any(cue in command.casefold() for cue in _WINDOW_FALLBACK_CUES)
+
+
+def test_structured_fallback_survives_clean_research_task_rewrite():
+    now = datetime.now(timezone.utc)
+    older = (now - timedelta(days=12)).isoformat()
+
+    class _Knowledge:
+        rows = {}
+        def find_research(self, topic):
+            return self.rows.get(topic)
+
+    class _Manager:
+        def __init__(self):
+            self.knowledge, self.calls = _Knowledge(), []
+        def research(self, topic, **kwargs):
+            self.calls.append(topic)
+            self.knowledge.rows[topic] = {
+                "summary": "SEÇİLEN KONU: İsviçre ulaşım gelişmesi",
+                "created_at": now.isoformat(),
+                "sources": ([
+                    {"url": "https://www.srf.ch/news/a", "published_at": older},
+                    {"url": "https://www.rts.ch/info/b", "published_at": older},
+                ] if "son 30 gün" in topic else []),
+            }
+            return "ok"
+
+    agent = ResearchAgent(); agent.manager = _Manager()
+    task = Task(
+        action="current research", agent="research",
+        target="İsviçre için son 7 gün güncel gündem",
+        metadata={"market_context": "İsviçre", "allow_30_day_fallback": True},
+    )
+    output = agent.execute(task)
+    assert "son 30 gün" in agent.manager.calls[1]
+    assert "OTOMATİK 30 GÜNLÜK YEDEK" in output
+    assert task.metadata["report"]["freshness_window_days"] == 30
 
 
 def test_media_research_passes_recent_video_topics_as_exclusions(monkeypatch):

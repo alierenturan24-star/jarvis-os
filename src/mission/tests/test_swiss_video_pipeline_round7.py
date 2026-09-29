@@ -34,6 +34,25 @@ def _current_sources() -> list[dict]:
     ]
 
 
+def test_selected_opportunity_hands_only_clean_selected_headline_to_media():
+    summary = (
+        "SEÇİLEN KONU: 25 Jahre nach dem Grounding: Die Swiss fliegt in deutlich weniger Länder\n"
+        "AI sağlayıcısı uygun araştırma özeti döndürmediği için sağlayıcısız rapor oluşturuldu.\n"
+        "Araştırma isteği ve pazarı: İsviçre için son 30 gün."
+    )
+    opportunity = build_selected_opportunity(
+        topic="İsviçre son 30 gün güncel haber",
+        location_or_market="İsviçre",
+        summary=summary,
+        sources=_current_sources(),
+    )
+    assert opportunity.sufficient is True
+    assert opportunity.selected_topic == (
+        "25 Jahre nach dem Grounding: Die Swiss fliegt in deutlich weniger Länder"
+    )
+    assert "AI sağlayıcısı" not in opportunity.selected_topic
+
+
 def test_video_search_returns_metadata_only_format_reference(monkeypatch):
     class _DDGS:
         def __init__(self, **kwargs):

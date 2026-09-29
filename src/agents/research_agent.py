@@ -173,7 +173,9 @@ class ResearchAgent(BaseAgent):
             # multilingual query shape. This is bounded, keeps the same
             # freshness/market gates, and never upgrades stale evidence.
             if topic_wants_current_information(query) and not opportunity.sufficient:
-                allow_window_fallback = any(cue in command.casefold() for cue in _WINDOW_FALLBACK_CUES)
+                allow_window_fallback = bool(
+                    getattr(task, "metadata", {}).get("allow_30_day_fallback")
+                ) or any(cue in command.casefold() for cue in _WINDOW_FALLBACK_CUES)
                 retry_base = query
                 if allow_window_fallback:
                     widened = _WINDOW_FALLBACK_PATTERN.sub("son 30 gün", query, count=1)

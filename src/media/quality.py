@@ -550,13 +550,27 @@ def validate_media_goal_artifact(
             f"({detected_cuts} detected, {required_cuts} required)"
         )
 
+    # Measure source narration coverage before interpreting the tail probe.
+    # Edge/SAPI speech commonly ends with a natural pause and the locally
+    # generated music bed intentionally fades out. A quiet final window is
+    # therefore not proof that narration was truncated when the declared
+    # narration file itself covers the final artifact timeline. The AV timing
+    # gate is the reliable evidence for that distinction.
+    source_root_raw = evidence.get("source_root")
+    source_root = Path(source_root_raw) if source_root_raw else None
+    if stage_sink is not None:
+        stage_sink["last_stage"] = "quality_audio_timing_validation"
+    timing = _check_audio_timing(evidence, artifact, artifact_duration, source_root, ffprobe)
+
     audio_reasons = []
     if evidence.get("audio_present") is not True or max_audio_db is None or max_audio_db <= -60:
         audio_reasons.append("meaningful voice/audio is absent")
     if stage_sink is not None:
         stage_sink["last_stage"] = "quality_tail_silence_detection"
     tail = _measure_tail_silence(artifact, ffmpeg, max_audio_db) if ffmpeg else {"unexpected_end_silence": False, "tail_max_db": None}
-    if tail["unexpected_end_silence"]:
+    if tail["unexpected_end_silence"] and (
+        timing.get("applicable") is not True or timing.get("passed") is not True
+    ):
         audio_reasons.append(
             f"unexpected silence detected in the final {_TAIL_SILENCE_SECONDS:.0f}s of the artifact "
             "while the track overall has real audio -- narration/audio cuts out before the end"
@@ -565,11 +579,6 @@ def validate_media_goal_artifact(
                                     "tail_max_db": tail["tail_max_db"], "reasons": audio_reasons}
     issues.extend(r for r in audio_reasons if r not in issues)
 
-    source_root_raw = evidence.get("source_root")
-    source_root = Path(source_root_raw) if source_root_raw else None
-    if stage_sink is not None:
-        stage_sink["last_stage"] = "quality_audio_timing_validation"
-    timing = _check_audio_timing(evidence, artifact, artifact_duration, source_root, ffprobe)
     gates["av_timing"] = timing
     issues.extend(r for r in timing["reasons"] if r not in issues)
 

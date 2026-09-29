@@ -283,6 +283,37 @@ class TestBoundedRepairLoop:
         assert "QUALITY: NOT READY FOR PUBLICATION" in result
         assert "non-repairable quality gate failure(s): visual_relevance" in result
 
+    def test_translated_research_headline_uses_output_title_for_relevance(self, tmp_path, monkeypatch):
+        manager, build_calls = self._manager(tmp_path, monkeypatch)
+        monkeypatch.setattr(
+            LocalVideoRenderer, "render",
+            lambda self, topic, narration, duration_seconds, **kw:
+                RenderResult(True, str(tmp_path / "translated.mp4"),
+                             audio_used=True, production_ready=True),
+        )
+        checked_goals = []
+
+        def fake_quality(path, goal, **kwargs):
+            checked_goals.append(goal)
+            return _quality(True)
+
+        monkeypatch.setattr("src.media.manager.validate_media_goal_artifact", fake_quality)
+        opportunity = {
+            "selected_topic": "Pourquoi le Bitcoin a-t-il chuté?",
+            "location_or_market": "İsviçre",
+            "supporting_evidence": [{"url": "https://example.test/fr"}],
+            "freshness_status": "CURRENT", "sufficient": True,
+        }
+
+        result = manager.plan(
+            topic=opportunity["selected_topic"], produce_artifact=True,
+            research_opportunity=opportunity,
+        )
+
+        assert len(build_calls) == 1
+        assert checked_goals == ["Bitcoin Neden Düştü?"]
+        assert "GERÇEK VIDEO ARTIFACT" in result
+
 
 # Round 5 repair (real live-mission evidence): a live mission's media task
 # independently re-derived its own topic (a DIFFERENT string than

@@ -7,7 +7,7 @@ from src.media.quality import check_media_plan_quality, validate_media_goal_arti
 from src.media.report_builder import MediaReportBuilder
 from src.media.renderer import LocalVideoRenderer, find_ffmpeg, has_production_media_capability, find_goal_production_package
 from src.media.learning import YouTubeLearningAgent
-from src.media.production import GeneralProductionBuilder
+from src.media.production import GeneralProductionBuilder, parse_plan_text
 from src.providers.router import ModelRouter
 from src.research.manager import topic_wants_current_information
 from src.utils.language_policy import TURKISH_OUTPUT_POLICY
@@ -399,8 +399,23 @@ Kurallar:
                         "Yeni artifact üretilmedi; hiçbir video yayınlanmadı."
                     )
 
+            # A discovered headline can be German/French/Italian while the
+            # requested channel output is Turkish. Comparing that foreign
+            # headline token-for-token with the translated Turkish script
+            # creates a false visual_relevance failure even when every scene
+            # matches the selected story. For a truthfulness-checked research
+            # opportunity, validate the rendered scenes against the parsed
+            # output title (the semantic subject actually given to viewers).
+            # Explicit-topic productions keep the original user topic as the
+            # anti-drift target.
+            quality_goal = topic
+            if research_opportunity is not None:
+                parsed_for_quality = parse_plan_text(plan_text)
+                if parsed_for_quality is not None and parsed_for_quality.title.strip():
+                    quality_goal = parsed_for_quality.title.strip()
             artifact_block = self._produce_with_bounded_repair(
-                topic, plan_text, duration_seconds, _build_production, stage_sink=stage_sink,
+                topic, plan_text, duration_seconds, _build_production,
+                stage_sink=stage_sink, quality_goal=quality_goal,
             )
 
         production_note = (
@@ -417,7 +432,8 @@ Kurallar:
         )
 
     def _produce_with_bounded_repair(
-        self, topic: str, plan_text: str, duration_seconds: int, rebuild, *, stage_sink: dict | None = None,
+        self, topic: str, plan_text: str, duration_seconds: int, rebuild, *,
+        stage_sink: dict | None = None, quality_goal: str | None = None,
     ) -> str:
         """Render, self-check against the real quality gates, and bounded-retry
         the *repairable* failures (Sprint: real-production quality-gate audit,
@@ -470,7 +486,9 @@ Kurallar:
             if stage_sink is not None:
                 stage_sink["artifact_path"] = render.artifact_path
                 stage_sink["last_stage"] = "quality_check_start"
-            check = validate_media_goal_artifact(Path(render.artifact_path), topic, stage_sink=stage_sink)
+            check = validate_media_goal_artifact(
+                Path(render.artifact_path), quality_goal or topic, stage_sink=stage_sink,
+            )
             failing = [name for name in check.critical_failures if name != "publication_readiness"]
             self.last_production_record = self.learning.record(
                 goal=topic, artifact_path=render.artifact_path, plan_text=plan_text,

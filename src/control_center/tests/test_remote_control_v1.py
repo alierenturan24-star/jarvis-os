@@ -125,3 +125,10 @@ def test_panel_exposes_cancel_and_safe_restart_controls():
     assert "cancel_active_mission" in service and 'status="CANCELLED"' in service
     assert "_schedule_restart" in server and "restart_control_center.ps1" in server
     assert "Start-Sleep -Seconds 3" in helper and "setup_and_start.ps1" in helper
+
+
+def test_panel_assets_are_never_stale_cached():
+    server = Path("src/control_center/server.py").read_text(encoding="utf-8")
+    asset_branch = server.split('if parsed.path == "/app.css" or parsed.path == "/app.js":', 1)[1]
+    asset_branch = asset_branch.split('if parsed.path == "/api/status":', 1)[0]
+    assert 'send_header("Cache-Control", "no-store")' in asset_branch

@@ -285,6 +285,9 @@ class TestBoundedRepairLoop:
 
     def test_translated_research_headline_uses_output_title_for_relevance(self, tmp_path, monkeypatch):
         manager, build_calls = self._manager(tmp_path, monkeypatch)
+        class _Parsed:
+            title = "Bitcoin Neden Düştü?"
+        monkeypatch.setattr("src.media.manager.parse_plan_text", lambda text: _Parsed())
         monkeypatch.setattr(
             LocalVideoRenderer, "render",
             lambda self, topic, narration, duration_seconds, **kw:

@@ -112,6 +112,8 @@ def test_one_click_launcher_is_local_non_admin_and_preserves_env():
     assert "Google\\Chrome\\Application\\chrome.exe" in setup
     assert "Microsoft\\Edge\\Application\\msedge.exe" in setup
     assert "--fresh-session" in setup
+    assert "process.build_identity" in setup
+    assert "runningBuild -eq $ExpectedBuild" in setup
 
 
 def test_panel_exposes_cancel_and_safe_restart_controls():

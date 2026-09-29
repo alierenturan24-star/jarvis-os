@@ -48,7 +48,7 @@ function Assert-LastExitCode([string]$Step) {
     if ($LASTEXITCODE -ne 0) { throw "$Step basarisiz oldu (cikis kodu $LASTEXITCODE)." }
 }
 
-function Test-ControlCenterHealth([string]$Token) {
+function Test-ControlCenterHealth([string]$Token, [string]$ExpectedBuild) {
     if (-not $Token -or $Token.Length -lt 32) { return $false }
     try {
         $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
@@ -56,7 +56,8 @@ function Test-ControlCenterHealth([string]$Token) {
         $session.Cookies.Add($cookie)
         $response = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/health" -WebSession $session `
             -Method Get -TimeoutSec 3 -ErrorAction Stop
-        return ($response.backend_alive -eq $true)
+        $runningBuild = [string]$response.process.build_identity
+        return ($response.backend_alive -eq $true -and $runningBuild -eq $ExpectedBuild)
     } catch { return $false }
 }
 
@@ -106,6 +107,8 @@ function Clear-StaleJarvisListener {
 }
 
 Set-Location -LiteralPath $ProjectRoot
+$ExpectedBuild = (& git.exe -C $ProjectRoot rev-parse --short=12 HEAD).Trim()
+if (-not $ExpectedBuild) { throw 'JARVIS surum kimligi okunamadi.' }
 $SystemPython = Resolve-JarvisPython
 Write-Host "[1/5] Python bulundu: $SystemPython" -ForegroundColor Cyan
 
@@ -159,7 +162,7 @@ $token = if (Test-Path -LiteralPath $TokenPath -PathType Leaf) {
     (Get-Content -LiteralPath $TokenPath -Raw).Trim()
 } else { '' }
 
-if (-not (Test-ControlCenterHealth $token)) {
+if (-not (Test-ControlCenterHealth $token $ExpectedBuild)) {
     Write-Host '[5/5] JARVIS Control Center baslatiliyor...' -ForegroundColor Cyan
     Clear-StaleJarvisListener
     Start-Process -FilePath $VenvPython -ArgumentList @(
@@ -172,7 +175,7 @@ if (-not (Test-ControlCenterHealth $token)) {
         Start-Sleep -Seconds 1
         if (Test-Path -LiteralPath $TokenPath -PathType Leaf) {
             $token = (Get-Content -LiteralPath $TokenPath -Raw).Trim()
-            if (Test-ControlCenterHealth $token) { $healthy = $true; break }
+            if (Test-ControlCenterHealth $token $ExpectedBuild) { $healthy = $true; break }
         }
     }
     if (-not $healthy) {

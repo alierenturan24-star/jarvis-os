@@ -144,3 +144,7 @@ def test_active_install_is_visible_and_has_one_stable_desktop_launcher():
     assert "register_active_install.ps1" in setup
     assert "JARVIS_ACTIVE_PATH.txt" in launcher
     assert "JARVIS AC.lnk" in launcher
+    assert "update_active_install.ps1" in launcher
+    updater = Path("tools/update_active_install.ps1").read_text(encoding="utf-8")
+    assert "refs/remotes/origin/$TargetBranch" in updater
+    assert "worktree', 'add', '--detach'" in updater

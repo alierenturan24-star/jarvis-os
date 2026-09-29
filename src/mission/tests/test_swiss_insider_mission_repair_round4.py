@@ -181,6 +181,45 @@ def test_round4_qc_failure_with_real_artifact_is_not_reported_as_missing(tmp_pat
     assert video_status.rendered_not_approved is True  # but truthfully NOT "missing" either
 
 
+def test_path_bound_pipeline_approval_prevents_broad_goal_false_rejection(tmp_path):
+    """The media gate validates a selected story title, not the broad user
+    command that requested research + production.  Its exact path-bound pass
+    must survive mission completion without a second mismatched goal check."""
+    from src.mission.completion import evaluate_goal_completion
+
+    mission = _media_mission_with_real_but_unapproved_artifact(tmp_path)
+    media_task = mission.tasks[0]
+    artifact = media_task.metadata["artifact_path"]
+    media_task.metadata["artifact_quality_validation"] = {
+        "artifact_path": artifact,
+        "validation_goal": "The selected and translated story title",
+        "passed": True,
+        "technical_passed": True,
+        "semantic_passed": True,
+        "critical_failures": [],
+    }
+
+    completion = evaluate_goal_completion(mission)
+    video_status = next(item for item in completion.requirements if item.requirement.name == "video")
+    assert video_status.satisfied is True
+    assert video_status.paths == (artifact,)
+
+
+def test_pipeline_approval_cannot_be_transferred_to_another_artifact(tmp_path):
+    from src.mission.completion import evaluate_goal_completion
+
+    mission = _media_mission_with_real_but_unapproved_artifact(tmp_path)
+    mission.tasks[0].metadata["artifact_quality_validation"] = {
+        "artifact_path": str(tmp_path / "different.mp4"),
+        "passed": True,
+    }
+
+    completion = evaluate_goal_completion(mission)
+    video_status = next(item for item in completion.requirements if item.requirement.name == "video")
+    assert video_status.satisfied is False
+    assert video_status.rendered_not_approved is True
+
+
 def test_round4_self_check_shows_rendered_not_approved_not_missing(tmp_path):
     from src.strategy.execution_planner import build_self_check
 

@@ -301,11 +301,18 @@ def evaluate_goal_completion(mission) -> GoalCompletion:
         requirements = infer_completion_requirements(mission.title, mission.departments)
 
     paths = tuple(_reported_paths(mission))
+    quality_approved_paths = _quality_approved_artifact_paths(mission)
     statuses: list[RequirementStatus] = []
     for requirement in requirements:
         if requirement.kind == "artifact":
             kind = ArtifactType(requirement.name)
-            valid = tuple(dict.fromkeys(path for path in paths if _valid_artifact(path, kind, mission.title)))
+            valid = tuple(dict.fromkeys(
+                path for path in paths
+                if (
+                    _normalized_path(path) in quality_approved_paths
+                    and _artifact_file_exists(path, kind)
+                ) or _valid_artifact(path, kind, mission.title)
+            ))
             satisfied = bool(valid)
             rendered_not_approved = not satisfied and any(
                 _artifact_file_exists(path, kind) for path in paths
@@ -478,6 +485,29 @@ def _reported_paths(mission) -> Iterable[str]:
                 yield from _flatten_paths(metadata[key])
         if task.result is not None:
             yield from _paths_in_text(str(task.result.output))
+
+
+def _normalized_path(value: str | Path) -> str:
+    """Stable comparison key for path-bound quality evidence."""
+    return str(Path(str(value).strip().strip("'\""))).casefold()
+
+
+def _quality_approved_artifact_paths(mission) -> frozenset[str]:
+    """Return only artifacts approved by the media pipeline's real gate.
+
+    The evidence is deliberately path-bound: an approval for one render can
+    never make another file valid.  File existence and artifact type are
+    still checked by the caller.
+    """
+    approved: set[str] = set()
+    for task in mission.tasks:
+        validation = (task.metadata or {}).get("artifact_quality_validation")
+        if not isinstance(validation, dict) or validation.get("passed") is not True:
+            continue
+        raw_path = validation.get("artifact_path")
+        if isinstance(raw_path, (str, Path)) and str(raw_path).strip():
+            approved.add(_normalized_path(raw_path))
+    return frozenset(approved)
 
 
 def _flatten_paths(value) -> Iterable[str]:

@@ -931,6 +931,15 @@ class DepartmentOrchestrator:
                 # requested market -- see
                 # src.research.opportunity.build_selected_opportunity.
                 metadata["market_context"] = _media_research_context(source_text)
+                # Keep the user's bounded 7 -> 30 day fallback as structured
+                # intent.  ``_media_research_query`` deliberately strips the
+                # long production instructions, so relying on its rewritten
+                # text alone used to lose this permission and retry the same
+                # 7-day window instead of widening it.
+                lowered_source = source_text.casefold()
+                metadata["allow_30_day_fallback"] = any(cue in lowered_source for cue in (
+                    "30 güne genişlet", "30 günlük yedek", "30 gün yedek",
+                ))
 
             department_timeout = _DEPARTMENT_TASK_TIMEOUTS.get(department_name, DEPARTMENT_TASK_TIMEOUT_SECONDS)
             tasks.append(Task(

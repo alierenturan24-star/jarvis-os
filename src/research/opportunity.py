@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.parse import urlparse
@@ -94,6 +94,16 @@ def _parse_published_at(value: Any) -> datetime | None:
     raw = str(value or "").strip()
     if not raw:
         return None
+    # Search providers sometimes return a human relative timestamp instead
+    # of ISO/RFC dates (for example ``Opinion18 hours ago``).  Treat these as
+    # real dated evidence rather than silently discarding the source.
+    normalized = raw.casefold().strip()
+    relative = re.search(r"(\d+)\s*(?:hours?|stunden?|heures?)\s*(?:ago|zuvor|vor)?", normalized)
+    if relative:
+        return datetime.now(timezone.utc) - timedelta(hours=int(relative.group(1)))
+    relative = re.search(r"(\d+)\s*(?:days?|tage?|jours?)\s*(?:ago|zuvor|vor)?", normalized)
+    if relative:
+        return datetime.now(timezone.utc) - timedelta(days=int(relative.group(1)))
     try:
         parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:

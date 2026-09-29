@@ -116,6 +116,66 @@ def test_concise_one_click_wording_also_enables_30_day_fallback():
     assert any(cue in command.casefold() for cue in _WINDOW_FALLBACK_CUES)
 
 
+def test_selected_headline_gets_one_bounded_same_story_corroboration_pass():
+    now = datetime.now(timezone.utc).isoformat()
+    headline = "Swiss rail operator announces night-train expansion"
+
+    class _Knowledge:
+        rows = {}
+
+        def find_research(self, topic):
+            return self.rows.get(topic)
+
+    class _Manager:
+        def __init__(self):
+            self.knowledge = _Knowledge()
+            self.calls = []
+
+        def research(self, topic, **kwargs):
+            self.calls.append(topic)
+            if "aynı olayı doğrulayan" in topic:
+                self.knowledge.rows[topic] = {
+                    "summary": f"SEÇİLEN KONU: {headline}", "created_at": now,
+                    "sources": [{
+                        "title": "Swiss rail night-train expansion confirmed",
+                        "summary": "Swiss rail operator confirms the night-train expansion.",
+                        "url": "https://www.rts.ch/info/b", "published_at": now,
+                    }],
+                }
+                return "doğrulama taraması tamamlandı"
+            if "alternative_source_pass" in topic.casefold():
+                self.knowledge.rows[topic] = {
+                    "summary": f"SEÇİLEN KONU: {headline}\nİsviçre gündemi",
+                    "created_at": now,
+                    "sources": [{
+                        "title": headline,
+                        "summary": "Swiss rail operator announces a night-train expansion.",
+                        "url": "https://www.srf.ch/news/a", "published_at": now,
+                    }],
+                }
+                return "30 günlük tarama tamamlandı"
+            self.knowledge.rows[topic] = {
+                "summary": "SEÇİLEN KONU: sonuç yok\nİsviçre gündemi",
+                "created_at": now, "sources": [],
+            }
+            return "ilk tarama tamamlandı"
+
+    agent = ResearchAgent(); agent.manager = _Manager()
+    task = Task(
+        action="current research", agent="research",
+        target=("İsviçre için son 7 gün içinde aynı haberi doğrulayan en az iki bağımsız "
+                "kaynakla güncel gündem"),
+        metadata={"market_context": "İsviçre", "allow_30_day_fallback": True},
+    )
+
+    output = agent.execute(task)
+
+    assert len(agent.manager.calls) == 3
+    assert "OTOMATİK AYNI-HABER KAYNAK DOĞRULAMASI" in output
+    assert task.metadata["report"]["sufficient"] is True
+    assert len(task.metadata["report"]["supporting_evidence"]) == 2
+
+
 def test_structured_fallback_survives_clean_research_task_rewrite():
     now = datetime.now(timezone.utc)
     older = (now - timedelta(days=12)).isoformat()

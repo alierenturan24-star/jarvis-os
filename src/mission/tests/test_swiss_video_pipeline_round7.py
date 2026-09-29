@@ -96,6 +96,22 @@ def test_recent_topic_is_rejected_even_when_punctuation_changes():
     assert "zaten" in opportunity.reason
 
 
+def test_relative_search_timestamp_counts_as_current_evidence():
+    now = datetime.now(timezone.utc).isoformat()
+    headline = "Swiss rail night train expansion"
+    opportunity = build_selected_opportunity(
+        topic="İsviçre son 7 gün güncel haber",
+        location_or_market="İsviçre",
+        summary=f"SEÇİLEN KONU: {headline}\nİsviçre gündemi",
+        sources=[
+            {"title": headline, "url": "https://www.srf.ch/a", "published_at": "Opinion18 hours ago"},
+            {"title": headline, "url": "https://www.rts.ch/b", "published_at": now},
+        ],
+    )
+    assert opportunity.sufficient is True
+    assert len(opportunity.supporting_evidence) == 2
+
+
 def test_video_search_returns_metadata_only_format_reference(monkeypatch):
     class _DDGS:
         def __init__(self, **kwargs):

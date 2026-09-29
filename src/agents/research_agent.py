@@ -207,6 +207,46 @@ class ResearchAgent(BaseAgent):
                 result += f"\n\n--- {retry_label} ---\n" + retry_result
                 if retry_opportunity.sufficient:
                     opportunity = retry_opportunity
+                elif retry_opportunity.selected_topic:
+                    # The broad trend scan may find several unrelated current
+                    # headlines.  When the selected one lacks two SAME-STORY
+                    # sources, run one bounded headline-specific corroboration
+                    # pass instead of either fabricating completion or asking
+                    # the user to retry manually.
+                    selected = retry_opportunity.selected_topic
+                    verification_query = (
+                        f'"{selected}" aynı olayı doğrulayan bağımsız haber kaynakları '
+                        f"yayın tarihi {market_context}"
+                    )
+                    verification_result = self.manager.research(
+                        topic=verification_query,
+                        force_refresh=True,
+                        preferred_provider=preferred_provider,
+                        exclude_topics=[],
+                    )
+                    verification_record = self.manager.knowledge.find_research(verification_query)
+                    combined_sources: list[dict] = []
+                    seen_urls: set[str] = set()
+                    for source_record in (retry_record, verification_record):
+                        for item in (source_record or {}).get("sources", []) or []:
+                            url = str(item.get("canonical_url") or item.get("url") or "").strip()
+                            if not url or url in seen_urls:
+                                continue
+                            seen_urls.add(url)
+                            combined_sources.append(item)
+                    corroborated = build_selected_opportunity(
+                        topic=retry_query if allow_window_fallback else query,
+                        location_or_market=market_context,
+                        summary=f"SEÇİLEN KONU: {selected}\nHedef pazar: {market_context}",
+                        sources=combined_sources,
+                        created_at=str((verification_record or {}).get("created_at", "")),
+                        exclude_topics=excluded_topics,
+                    )
+                    result += (
+                        "\n\n--- OTOMATİK AYNI-HABER KAYNAK DOĞRULAMASI ---\n"
+                        + verification_result
+                    )
+                    opportunity = corroborated
             task.metadata["report"] = opportunity.as_dict()
 
         return result

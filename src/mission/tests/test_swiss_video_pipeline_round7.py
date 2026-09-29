@@ -9,6 +9,7 @@ from src.media.quality import _check_narrative_relevance
 from src.media.renderer import find_edge_tts
 from src.research.collector import ResearchCollector
 from src.research.opportunity import build_selected_opportunity
+from src.mission.department_orchestrator import _media_research_query
 from src.research.summarizer import Summarizer
 from src.tools.web_search_tool import WebSearchTool
 
@@ -51,6 +52,48 @@ def test_selected_opportunity_hands_only_clean_selected_headline_to_media():
         "25 Jahre nach dem Grounding: Die Swiss fliegt in deutlich weniger Länder"
     )
     assert "AI sağlayıcısı" not in opportunity.selected_topic
+
+
+def test_two_source_requirement_survives_media_query_rewrite():
+    query = _media_research_query(
+        "İsviçre için haber bul; iki güvenilir kaynak yoksa 30 güne genişlet. Video hazırla."
+    )
+    assert "en az iki bağımsız kaynak" in query
+
+
+def test_explicit_two_source_rule_rejects_unrelated_current_headlines():
+    published = datetime.now(timezone.utc).isoformat()
+    opportunity = build_selected_opportunity(
+        topic="İsviçre son 30 gün aynı haberi doğrulayan en az iki bağımsız kaynakla",
+        location_or_market="İsviçre",
+        summary="SEÇİLEN KONU: Malaysia schickt Rohingya zurück nach Myanmar und bricht ein Tabu\nİsviçre gündemi",
+        sources=[
+            {"title": "Malaysia schickt Rohingya zurück nach Myanmar", "summary": "Rohingya werden zurückgeschickt.",
+             "url": "https://www.nzz.ch/a", "published_at": published},
+            {"title": "Trump lädt Putin zum G20 ein", "summary": "Europäer reagieren.",
+             "url": "https://www.srf.ch/b", "published_at": published},
+        ],
+    )
+    assert opportunity.sufficient is False
+    assert len(opportunity.supporting_evidence) == 1
+    assert "aynı haber" in opportunity.reason
+
+
+def test_recent_topic_is_rejected_even_when_punctuation_changes():
+    published = datetime.now(timezone.utc).isoformat()
+    headline = "Malaysia schickt Rohingya zurück nach Myanmar – und bricht damit ein Tabu"
+    opportunity = build_selected_opportunity(
+        topic="İsviçre son 30 gün güncel haber",
+        location_or_market="İsviçre",
+        summary=f"SEÇİLEN KONU: {headline}\nİsviçre gündemi",
+        sources=[
+            {"title": headline, "url": "https://www.nzz.ch/a", "published_at": published},
+            {"title": headline, "url": "https://www.srf.ch/b", "published_at": published},
+        ],
+        exclude_topics=["Malaysia schickt Rohingya zurück nach Myanmar und bricht damit ein Tabu"],
+    )
+    assert opportunity.sufficient is False
+    assert "zaten" in opportunity.reason
 
 
 def test_video_search_returns_metadata_only_format_reference(monkeypatch):
@@ -132,6 +175,9 @@ def test_summarizer_keeps_format_reference_after_many_news_rows():
     captured = {}
 
     class _Manager:
+        def get(self, name):
+            return None
+
         def route_and_generate(self, **kwargs):
             captured["prompt"] = kwargs["prompt"]
             return SimpleNamespace(output="SEÇİLEN KONU: İsviçre enerji projesi")
@@ -163,6 +209,9 @@ def test_media_planner_receives_format_reference_with_no_copy_boundary(tmp_path,
     captured = {}
 
     class _Manager:
+        def get(self, name):
+            return None
+
         def route_and_generate(self, **kwargs):
             captured["prompt"] = kwargs["prompt"]
             return SimpleNamespace(

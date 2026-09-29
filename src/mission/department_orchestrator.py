@@ -359,6 +359,10 @@ _MEDIA_PRODUCTION_VERB_PATTERN = re.compile(
 _MEDIA_RECENCY_PATTERN = re.compile(r"\bson\s+(\d+)\s+gün\w*", re.IGNORECASE)
 _MEDIA_DATED_SOURCE_PATTERN = re.compile(r"\b(?:tarihli|yayın\s+tarih\w*)\b", re.IGNORECASE)
 _MEDIA_TRUSTED_SOURCE_PATTERN = re.compile(r"\b(?:güvenilir|doğrulan\w*)\b", re.IGNORECASE)
+_MEDIA_TWO_SOURCE_PATTERN = re.compile(
+    r"\b(?:en\s+az\s+)?(?:iki|2)\s+(?:bağımsız\s+)?(?:güvenilir\s+)?kaynak\w*\b",
+    re.IGNORECASE,
+)
 _MEDIA_LANGUAGE_CUES = (
     ("Almanca", ("almanca", "german", "deutsch")),
     ("Fransızca", ("fransızca", "fransizca", "french", "francais")),
@@ -397,6 +401,8 @@ def _media_research_requirements(source_text: str) -> str:
         requirements.append("yayın tarihi açıkça görünen")
     if _MEDIA_TRUSTED_SOURCE_PATTERN.search(source):
         requirements.append("güvenilir")
+    if _MEDIA_TWO_SOURCE_PATTERN.search(source):
+        requirements.append("aynı haberi doğrulayan en az iki bağımsız kaynakla")
     return " ".join(requirements)
 
 

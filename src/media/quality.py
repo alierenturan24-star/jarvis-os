@@ -56,6 +56,10 @@ _TAIL_SILENCE_DB = -50.0
 # truth, no risk of the budget and the calls drifting apart.
 _TECHNICAL_VALIDATION_TIMEOUT_SECONDS = 15.0  # renderer.validate_video_artifact's own ffprobe probe
 _SCENE_CUT_DETECTION_TIMEOUT_SECONDS = 30.0
+# Branded news cards retain one channel design while their full-frame colour,
+# headline and accent change. A measured four-card replay put those authored
+# boundaries in the 0.08-0.10 range; 0.25 missed every one.
+_SCENE_CUT_SCORE_THRESHOLD = 0.08
 _AUDIO_LEVEL_DETECTION_TIMEOUT_SECONDS = 30.0
 _DURATION_PROBE_TIMEOUT_SECONDS = 15.0
 _TAIL_SILENCE_PROBE_TIMEOUT_SECONDS = 20.0
@@ -520,7 +524,8 @@ def validate_media_goal_artifact(
         if stage_sink is not None:
             stage_sink["last_stage"] = "quality_scene_cut_detection"
         scene_probe = subprocess.run(
-            [ffmpeg, "-hide_banner", "-i", str(artifact), "-filter:v", "select=gt(scene\\,0.25),showinfo", "-f", "null", "NUL"],
+            [ffmpeg, "-hide_banner", "-i", str(artifact), "-filter:v",
+             f"select=gt(scene\\,{_SCENE_CUT_SCORE_THRESHOLD}),showinfo", "-f", "null", "NUL"],
             capture_output=True, text=True, timeout=_SCENE_CUT_DETECTION_TIMEOUT_SECONDS, check=False,
         )
         detected_cuts = len(re.findall(r"pts_time:", scene_probe.stderr))

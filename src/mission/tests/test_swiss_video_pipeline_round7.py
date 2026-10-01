@@ -112,6 +112,31 @@ def test_relative_search_timestamp_counts_as_current_evidence():
     assert len(opportunity.supporting_evidence) == 2
 
 
+def test_live_failure_replay_accepts_nzz_and_bbc_when_relative_dates_are_in_snippets():
+    headline = "Malaysia schickt Rohingya zurück nach Myanmar – und bricht damit ein Tabu"
+    opportunity = build_selected_opportunity(
+        topic="İsviçre son 30 gün aynı haberi doğrulayan en az iki bağımsız kaynakla",
+        location_or_market="İsviçre",
+        summary=f"SEÇİLEN KONU: {headline}\nHedef pazar: İsviçre",
+        sources=[
+            {"title": headline, "summary": "Am Mittwochmorgen fuhren die Reisebusse vor.",
+             "url": "https://www.nzz.ch/international/rohingya-a",
+             "published_at": datetime.now(timezone.utc).isoformat()},
+            {"title": "Malaysia schickt 1500 Rohingya zurück nach Myanmar",
+             "summary": "10 hours ago - Das Regime bietet an, Flüchtlinge zurückzunehmen.",
+             "url": "https://www.nzz.ch/international/rohingya-b"},
+            {"title": "Malaysia begins controversial repatriation of asylum seekers to Myanmar",
+             "summary": "8 hours ago - Human rights groups condemned the repatriation.",
+             "url": "https://www.bbc.com/news/articles/example"},
+        ],
+    )
+    assert opportunity.sufficient is True
+    assert {"www.nzz.ch", "www.bbc.com"} == {
+        __import__("urllib.parse", fromlist=["urlparse"]).urlparse(row["url"]).hostname
+        for row in opportunity.supporting_evidence
+    }
+
+
 def test_video_search_returns_metadata_only_format_reference(monkeypatch):
     class _DDGS:
         def __init__(self, **kwargs):

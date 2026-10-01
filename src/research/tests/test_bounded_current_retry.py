@@ -60,7 +60,7 @@ def test_current_media_research_retries_once_with_different_query_shape():
 
 def test_current_media_research_can_widen_to_declared_30_day_fallback():
     now = datetime.now(timezone.utc)
-    older = now.replace(day=max(1, now.day - 12)).isoformat()
+    older = (now - timedelta(days=12)).isoformat()
 
     class _Knowledge:
         rows = {}
@@ -75,7 +75,7 @@ def test_current_media_research_can_widen_to_declared_30_day_fallback():
 
         def research(self, topic, **kwargs):
             self.calls.append(topic)
-            if "son 30 gün" in topic:
+            if "ALTERNATIVE_SOURCE_PASS" in topic:
                 self.knowledge.rows[topic] = {
                     "summary": "İsviçre'de doğrulanmış güncel ulaşım gelişmesi seçildi.",
                     "created_at": now.isoformat(),
@@ -258,3 +258,20 @@ def test_failed_render_selected_topic_is_still_excluded_next_time(tmp_path, monk
     topics = ResearchAgent._recent_video_topics()
 
     assert "Aargau kantonu oylama sonuçları" in topics
+
+
+def test_recent_failed_topic_is_not_hidden_by_full_production_history(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from src.control_center.store import ControlCenterStore
+
+    store = ControlCenterStore()
+    store.update(lambda state: state.setdefault("youtube_learning", {}).update({
+        "productions": [{"topic": f"Başarılı eski konu {index}"} for index in range(10)]
+    }))
+    KnowledgeBase().remember_research(
+        topic="İsviçre güncel gündem son deneme",
+        summary="SEÇİLEN KONU: Malaysia Rohingya geri gönderme haberi\nJARVIS Önerisi",
+        report_path="workspace/research/latest.md", source_count=1,
+    )
+    topics = ResearchAgent._recent_video_topics(limit=8)
+    assert topics[0] == "Malaysia Rohingya geri gönderme haberi"

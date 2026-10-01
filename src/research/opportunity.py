@@ -53,6 +53,10 @@ _TRUSTED_SWISS_DOMAINS = (
     "swissinfo.ch", "nzz.ch", "tagesanzeiger.ch", "letemps.ch", "cdt.ch", "20min.ch",
     "watson.ch", "blick.ch", "bluewin.ch",
 )
+_TRUSTED_GLOBAL_NEWS_DOMAINS = (
+    "bbc.com", "reuters.com", "apnews.com", "dw.com", "france24.com",
+    "euronews.com",
+)
 
 # Generic Turkish connector/function words -- excluded so a market context
 # built from a short phrase (e.g. "İsviçre için", from
@@ -136,7 +140,8 @@ def _trusted_for_requested_market(host: str, location_or_market: str) -> bool:
     )
     if not any(name in lowered for name in _SWISS_MARKET_NAMES):
         return True
-    return any(host == domain or host.endswith("." + domain) for domain in _TRUSTED_SWISS_DOMAINS)
+    trusted = _TRUSTED_SWISS_DOMAINS + _TRUSTED_GLOBAL_NEWS_DOMAINS
+    return any(host == domain or host.endswith("." + domain) for domain in trusted)
 
 
 def _selected_topic_from_summary(summary: str) -> str:
@@ -223,6 +228,10 @@ def _current_evidence(
         published_at = _parse_published_at(
             item.get("published_at") or item.get("date") or item.get("published")
         )
+        if published_at is None:
+            # Several search backends put relative timestamps in the snippet
+            # (``8 hours ago - ...``) and leave the date field empty.
+            published_at = _parse_published_at(_source_summary(item))
         if not url or published_at is None:
             continue
         age_seconds = (reference - published_at).total_seconds()

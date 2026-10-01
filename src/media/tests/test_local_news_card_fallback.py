@@ -6,6 +6,7 @@ import pytest
 
 from src.media.capability_model import MediaModelProfile, SceneProvenance, TEXT_TO_IMAGE
 from src.media.production import GeneralProductionBuilder, ParsedProductionPlan, ScenePlan
+from src.media.quality import validate_media_goal_artifact
 from src.media.renderer import LocalVideoRenderer, find_ffmpeg
 
 
@@ -106,3 +107,70 @@ def test_free_only_package_continues_when_commons_has_no_scene(tmp_path, monkeyp
     assert rendered.success is True, rendered.error
     assert Path(rendered.artifact_path).is_file()
     assert Path(rendered.artifact_path).stat().st_size > 10_000
+
+
+def test_local_news_fallback_passes_full_publication_quality_gate(tmp_path, monkeypatch):
+    if not Path(find_ffmpeg()).is_file():
+        pytest.skip("ffmpeg unavailable")
+    beats = ("HOOK", "CONTEXT", "DEVELOPMENT", "RESOLUTION")
+    narration = (
+        "Malezya'nın kararı yeni bir tartışma başlattı.",
+        "NZZ, Rohingya grubunun Myanmar'a geri gönderildiğini bildirdi.",
+        "BBC de geri gönderme haberini bağımsız olarak yayımladı.",
+        "İnsan hakları grupları tepki gösterdi; gelişmeler izleniyor.",
+    )
+    visuals = (
+        "Malezya ve Myanmar konumlarını gösteren haber haritası",
+        "NZZ kaynak doğrulama kartı ve rota çizgisi",
+        "BBC bağımsız kaynak doğrulama kartı",
+        "Dengeli haber özeti ve kaynak simgeleri",
+    )
+    captions = ("Tartışmalı karar", "NZZ doğruladı", "BBC de yayımladı", "Tepkiler sürüyor")
+    scenes = tuple(ScenePlan(
+        scene_id=f"scene-{index:02d}", script_beat_id=beats[index - 1], purpose="verified news",
+        narration_segment=narration[index - 1], visual_description=visuals[index - 1],
+        duration_seconds=4.0, caption_text=captions[index - 1],
+    ) for index in range(1, 5))
+    parsed = ParsedProductionPlan(
+        hook=scenes[0].narration_segment, script=" ".join(x.narration_segment for x in scenes),
+        ending=scenes[-1].narration_segment, scenes=scenes,
+        title="Malezya'nın Rohingya Kararı Neden Tartışılıyor?",
+        description="NZZ ve BBC tarafından ayrı haberleştirilen kararı özetliyoruz.",
+        tags=("Malezya", "Myanmar", "Rohingya", "haber"),
+        thumbnail_concept="Malezya ve Myanmar haritası",
+    )
+    profile = MediaModelProfile(
+        provider_id="wikimedia_commons", model_id="licensed-media-search-v1",
+        capabilities=(TEXT_TO_IMAGE,), availability=True, auth_required=False,
+        cost_class="free", free_tier=True, subscription_cli=False,
+        local_or_remote="remote", quality_tier=60, speed_tier=50,
+    )
+    monkeypatch.setattr("src.media.production.rank_available_providers",
+                        lambda *args, **kwargs: ([(profile, object())], []))
+    monkeypatch.setattr(GeneralProductionBuilder, "_licensed_commons_clip",
+                        staticmethod(lambda *args, **kwargs: (None, None)))
+
+    def failed_provider(ranked, scene, index, root, **kwargs):
+        return None, SceneProvenance(
+            scene_id=scene.scene_id, capability=TEXT_TO_IMAGE,
+            provider="wikimedia_commons", model="licensed-media-search-v1",
+            generation_type=TEXT_TO_IMAGE, output_path="", success=False,
+            quality_evidence={"reason": "offline test forces original local visuals"},
+        )
+
+    monkeypatch.setattr(GeneralProductionBuilder, "_generate_scene_image", staticmethod(failed_provider))
+    built = GeneralProductionBuilder(output_root=tmp_path / "generated")._build_via_dynamic_provider(
+        goal="Malezya'nın Rohingya geri gönderme kararı", parsed=parsed, memory={},
+        channel_id="swiss-insider", channel_market="Switzerland", channel_language="tr-TR",
+        research_grounded=True,
+        research_evidence_ref={"source_count": 2, "freshness_status": "current_7d"},
+        required=("scene_generation",), available=(), missing=("scene_generation",), free_only=True,
+    )
+    assert built.success is True, built.error
+    rendered = LocalVideoRenderer(output_root=tmp_path / "artifacts")._render_production_package(
+        Path(built.manifest_path), parsed.title, 16, find_ffmpeg())
+    assert rendered.success is True, rendered.error
+    quality = validate_media_goal_artifact(rendered.artifact_path, parsed.title)
+    assert quality.passed is True, quality.issues
+    assert quality.critical_failures == ()
+    assert quality.gates["publication_readiness"]["passed"] is True

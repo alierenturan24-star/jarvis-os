@@ -1,0 +1,76 @@
+name: Windows Release Proof
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/youtube-planning-gemini-images
+
+jobs:
+  prove-windows-release:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Prepare the exact one-click environment
+        shell: powershell
+        run: .\tools\setup_and_start.ps1 -SetupOnly
+
+      - name: Boot panel and verify exact build identity
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stdout = Join-Path $env:RUNNER_TEMP 'jarvis.stdout.log'
+          $stderr = Join-Path $env:RUNNER_TEMP 'jarvis.stderr.log'
+          $process = Start-Process -FilePath '.\.venv\Scripts\python.exe' -ArgumentList @(
+            '.\control_center.py', '--host', '127.0.0.1', '--port', '8765',
+            '--no-bootstrap-output', '--fresh-session'
+          ) -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+          try {
+            $health = $null
+            for ($attempt = 0; $attempt -lt 45; $attempt++) {
+              Start-Sleep -Seconds 1
+              $tokenPath = '.\workspace\control_center\session.token'
+              if (-not (Test-Path -LiteralPath $tokenPath)) { continue }
+              $token = (Get-Content -LiteralPath $tokenPath -Raw).Trim()
+              if ($token.Length -lt 32) { continue }
+              try {
+                $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
+                $session.Cookies.Add((New-Object System.Net.Cookie('jarvis_session', $token, '/', '127.0.0.1')))
+                $health = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/api/health' `
+                  -WebSession $session -TimeoutSec 3 -ErrorAction Stop
+                if ($health.backend_alive -eq $true) { break }
+              } catch { $health = $null }
+            }
+            if (-not $health) {
+              if (Test-Path $stderr) { Get-Content $stderr }
+              throw 'Panel did not become healthy in 45 seconds.'
+            }
+            $expected = (& git rev-parse --short=12 HEAD).Trim()
+            if ([string]$health.process.build_identity -ne $expected) {
+              throw "Wrong build opened. Expected $expected; got $($health.process.build_identity)."
+            }
+          } finally {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Verify news video, approvals, launcher, and paper-only finance
+        shell: powershell
+        run: |
+          .\.venv\Scripts\python.exe -m pytest -q `
+            src/media/tests/test_local_news_card_fallback.py `
+            src/media/tests/test_licensed_video_remix.py `
+            src/mission/tests/test_swiss_video_pipeline_round7.py `
+            src/research/tests/test_bounded_current_retry.py `
+            src/control_center/tests/test_remote_control_v1.py `
+            src/control_center/tests/test_finance_autonomous_cycle.py `
+            src/control_center/tests/test_finance_learning_loop.py `
+            src/control_center/tests/test_finance_novel_exploration.py `
+            src/control_center/tests/test_finance_strategy_lab.py `
+            src/mission/tests/test_finance_semantic_completion.py `
+            src/mission/tests/test_combined_autonomy_routing.py

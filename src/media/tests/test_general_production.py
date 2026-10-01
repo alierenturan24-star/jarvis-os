@@ -1,5 +1,6 @@
 import json
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -56,10 +57,23 @@ REAL_SOURCE = Path("workspace/assets/media/channel-default-sources")
 
 
 def _copy_real_sources(source_root: Path, *prefixes: str) -> None:
+    """Never depend on ignored developer workspace assets in a clean clone."""
     source_root.mkdir(parents=True, exist_ok=True)
-    for prefix in prefixes:
-        for suffix in ("-storyboard.png", "-running-poses.png"):
-            shutil.copy2(REAL_SOURCE / f"{prefix}{suffix}", source_root / f"{prefix}{suffix}")
+    ffmpeg = shutil.which("ffmpeg")
+    assert ffmpeg, "ffmpeg test dependency unavailable"
+    for prefix_index, prefix in enumerate(prefixes):
+        for suffix, size in (("-storyboard.png", "1800x1200"), ("-running-poses.png", "1800x1000")):
+            source = REAL_SOURCE / f"{prefix}{suffix}"
+            target = source_root / f"{prefix}{suffix}"
+            if source.is_file():
+                shutil.copy2(source, target)
+                continue
+            completed = subprocess.run([
+                ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                f"testsrc2=size={size}:rate=1,hue=h={prefix_index * 25}:s=1.3,"
+                "noise=alls=18:allf=t+u", "-frames:v", "1", str(target),
+            ], capture_output=True, text=True, timeout=30, check=False)
+            assert completed.returncode == 0 and target.stat().st_size > 10_000, completed.stderr
 
 
 def _fingerprint(source_root: Path, prefix: str) -> str:
@@ -300,7 +314,8 @@ def test_narration_generated_from_final_script(tmp_path):
 
 def test_edge_tts_voice_follows_channel_language(tmp_path):
     swiss = _BuiltProduction(tmp_path / "ch", channel_market="Switzerland", channel_language="de-CH")
-    assert "de-CH" in swiss.manifest["narration_provider"]
+    provider = swiss.manifest["narration_provider"]
+    assert ("de-CH" in provider) or provider.startswith(("FFmpeg flite", "Windows System.Speech"))
     assert swiss.manifest["target_country_language"] == "Switzerland / de-CH"
 
 

@@ -763,9 +763,16 @@ class GeneralProductionBuilder:
         font = next((item for item in font_candidates if item.is_file()), None)
         font_part = f"fontfile='{cls._ffmpeg_filter_path(font)}':" if font else ""
         text_path = cls._ffmpeg_filter_path(text_file)
-        accent = ("00d9ff", "58f58d", "ffcc4d", "ff6b8a", "9c8cff")[((index - 1) % 5)]
+        palette = (
+            ("071423", "00d9ff"),
+            ("1b102b", "9c8cff"),
+            ("08251f", "58f58d"),
+            ("2a1708", "ffcc4d"),
+            ("25101a", "ff6b8a"),
+        )
+        background, accent = palette[(index - 1) % len(palette)]
         video_filter = (
-            "drawbox=x=0:y=0:w=1080:h=1920:color=0x071423:t=fill,"
+            f"drawbox=x=0:y=0:w=1080:h=1920:color=0x{background}:t=fill,"
             f"drawbox=x=0:y=0:w=28:h=1920:color=0x{accent}:t=fill,"
             f"drawbox=x=90:y=210:w=900:h=18:color=0x{accent}:t=fill,"
             f"drawtext={font_part}text='JARVIS  GÜNDEM':fontcolor=0x{accent}:fontsize=44:"
@@ -778,7 +785,7 @@ class GeneralProductionBuilder:
         )
         command = [
             find_ffmpeg(), "-y", "-hide_banner", "-loglevel", "error",
-            "-f", "lavfi", "-i", "color=c=0x071423:s=1080x1920:d=1",
+            "-f", "lavfi", "-i", f"color=c=0x{background}:s=1080x1920:d=1",
             "-vf", video_filter, "-frames:v", "1", target.as_posix(),
         ]
         try:

@@ -42,18 +42,11 @@ class ResearchAgent(BaseAgent):
                 for row in (state.get("channels", {}) or {}).values()
                 if isinstance(row, dict)
             )
-            topics: list[str] = []
-            for memory in memories:
-                for production in reversed(memory.get("productions", []) or []):
-                    topic = str(production.get("topic") or production.get("original_goal") or "").strip()
-                    if topic and topic not in topics:
-                        topics.append(topic)
-                    if len(topics) >= limit:
-                        return topics
             # A failed render never reaches youtube_learning.productions, but
             # its selected research topic is still durable.  Include those
-            # attempts too so the next one-click run does not select the same
-            # story forever just because Wikimedia/provider delivery failed.
+            # attempts FIRST so a full successful-production history cannot
+            # hide the most recent blocked selection.
+            topics: list[str] = []
             for record in KnowledgeBase().recent_research(limit=limit * 2):
                 summary = str(record.get("summary") or "")
                 match = re.search(r"^SEÇİLEN KONU:\s*(.+)$", summary, re.IGNORECASE | re.MULTILINE)
@@ -62,6 +55,13 @@ class ResearchAgent(BaseAgent):
                     topics.append(topic)
                 if len(topics) >= limit:
                     return topics
+            for memory in memories:
+                for production in reversed(memory.get("productions", []) or []):
+                    topic = str(production.get("topic") or production.get("original_goal") or "").strip()
+                    if topic and topic not in topics:
+                        topics.append(topic)
+                    if len(topics) >= limit:
+                        return topics
             return topics
         except (OSError, ValueError, TypeError):
             return []

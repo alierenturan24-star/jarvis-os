@@ -176,6 +176,70 @@ def test_selected_headline_gets_one_bounded_same_story_corroboration_pass():
     assert len(task.metadata["report"]["supporting_evidence"]) == 2
 
 
+def test_failed_first_headline_automatically_moves_to_next_dated_candidate():
+    now = datetime.now(timezone.utc).isoformat()
+    first = "Single publisher Swiss voting podcast"
+    second = "Swiss rail tunnel closes after rockfall"
+
+    class _Knowledge:
+        rows = {}
+        def find_research(self, topic):
+            return self.rows.get(topic)
+
+    class _Manager:
+        def __init__(self):
+            self.knowledge, self.calls = _Knowledge(), []
+
+        def research(self, topic, **kwargs):
+            self.calls.append(topic)
+            if "HABER_ADAYI_BEGIN" in topic:
+                chosen = second if second in topic else first
+                corroborating = ([{
+                    "title": "Swiss rail tunnel closes after rockfall",
+                    "summary": "Rail tunnel closed after a rockfall in Switzerland.",
+                    "url": "https://www.rts.ch/info/rail-rockfall", "published_at": now,
+                }] if chosen == second else [])
+                self.knowledge.rows[topic] = {
+                    "summary": f"SEÇİLEN KONU: {chosen}", "created_at": now,
+                    "sources": corroborating,
+                }
+                return f"{chosen} doğrulama taraması"
+            if "ALTERNATIVE_SOURCE_PASS" in topic:
+                self.knowledge.rows[topic] = {
+                    "summary": f"SEÇİLEN KONU: {first}\nİsviçre gündemi", "created_at": now,
+                    "sources": [
+                        {"title": first, "summary": first,
+                         "url": "https://www.swissinfo.ch/first", "published_at": now},
+                        {"title": second, "summary": "Swiss rail tunnel closed after rockfall.",
+                         "url": "https://www.srf.ch/news/second", "published_at": now},
+                    ],
+                }
+                return "yedek tarama"
+            self.knowledge.rows[topic] = {
+                "summary": "SEÇİLEN KONU: sonuç yok\nİsviçre", "created_at": now, "sources": [],
+            }
+            return "ilk tarama"
+
+    agent = ResearchAgent(); agent.manager = _Manager()
+    task = Task(
+        action="current research", agent="research",
+        target=("İsviçre son 7 gün aynı haberi doğrulayan en az iki bağımsız kaynak; "
+                "yoksa son 30 güne genişlet"),
+        metadata={"market_context": "İsviçre", "allow_30_day_fallback": True},
+    )
+
+    output = agent.execute(task)
+
+    verification_calls = [call for call in agent.manager.calls if "HABER_ADAYI_BEGIN" in call]
+    assert len(verification_calls) == 2
+    assert first in verification_calls[0]
+    assert second in verification_calls[1]
+    assert "2/2" in output
+    assert task.metadata["report"]["sufficient"] is True
+    assert task.metadata["report"]["selected_topic"] == second
+    assert len(task.metadata["report"]["supporting_evidence"]) == 2
+
+
 def test_structured_fallback_survives_clean_research_task_rewrite():
     now = datetime.now(timezone.utc)
     older = (now - timedelta(days=12)).isoformat()

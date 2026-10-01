@@ -187,6 +187,27 @@ def _is_swiss_topic(topic: str) -> bool:
     return any(name in lowered for name in ("isviçre", "isvicre", "switzerland", "schweiz", "suisse", "svizzera"))
 
 
+_SAME_STORY_MARKER = "same_story_pass"
+_HEADLINE_BEGIN = "haber_adayi_begin"
+_HEADLINE_END = "haber_adayi_end"
+
+
+def _same_story_headline(topic: str) -> str:
+    """Return the bounded headline carried by a corroboration request.
+
+    The old corroboration pass still entered the generic Swiss-news branch,
+    so it searched broad home-page queries instead of the selected story.
+    Explicit delimiters keep the control words out of the actual news query.
+    """
+    text = str(topic or "")
+    lowered = text.casefold()
+    start = lowered.find(_HEADLINE_BEGIN)
+    end = lowered.find(_HEADLINE_END, start + len(_HEADLINE_BEGIN))
+    if start < 0 or end < 0:
+        return ""
+    return text[start + len(_HEADLINE_BEGIN):end].strip(" \t\r\n:;\"'")[:500]
+
+
 class ResearchCollector:
 
     def __init__(self) -> None:
@@ -216,7 +237,24 @@ class ResearchCollector:
             if _is_swiss_topic(topic):
                 today = datetime.now(timezone.utc).date().isoformat()
                 alternate = "alternative_source_pass" in (topic or "").casefold()
-                if alternate:
+                same_story = _SAME_STORY_MARKER in (topic or "").casefold()
+                if same_story and _same_story_headline(topic):
+                    headline = _same_story_headline(topic)
+                    # Search the ACTUAL selected headline.  Two shapes are
+                    # deliberate: quoted text catches syndication/same-language
+                    # coverage; the market-expanded form catches translated or
+                    # lightly rewritten Swiss coverage.  A 30-day mission uses
+                    # the news backend's month window rather than its weekly
+                    # default.
+                    timelimit = "m" if "son 30 gün" in (topic or "").casefold() else "w"
+                    searches.extend((
+                        {"search_channel": "NEWS_SAME_STORY_EXACT", "query": f'"{headline}"',
+                         "news": True, "timelimit": timelimit},
+                        {"search_channel": "NEWS_SAME_STORY_MARKET", "query":
+                         f"{headline} Schweiz Suisse Svizzera Switzerland",
+                         "news": True, "timelimit": timelimit},
+                    ))
+                elif alternate:
                     # A bounded second pass deliberately changes the query
                     # shape. Some news backends return nothing for a single
                     # site: filter but do return dated rows for a small OR
@@ -273,6 +311,8 @@ class ResearchCollector:
             response = search_method(
                 query=search["query"], max_results=max_results_per_source,
                 timeout_seconds=remaining if remaining is not None else 15.0,
+                **({"timelimit": search["timelimit"]}
+                   if search.get("news") and search.get("timelimit") else {}),
             )
             if not response.get("success"):
                 continue

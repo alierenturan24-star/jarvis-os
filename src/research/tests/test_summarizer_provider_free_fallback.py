@@ -70,3 +70,46 @@ def test_provider_free_fallback_skips_previously_attempted_topic():
     )
 
     assert result.startswith("SEÇİLEN KONU: Les nouveaux horaires ferroviaires en Suisse")
+
+
+def test_current_news_prefers_installed_claude_code_before_gemini():
+    summarizer = Summarizer()
+    captured = {}
+
+    class _Claude:
+        def is_available(self):
+            return True
+
+    summarizer.router.manager.get = lambda name: _Claude() if name == "claude_code" else None
+
+    def route(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(output="SEÇİLEN KONU: Swiss rail timetable changes announced")
+
+    summarizer.router.manager.route_and_generate = route
+
+    summarizer.summarize(
+        "İsviçre son 7 gün güncel haber", _sources(), preferred_provider="gemini",
+    )
+
+    assert captured["preferred_provider"] == "claude_code"
+
+
+def test_noncurrent_research_keeps_requested_provider_even_if_claude_is_installed():
+    summarizer = Summarizer()
+    captured = {}
+
+    class _Claude:
+        def is_available(self):
+            return True
+
+    summarizer.router.manager.get = lambda name: _Claude() if name == "claude_code" else None
+
+    def route(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(output="SEÇİLEN KONU: Swiss rail history")
+
+    summarizer.router.manager.route_and_generate = route
+    summarizer.summarize("Swiss railway history", _sources(), preferred_provider="gemini")
+
+    assert captured["preferred_provider"] == "gemini"

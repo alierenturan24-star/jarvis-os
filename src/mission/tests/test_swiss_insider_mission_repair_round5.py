@@ -94,6 +94,24 @@ def test_round5_swiss_current_research_searches_german_french_and_italian_news()
     assert "technologie" in joined and "curiosità" in joined
 
 
+def test_same_story_pass_searches_the_exact_headline_not_generic_swiss_feeds():
+    collector = ResearchCollector()
+    web = _FakeNewsWeb()
+    collector.web = web
+    headline = "Swiss rail tunnel closes after rockfall"
+
+    collector.collect(
+        "SAME_STORY_PASS son 30 gün güncel İsviçre "
+        f"HABER_ADAYI_BEGIN {headline} HABER_ADAYI_END "
+        "aynı olayı doğrulayan bağımsız kaynaklar"
+    )
+
+    news_queries = web.queries[:-1]  # GENERAL_WEB is the final supplemental query.
+    assert len(news_queries) == 2
+    assert all(headline in query for query in news_queries)
+    assert not any("Verkehr Wetter Wirtschaft" in query for query in news_queries)
+
+
 def test_round5_capability_software_research_can_still_use_github():
     collector = ResearchCollector()
     web = _FakeWeb()

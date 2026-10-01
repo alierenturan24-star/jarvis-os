@@ -89,8 +89,23 @@ Araştırma raporu:
         # Sprint 35: ``preferred_provider`` doluysa (AI Strategy Engine bir
         # karar verdiyse) route_and_generate buna öncelik verir; boşsa
         # davranış BİREBİR eskisi gibidir.
+        # Current-news selection benefits from the user's already-authenticated
+        # Claude Code subscription when present.  This is a read-only plan-mode
+        # call through the existing provider bridge; no API key, paid media or
+        # repository mutation is introduced.  Login/quota/unavailability still
+        # falls through the existing bounded provider chain.
+        effective_provider = preferred_provider
+        claude_code = self.router.manager.get("claude_code")
+        if (
+            claude_code is not None
+            and claude_code.is_available()
+            and any(cue in (topic or "").casefold() for cue in (
+                "güncel", "bugün", "son 7 gün", "son 30 gün", "current", "latest",
+            ))
+        ):
+            effective_provider = "claude_code"
         self.last_route = self.router.manager.route_and_generate(
-            prompt=prompt, task_type=TASK_LONG_RESEARCH, preferred_provider=preferred_provider,
+            prompt=prompt, task_type=TASK_LONG_RESEARCH, preferred_provider=effective_provider,
         )
         answer = self.last_route.output
         # A generic assistant greeting can have HTTP/provider success status

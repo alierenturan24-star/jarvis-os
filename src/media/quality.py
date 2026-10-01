@@ -58,8 +58,9 @@ _TECHNICAL_VALIDATION_TIMEOUT_SECONDS = 15.0  # renderer.validate_video_artifact
 _SCENE_CUT_DETECTION_TIMEOUT_SECONDS = 30.0
 # Branded news cards retain one channel design while their full-frame colour,
 # headline and accent change. A measured four-card replay put those authored
-# boundaries in the 0.08-0.10 range; 0.25 missed every one.
-_SCENE_CUT_SCORE_THRESHOLD = 0.08
+# boundaries in the 0.05-0.10 range across the bundled Windows FFmpeg and
+# Linux FFmpeg; 0.25 missed every one and 0.08 still missed one on Windows.
+_SCENE_CUT_SCORE_THRESHOLD = 0.05
 _AUDIO_LEVEL_DETECTION_TIMEOUT_SECONDS = 30.0
 _DURATION_PROBE_TIMEOUT_SECONDS = 15.0
 _TAIL_SILENCE_PROBE_TIMEOUT_SECONDS = 20.0

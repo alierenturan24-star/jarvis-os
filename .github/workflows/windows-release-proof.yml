@@ -17,6 +17,13 @@ jobs:
         with:
           python-version: '3.13'
 
+      - name: Prove the exact one-click repair launcher
+        shell: cmd
+        env:
+          JARVIS_CI: '1'
+          JARVIS_SOURCE_REPO: ${{ github.workspace }}
+        run: call JARVIS_VIDEO_SURUMUNU_KUR_VE_AC.bat
+
       - name: Prepare the exact one-click environment
         shell: powershell
         run: .\tools\setup_and_start.ps1 -SetupOnly

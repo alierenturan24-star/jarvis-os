@@ -194,6 +194,7 @@ def test_active_install_is_visible_and_has_one_stable_desktop_launcher():
 
 def test_video_repair_launcher_reuses_verified_commit_worktree():
     launcher = Path("JARVIS_VIDEO_SURUMUNU_KUR_VE_AC.bat").read_text(encoding="utf-8")
+    assert "JARVIS_SOURCE_REPO" in launcher and "JARVIS_CI" in launcher
     assert "jarvis-active-%SHORT_HEAD%" in launcher
     assert 'worktree add --detach' in launcher
     assert 'git -C "%NEW_REPO%" rev-parse HEAD' in launcher

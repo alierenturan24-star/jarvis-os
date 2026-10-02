@@ -4,7 +4,8 @@ title JARVIS Video Surumunu Kur ve Ac - CANLI
 color 0B
 
 set "TARGET_BRANCH=codex/youtube-planning-gemini-images"
-set "SOURCE_REPO=C:\Projects\jarvis-os\jarvis-os"
+set "SOURCE_REPO=%JARVIS_SOURCE_REPO%"
+if not defined SOURCE_REPO set "SOURCE_REPO=C:\Projects\jarvis-os\jarvis-os"
 if not exist "%SOURCE_REPO%\.git" set "SOURCE_REPO=C:\Projects\jarvis-os"
 
 echo ============================================================
@@ -76,7 +77,11 @@ echo [4/4] Yeni JARVIS baslatiliyor...
 echo Bu ilk acilissa gerekli paketlerin kurulmasi birkac dakika surebilir.
 echo Pencereyi kapatmayin; panel hazir olunca tarayici otomatik acilacak.
 echo.
-call "%NEW_REPO%\START_JARVIS.bat"
+if "%JARVIS_CI%"=="1" (
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%NEW_REPO%\tools\setup_and_start.ps1" -SetupOnly
+) else (
+  call "%NEW_REPO%\START_JARVIS.bat"
+)
 if errorlevel 1 goto :HATA
 
 echo.
@@ -86,6 +91,7 @@ echo Kurulum klasoru: %NEW_REPO%
 echo Bundan sonra masaustundeki JARVIS AC kisayolunu kullanin.
 echo Eski proje ve degisiklikleriniz aynen korundu.
 echo ============================================================
+if "%JARVIS_CI%"=="1" exit /b 0
 pause
 exit /b 0
 

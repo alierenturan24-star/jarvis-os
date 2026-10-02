@@ -25,7 +25,16 @@ if not exist "%POINTER%" goto :missing
 set /p "JARVIS_ROOT="<"%POINTER%"
 if not exist "%JARVIS_ROOT%\tools\update_active_install.ps1" goto :missing
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%JARVIS_ROOT%\tools\update_active_install.ps1"
-exit /b %ERRORLEVEL%
+if not errorlevel 1 exit /b 0
+echo.
+echo Guncelleme acilamadi. Calisan mevcut JARVIS surumu aciliyor...
+if not exist "%JARVIS_ROOT%\START_JARVIS.bat" goto :missing
+call "%JARVIS_ROOT%\START_JARVIS.bat"
+if not errorlevel 1 exit /b 0
+echo.
+echo JARVIS baslatilamadi. Bu pencere hata gorulebilsin diye acik tutuluyor.
+pause
+exit /b 1
 :missing
 echo JARVIS aktif kurulum yolu bulunamadi.
 echo JARVIS Tamir ve Ac dosyasini bir kez calistirin.

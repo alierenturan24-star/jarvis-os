@@ -184,7 +184,17 @@ def test_active_install_is_visible_and_has_one_stable_desktop_launcher():
     assert "register_active_install.ps1" in setup
     assert "JARVIS_ACTIVE_PATH.txt" in launcher
     assert "JARVIS AC.lnk" in launcher
+    assert "Calisan mevcut JARVIS surumu aciliyor" in launcher
+    assert 'call "%JARVIS_ROOT%\\START_JARVIS.bat"' in launcher
     assert "update_active_install.ps1" in launcher
     updater = Path("tools/update_active_install.ps1").read_text(encoding="utf-8")
     assert "refs/remotes/origin/$TargetBranch" in updater
     assert "worktree', 'add', '--detach'" in updater
+
+
+def test_video_repair_launcher_reuses_verified_commit_worktree():
+    launcher = Path("JARVIS_VIDEO_SURUMUNU_KUR_VE_AC.bat").read_text(encoding="utf-8")
+    assert "jarvis-active-%SHORT_HEAD%" in launcher
+    assert 'worktree add --detach' in launcher
+    assert 'git -C "%NEW_REPO%" rev-parse HEAD' in launcher
+    assert 'call "%NEW_REPO%\\START_JARVIS.bat"' in launcher

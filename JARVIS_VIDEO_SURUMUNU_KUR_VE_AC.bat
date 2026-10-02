@@ -37,14 +37,24 @@ if errorlevel 1 (
 
 set "INSTALL_ROOT=C:\Projects"
 if not exist "%INSTALL_ROOT%" mkdir "%INSTALL_ROOT%"
-set "NEW_REPO=%INSTALL_ROOT%\jarvis-video-ready-%RANDOM%"
-set "RUN_BRANCH=jarvis-video-ready-%RANDOM%"
+for /f %%H in ('git rev-parse "refs/remotes/origin/%TARGET_BRANCH%"') do set "REMOTE_HEAD=%%H"
+for /f %%H in ('git rev-parse --short^=12 "refs/remotes/origin/%TARGET_BRANCH%"') do set "SHORT_HEAD=%%H"
+if not defined REMOTE_HEAD goto :HATA
+set "NEW_REPO=%INSTALL_ROOT%\jarvis-active-%SHORT_HEAD%"
 
 echo.
 echo [2/4] Eski projeye dokunmadan yeni klasor olusturuluyor...
 echo Yeni klasor: %NEW_REPO%
-git worktree add -b "%RUN_BRANCH%" "%NEW_REPO%" "refs/remotes/origin/%TARGET_BRANCH%"
-if errorlevel 1 goto :HATA
+if exist "%NEW_REPO%\.git" (
+  for /f %%H in ('git -C "%NEW_REPO%" rev-parse HEAD') do set "EXISTING_HEAD=%%H"
+  if /I not "!EXISTING_HEAD!"=="!REMOTE_HEAD!" (
+    echo HATA: Mevcut aktif klasor beklenen surumde degil.
+    goto :HATA
+  )
+) else (
+  git worktree add --detach "%NEW_REPO%" "refs/remotes/origin/%TARGET_BRANCH%"
+  if errorlevel 1 goto :HATA
+)
 
 if exist "%SOURCE_REPO%\.env" (
   echo.

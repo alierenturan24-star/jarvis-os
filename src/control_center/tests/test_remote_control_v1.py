@@ -1,4 +1,5 @@
 from pathlib import Path
+import threading
 
 from src.control_center.server import load_or_create_token
 from src.control_center.service import ControlCenterService
@@ -21,6 +22,22 @@ class RuntimeStub:
         self.stop_requested = False
     def shutdown(self):
         self.state = self.STOPPED
+
+
+class BlockingRuntimeStub(RuntimeStub):
+    def __init__(self):
+        super().__init__()
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def execute(self, goal, execution_hints=None):
+        self.entered.set()
+        self.release.wait(timeout=5)
+        return "late result that must not replace cancellation"
+
+    def shutdown(self):
+        super().shutdown()
+        self.release.set()
 
 
 def test_session_token_survives_restart_and_is_not_weak(tmp_path):
@@ -127,6 +144,27 @@ def test_panel_exposes_cancel_and_safe_restart_controls():
     assert "cancel_active_mission" in service and 'status="CANCELLED"' in service
     assert "_schedule_restart" in server and "restart_control_center.ps1" in server
     assert "Start-Sleep -Seconds 3" in helper and "setup_and_start.ps1" in helper
+    assert "-PreserveSession" in helper and "waitForRestart" in js
+
+
+def test_cancelled_mission_cannot_be_overwritten_by_late_runtime_result(tmp_path):
+    runtime = BlockingRuntimeStub()
+    store = ControlCenterStore(tmp_path / "state.json")
+    service = ControlCenterService(runtime, store)
+
+    mission = service.submit_command("long running mission")
+    assert runtime.entered.wait(timeout=2)
+    result = service.cancel_active_mission()
+    service._thread.join(timeout=2)
+
+    persisted = next(row for row in store.snapshot()["missions"] if row["id"] == mission["id"])
+    assert result["cancelled"] is True
+    assert persisted["status"] == "CANCELLED"
+    assert persisted["stage"] == "CANCELLED"
+    assert persisted["cancellation_requested"] is True
+    assert "late result" not in persisted.get("result", "")
+    assert service.busy is False
+    assert service.snapshot()["active_mission"] is None
 
 
 def test_panel_assets_are_never_stale_cached():

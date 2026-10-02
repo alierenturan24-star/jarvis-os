@@ -96,6 +96,7 @@ class ControlCenterService:
         self._lock = threading.RLock()
         self._thread: threading.Thread | None = None
         self._active: dict[str, Any] | None = None
+        self._cancel_requested = threading.Event()
         self._activities: list[dict[str, Any]] = []
         self._paused = False
         self._provider_health: dict[str, bool] = {}
@@ -134,7 +135,7 @@ class ControlCenterService:
                                      "message": message[:1000], "worker": worker, "level": level,
                                      "mission_id": resolved_mission_id})
             self._activities = self._activities[-300:]
-            if self._active:
+            if self._active and not self._cancel_requested.is_set() and self._active.get("status") != "CANCELLED":
                 self._active["stage"] = stage
                 if worker: self._active["worker"] = worker
 
@@ -206,6 +207,7 @@ class ControlCenterService:
                 raise RuntimeError("JARVIS paused; önce START/RESUME gerekli.")
             if self.busy:
                 raise RuntimeError("Bir mission zaten çalışıyor.")
+            self._cancel_requested.clear()
             mission = {"id": uuid.uuid4().hex, "goal": goal, "source": source, "status": "QUEUED",
                        "stage": "UNDERSTANDING", "worker": "", "progress": 0, "created_at": utc_now()}
             self._active = mission
@@ -217,12 +219,22 @@ class ControlCenterService:
             return dict(mission)
 
     def _run_command(self, record: dict[str, Any], execution_hints: dict | None = None) -> None:
-        record.update(status="WORKING", started_at=utc_now(), progress=5)
+        with self._lock:
+            if self._cancel_requested.is_set() or record.get("status") == "CANCELLED":
+                return
+            record.update(status="WORKING", started_at=utc_now(), progress=5)
         self._persist_mission(record)
         self.activity("UNDERSTANDING", "Goal gerçek JARVIS pipeline'ına gönderildi.")
         try:
             with redirect_stdout(_ActivityWriter(self)):
                 result = self.runtime.execute(record["goal"], execution_hints=execution_hints)
+            # runtime.shutdown() cannot forcibly kill a Python thread that is
+            # currently inside a provider/network call.  The Windows restart
+            # terminates that process, while this guard makes the in-process
+            # race safe: a late provider return must never overwrite the
+            # already persisted CANCELLED terminal state.
+            if self._cancel_requested.is_set() or record.get("status") == "CANCELLED":
+                return
             if self.runtime.last_error is not None:
                 detail = self.runtime.last_error_context or self.runtime.last_error
                 raise RuntimeError(f"Runtime execution failed: {self.runtime.last_error}\n{detail}")
@@ -286,6 +298,8 @@ class ControlCenterService:
             # documented live incident with status stuck WORKING and
             # error=null forever, because neither this handler nor the
             # success path ever ran.
+            if self._cancel_requested.is_set() or record.get("status") == "CANCELLED":
+                return
             error_context = traceback.format_exc()
             record.update(status="BLOCKED", stage="BLOCKED", error=str(error),
                           error_context=error_context, finished_at=utc_now())
@@ -307,7 +321,9 @@ class ControlCenterService:
                     pass
         finally:
             self._persist_mission(record)
-            with self._lock: self._active = None
+            with self._lock:
+                if self._active is not None and self._active.get("id") == record.get("id"):
+                    self._active = None
 
     def _persist_mission(self, record: dict[str, Any]) -> None:
         def mutate(state: dict[str, Any]) -> None:
@@ -357,11 +373,17 @@ class ControlCenterService:
     def cancel_active_mission(self) -> dict[str, Any]:
         """Persist cancellation before the HTTP layer restarts the process."""
         with self._lock:
-            if not self._active or not self.busy:
+            if not self._active:
                 return {"ok": True, "cancelled": False, "message": "Çalışan görev yok."}
             record = self._active
+            if record.get("status") == "CANCELLED":
+                return {"ok": True, "cancelled": True, "mission_id": record["id"],
+                        "message": "Görev zaten iptal edildi; JARVIS yeniden başlatılıyor."}
+            self._cancel_requested.set()
             record.update(status="CANCELLED", stage="CANCELLED", finished_at=utc_now(),
-                          error="Kullanıcı tarafından panelden iptal edildi.")
+                          progress=record.get("progress", 0),
+                          error="Kullanıcı tarafından panelden iptal edildi.",
+                          cancellation_requested=True)
             self._persist_mission(record)
             self.runtime.shutdown()
             self.activity("CANCELLED", "Aktif görev iptal edildi; temiz restart hazırlanıyor.",

@@ -1,5 +1,6 @@
 param(
     [switch]$SetupOnly,
+    [switch]$PreserveSession,
     [int]$Port = 8765
 )
 
@@ -165,9 +166,11 @@ $token = if (Test-Path -LiteralPath $TokenPath -PathType Leaf) {
 if (-not (Test-ControlCenterHealth $token $ExpectedBuild)) {
     Write-Host '[5/5] JARVIS Control Center baslatiliyor...' -ForegroundColor Cyan
     Clear-StaleJarvisListener
-    Start-Process -FilePath $VenvPython -ArgumentList @(
-        "`"$ControlCenter`"", '--host', '127.0.0.1', '--port', $Port, '--no-bootstrap-output', '--fresh-session'
-    ) -WorkingDirectory $ProjectRoot -RedirectStandardOutput $StdoutPath `
+    $serverArguments = @(
+        "`"$ControlCenter`"", '--host', '127.0.0.1', '--port', $Port, '--no-bootstrap-output'
+    )
+    if (-not $PreserveSession) { $serverArguments += '--fresh-session' }
+    Start-Process -FilePath $VenvPython -ArgumentList $serverArguments -WorkingDirectory $ProjectRoot -RedirectStandardOutput $StdoutPath `
       -RedirectStandardError $StderrPath -WindowStyle Hidden | Out-Null
 
     $healthy = $false

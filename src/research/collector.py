@@ -249,10 +249,12 @@ class ResearchCollector:
                     timelimit = "m" if "son 30 gün" in (topic or "").casefold() else "w"
                     searches.extend((
                         {"search_channel": "NEWS_SAME_STORY_EXACT", "query": f'"{headline}"',
-                         "news": True, "timelimit": timelimit},
+                         "news": True, "timelimit": timelimit, "region": "ch-de",
+                         "max_results": 8},
                         {"search_channel": "NEWS_SAME_STORY_MARKET", "query":
                          f"{headline} Schweiz Suisse Svizzera Switzerland",
-                         "news": True, "timelimit": timelimit},
+                         "news": True, "timelimit": timelimit, "region": "wt-wt",
+                         "max_results": 8},
                     ))
                 elif alternate:
                     # A bounded second pass deliberately changes the query
@@ -285,7 +287,22 @@ class ResearchCollector:
                 "search_channel": "VIDEO_FORMAT_DE", "query": video_query, "video": True,
                 "source_language": "de", "reference_role": "format_only",
             })
-        searches.append({"search_channel": "GENERAL_WEB", "query": topic})
+        same_story_headline = _same_story_headline(topic)
+        if _SAME_STORY_MARKER in (topic or "").casefold() and same_story_headline:
+            # DDGS' news index can be empty for Swiss local outlets even when
+            # their dated article is indexed by the normal web search.  Use
+            # Swiss/global regions and the actual headline; never send the
+            # internal control prompt to a Turkish-region search backend.
+            searches.extend((
+                {"search_channel": "WEB_SAME_STORY_SWISS", "query":
+                 f"{same_story_headline} site:srf.ch OR site:rts.ch OR site:rsi.ch OR site:swissinfo.ch",
+                 "region": "ch-de", "max_results": 8},
+                {"search_channel": "WEB_SAME_STORY_GLOBAL", "query":
+                 f"{same_story_headline} Switzerland Schweiz Suisse Svizzera",
+                 "region": "wt-wt", "max_results": 8},
+            ))
+        else:
+            searches.append({"search_channel": "GENERAL_WEB", "query": topic})
         if _wants_tooling_sources(topic, preferences):
             searches.append({"search_channel": "GITHUB", "query": f"site:github.com {topic}"})
         if _wants_academic_sources(topic, preferences):
@@ -309,10 +326,12 @@ class ResearchCollector:
                 else self.web.search
             )
             response = search_method(
-                query=search["query"], max_results=max_results_per_source,
+                query=search["query"],
+                max_results=int(search.get("max_results") or max_results_per_source),
                 timeout_seconds=remaining if remaining is not None else 15.0,
                 **({"timelimit": search["timelimit"]}
                    if search.get("news") and search.get("timelimit") else {}),
+                **({"region": search["region"]} if search.get("region") else {}),
             )
             if not response.get("success"):
                 continue

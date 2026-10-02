@@ -108,6 +108,17 @@ def _parse_published_at(value: Any) -> datetime | None:
     relative = re.search(r"(\d+)\s*(?:days?|tage?|jours?)\s*(?:ago|zuvor|vor)?", normalized)
     if relative:
         return datetime.now(timezone.utc) - timedelta(days=int(relative.group(1)))
+    # Swiss result snippets commonly expose dates as ``28.09.2026`` or
+    # ``28/09/2026`` while leaving the structured date field empty.
+    european_date = re.search(r"(?<!\d)(\d{1,2})[./](\d{1,2})[./](20\d{2})(?!\d)", raw)
+    if european_date:
+        try:
+            return datetime(
+                int(european_date.group(3)), int(european_date.group(2)),
+                int(european_date.group(1)), tzinfo=timezone.utc,
+            )
+        except ValueError:
+            return None
     try:
         parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:
@@ -194,7 +205,15 @@ def _same_story_evidence(selected_topic: str, evidence: tuple[dict, ...]) -> tup
             f"{item.get('title', '')} {item.get('summary', '')}"
         )
         overlap = selected_words & source_words
-        if len(overlap) >= 2 or any(word.isdigit() for word in overlap):
+        # One long anchor such as ``robotaxi``, ``Basodino`` or a named
+        # organisation is strong enough for multilingual Swiss reporting;
+        # short generic words still require two overlaps. Independent host
+        # and freshness checks remain enforced by ``_current_evidence``.
+        if (
+            len(overlap) >= 2
+            or any(word.isdigit() for word in overlap)
+            or any(len(word) >= 7 for word in overlap)
+        ):
             matched.append(item)
     return tuple(matched)
 

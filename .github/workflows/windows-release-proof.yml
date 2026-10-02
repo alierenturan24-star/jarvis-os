@@ -67,6 +67,7 @@ jobs:
             src/media/tests/test_licensed_video_remix.py `
             src/mission/tests/test_swiss_video_pipeline_round7.py `
             src/research/tests/test_bounded_current_retry.py `
+            src/research/tests/test_staleness_warning.py `
             src/research/tests/test_summarizer_provider_free_fallback.py `
             src/mission/tests/test_swiss_insider_mission_repair_round5.py `
             src/control_center/tests/test_remote_control_v1.py `

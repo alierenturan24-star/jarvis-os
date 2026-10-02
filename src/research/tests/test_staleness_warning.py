@@ -6,6 +6,7 @@ from src.research.manager import (
     staleness_warning,
     topic_wants_current_information,
 )
+from src.research.opportunity import build_selected_opportunity
 from src.research.summarizer import Summarizer
 
 # Mission repair (real Swiss-Insider-Shorts follow-up evidence, item 5): a
@@ -61,6 +62,31 @@ class TestStalenessWarning:
             current_year=2026,
         )
         assert warning is None
+
+
+def test_swiss_web_snippet_european_dates_and_multilingual_anchor_are_valid_evidence():
+    opportunity = build_selected_opportunity(
+        topic=("İsviçre son 7 gün aynı haberi doğrulayan en az iki bağımsız kaynakla "
+               "güncel haber"),
+        location_or_market="İsviçre",
+        summary=("SEÇİLEN KONU: Arrivano i robotaxi anche in Svizzera nel Canton Zurigo\n"
+                 "İsviçre robotaxi gündemi"),
+        sources=[
+            {
+                "title": "Arrivano i robotaxi anche in Svizzera nel Canton Zurigo",
+                "url": "https://www.cdt.ch/news/robotaxi",
+                "summary": "26.09.2026 · Robotaxi nel Canton Zurigo.",
+            },
+            {
+                "title": "Ab jetzt ist das erste Robotaxi der Schweiz im Einsatz",
+                "url": "https://www.srf.ch/news/schweiz/robotaxi",
+                "summary": "28.09.2026 · Das Robotaxi fährt im Zürcher Furttal.",
+            },
+        ],
+    )
+
+    assert opportunity.sufficient is True
+    assert len(opportunity.supporting_evidence) == 2
 
 
 class TestResearchManagerSurfacesStaleness:

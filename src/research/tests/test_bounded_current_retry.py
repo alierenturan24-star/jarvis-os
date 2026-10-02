@@ -240,6 +240,65 @@ def test_failed_first_headline_automatically_moves_to_next_dated_candidate():
     assert len(task.metadata["report"]["supporting_evidence"]) == 2
 
 
+def test_live_shape_prioritizes_seven_day_candidate_before_widened_results():
+    now = datetime.now(timezone.utc).isoformat()
+    fresh = "Arrivano i robotaxi anche in Svizzera nel Canton Zurigo"
+    old = "Was bedeutet Luxus und warum fasziniert er uns"
+
+    class _Knowledge:
+        rows = {}
+        def find_research(self, topic):
+            return self.rows.get(topic)
+
+    class _Manager:
+        def __init__(self):
+            self.knowledge, self.calls = _Knowledge(), []
+
+        def research(self, topic, **kwargs):
+            self.calls.append(topic)
+            if "HABER_ADAYI_BEGIN" in topic:
+                self.knowledge.rows[topic] = {
+                    "summary": f"SEÇİLEN KONU: {fresh}", "created_at": now,
+                    "sources": [{
+                        "title": "Erstes Robotaxi im Zürcher Furttal im Einsatz",
+                        "summary": "Das Robotaxi fährt im Zürcher Furttal.",
+                        "url": "https://www.srf.ch/news/robotaxi", "published_at": now,
+                    }],
+                }
+                return "aynı haber bulundu"
+            if "ALTERNATIVE_SOURCE_PASS" in topic:
+                self.knowledge.rows[topic] = {
+                    "summary": f"SEÇİLEN KONU: {old}\nİsviçre", "created_at": now,
+                    "sources": [{"title": old, "url": "https://www.nzz.ch/luxus",
+                                 "published_at": now, "summary": old}],
+                }
+                return "30 günlük sonuç"
+            self.knowledge.rows[topic] = {
+                "summary": f"SEÇİLEN KONU: {fresh}\nİsviçre", "created_at": now,
+                "sources": [{
+                    "title": fresh, "summary": "Robotaxi in Canton Zurigo.",
+                    "url": "https://www.cdt.ch/news/robotaxi", "published_at": now,
+                }],
+            }
+            return "7 günlük sonuç"
+
+    agent = ResearchAgent(); agent.manager = _Manager()
+    task = Task(
+        action="current research", agent="research",
+        target=("İsviçre son 7 gün aynı haberi doğrulayan en az iki bağımsız kaynak; "
+                "yoksa son 30 güne genişlet"),
+        metadata={"market_context": "İsviçre", "allow_30_day_fallback": True},
+    )
+
+    agent.execute(task)
+
+    verification_calls = [call for call in agent.manager.calls if "HABER_ADAYI_BEGIN" in call]
+    assert len(verification_calls) == 1
+    assert fresh in verification_calls[0]
+    assert task.metadata["report"]["sufficient"] is True
+    assert task.metadata["report"]["selected_topic"] == fresh
+
+
 def test_structured_fallback_survives_clean_research_task_rewrite():
     now = datetime.now(timezone.utc)
     older = (now - timedelta(days=12)).isoformat()

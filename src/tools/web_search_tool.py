@@ -25,6 +25,7 @@ class WebSearchTool(BaseTool):
 
         query = str(kwargs.get("query", "")).strip()
         max_results = int(kwargs.get("max_results", 5))
+        region = str(kwargs.get("region") or "tr-tr").strip()
 
         if not query:
             return {
@@ -41,7 +42,7 @@ class WebSearchTool(BaseTool):
             timeout = max(0.01, min(WEB_SEARCH_TIMEOUT_SECONDS, requested_timeout))
             raw_results = DDGS(timeout=timeout).text(
                 query,
-                region="tr-tr",
+                region=region,
                 safesearch="moderate",
                 max_results=max_results,
             )
@@ -93,12 +94,14 @@ class WebSearchTool(BaseTool):
         query: str,
         max_results: int = 5,
         timeout_seconds: float = WEB_SEARCH_TIMEOUT_SECONDS,
+        region: str = "tr-tr",
     ) -> dict:
 
         return self.execute(
             query=query,
             max_results=max_results,
             timeout_seconds=timeout_seconds,
+            region=region,
         )
 
     def search_news(
@@ -107,6 +110,7 @@ class WebSearchTool(BaseTool):
         max_results: int = 5,
         timeout_seconds: float = WEB_SEARCH_TIMEOUT_SECONDS,
         timelimit: str = "w",
+        region: str = "wt-wt",
     ) -> dict:
         """Return dated news results for current-event research.
 
@@ -123,7 +127,7 @@ class WebSearchTool(BaseTool):
             timeout = max(0.01, min(WEB_SEARCH_TIMEOUT_SECONDS, requested_timeout))
             raw_results = DDGS(timeout=timeout).news(
                 query,
-                region="wt-wt",
+                region=region,
                 safesearch="moderate",
                 timelimit=timelimit,
                 max_results=max_results,

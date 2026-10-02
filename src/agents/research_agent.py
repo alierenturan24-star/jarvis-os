@@ -21,15 +21,22 @@ _GENERIC_NEWS_TITLE_CUES = (
 )
 
 
-def _corroboration_candidates(record: dict | None, selected: str) -> list[str]:
+def _corroboration_candidates(
+    records: dict | list[dict | None] | tuple[dict | None, ...] | None,
+    selected: str | list[str] | tuple[str, ...],
+) -> list[str]:
     """Return concrete dated headlines, with the selected title first.
 
     Generic news indexes are never story candidates.  The bounded list lets a
     mission move to the next real article when the first headline has only one
     publisher instead of blocking the entire video pipeline.
     """
-    rows = list((record or {}).get("sources", []) or [])
-    ordered = [selected]
+    source_records = list(records) if isinstance(records, (list, tuple)) else [records]
+    selected_titles = list(selected) if isinstance(selected, (list, tuple)) else [selected]
+    rows: list[dict] = []
+    for record in source_records:
+        rows.extend(list((record or {}).get("sources", []) or []))
+    ordered = [str(item or "") for item in selected_titles]
     ordered.extend(
         str(row.get("title") or "").strip()
         for row in rows
@@ -251,8 +258,13 @@ class ResearchAgent(BaseAgent):
                     # ran another generic Swiss-news query.  Each pass now
                     # carries the exact headline to the news backend and moves
                     # on automatically if that story has only one publisher.
+                    # Seven-day results are fresher and should be tried before
+                    # the widened 30-day batch.  The previous version discarded
+                    # them here, which is why a valid robotaxi lead was never
+                    # among the four corroboration attempts in the live log.
                     candidates = _corroboration_candidates(
-                        retry_record, retry_opportunity.selected_topic,
+                        [record, retry_record],
+                        [opportunity.selected_topic, retry_opportunity.selected_topic],
                     )
                     for candidate_number, selected in enumerate(candidates, start=1):
                         window = "son 30 gün" if allow_window_fallback else "son 7 gün"
@@ -270,7 +282,7 @@ class ResearchAgent(BaseAgent):
                         verification_record = self.manager.knowledge.find_research(verification_query)
                         combined_sources: list[dict] = []
                         seen_urls: set[str] = set()
-                        for source_record in (retry_record, verification_record):
+                        for source_record in (record, retry_record, verification_record):
                             for item in (source_record or {}).get("sources", []) or []:
                                 url = str(item.get("canonical_url") or item.get("url") or "").strip()
                                 if not url or url in seen_urls:

@@ -90,7 +90,24 @@ class WorkforceManager:
                     # persisted before "limits" existed in this schema stays without it, so
                     # assert_youtube_capacity's channel["limits"] KeyErrors on every real
                     # dispatch for that channel. Backfill it onto pre-existing records too.
-                    channels[channel_id].setdefault("limits", dict(_DEFAULT_CHANNEL_LIMITS))
+                    channel = channels.get(channel_id)
+                    if not isinstance(channel, dict):
+                        channel = channels[channel_id] = {"channel_id": channel_id}
+                    channel.setdefault("market", market)
+                    channel.setdefault("language", language)
+                    channel.setdefault("identity", {"operator_worker_id": wid, "status": "NOT_CONNECTED",
+                                                     "target_audience": "children 5-9"})
+                    channel.setdefault("limits", dict(_DEFAULT_CHANNEL_LIMITS))
+                    if not isinstance(channel.get("youtube_learning"), dict):
+                        channel["youtube_learning"] = _youtube_memory()
+                    else:
+                        defaults = _youtube_memory()
+                        for key, value in defaults.items():
+                            if channel["youtube_learning"].get(key) is None:
+                                channel["youtube_learning"][key] = copy.deepcopy(value)
+                    channel.setdefault("production_queue", [])
+                    channel.setdefault("schedule", {})
+                    channel.setdefault("storage", {"retained": [], "deleted": []})
             state.setdefault("account_assignments", [])
             state.setdefault("publications", [])
         self.store.update(mutate)

@@ -322,7 +322,7 @@ def _probe_dimensions(path: Path, ffprobe: str) -> tuple[int, int] | None:
         )
         stream = json.loads(result.stdout)["streams"][0]
         return int(stream["width"]), int(stream["height"])
-    except (OSError, ValueError, KeyError, IndexError, subprocess.TimeoutExpired):
+    except (OSError, ValueError, TypeError, KeyError, IndexError, subprocess.TimeoutExpired):
         return None
 
 

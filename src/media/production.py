@@ -834,9 +834,12 @@ class GeneralProductionBuilder:
         for attempt, query in enumerate(queries, 1):
             if stage_sink is not None:
                 stage_sink["last_stage"] = f"licensed_video_scene_{index}_search_{attempt}_of_{len(queries)}"
-            candidate = provider.generate_video_clip(query)
+            try:
+                candidate = provider.generate_video_clip(query)
+            except Exception:
+                candidate = None
             result = candidate
-            if candidate.success and candidate.content_bytes:
+            if candidate is not None and candidate.success and candidate.content_bytes:
                 break
         if result is None:
             return None, None
@@ -931,7 +934,20 @@ class GeneralProductionBuilder:
                 # (possibly outer-timed-out) background thread keeps
                 # mutating, so it survives even if this call never returns.
                 stage_sink["last_stage"] = f"{TEXT_TO_IMAGE}_scene_{index}_via_{profile.provider_id}/{profile.model_id}"
-            result = provider.generate_image(scene.visual_description, width=1024, height=1344)
+            try:
+                result = provider.generate_image(scene.visual_description, width=1024, height=1344)
+            except Exception as error:
+                history.record(task_type=TEXT_TO_IMAGE, provider=profile.provider_id, success=False,
+                               fallback_used=fallback_used, duration_seconds=0.0,
+                               cost_class=profile.cost_class)
+                attempted[-1] = f"{profile.provider_id} ({type(error).__name__})"
+                continue
+            if result is None:
+                history.record(task_type=TEXT_TO_IMAGE, provider=profile.provider_id, success=False,
+                               fallback_used=fallback_used, duration_seconds=0.0,
+                               cost_class=profile.cost_class)
+                attempted[-1] = f"{profile.provider_id} (empty result)"
+                continue
             history.record(task_type=TEXT_TO_IMAGE, provider=profile.provider_id, success=result.success,
                             fallback_used=fallback_used, duration_seconds=result.duration_seconds or 0.0,
                             cost_class=result.cost_class)

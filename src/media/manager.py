@@ -132,10 +132,19 @@ class MediaManager:
 
     def set_channel_scope(self, channel_id: str) -> None:
         from src.control_center.store import ControlCenterStore
-        from src.media.channel_store import ChannelScopedStore
+        from src.media.channel_store import ChannelScopedStore, normalize_youtube_learning
         base = ControlCenterStore()
-        channel = base.snapshot()["channels"][channel_id]
-        self.channel_id, self.channel_market, self.channel_language = channel_id, channel["market"], channel["language"]
+        channel = (base.snapshot().get("channels") or {}).get(channel_id)
+        if not isinstance(channel, dict):
+            raise KeyError(f"YouTube channel state missing for {channel_id!r}")
+        normalized = normalize_youtube_learning(channel.get("youtube_learning"))
+        if channel.get("youtube_learning") != normalized:
+            base.update(lambda state: state["channels"][channel_id].update(youtube_learning=normalized))
+            channel["youtube_learning"] = normalized
+        self.channel_id = channel_id
+        self.channel_market = str(channel.get("market") or "Switzerland")
+        language = str(channel.get("language") or "tr-TR")
+        self.channel_language = "tr-TR" if language == "CHANNEL_CONFIG" else language
         self.learning = YouTubeLearningAgent(ChannelScopedStore(base, channel_id))
         self.learning.refresh_character_memory()
 

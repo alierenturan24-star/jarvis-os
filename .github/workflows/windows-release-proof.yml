@@ -70,6 +70,7 @@ jobs:
         shell: powershell
         run: |
           .\.venv\Scripts\python.exe -m pytest -q `
+            src/media/tests/test_legacy_state_recovery.py `
             src/media/tests/test_local_news_card_fallback.py `
             src/media/tests/test_licensed_video_remix.py `
             src/mission/tests/test_swiss_video_pipeline_round7.py `

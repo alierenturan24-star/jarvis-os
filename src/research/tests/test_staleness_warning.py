@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from src.research.collector import ResearchCollector
 from src.research.manager import (
     ResearchManager,
@@ -65,6 +67,8 @@ class TestStalenessWarning:
 
 
 def test_swiss_web_snippet_european_dates_and_multilingual_anchor_are_valid_evidence():
+    recent = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%d.%m.%Y")
+    newer = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%d.%m.%Y")
     opportunity = build_selected_opportunity(
         topic=("İsviçre son 7 gün aynı haberi doğrulayan en az iki bağımsız kaynakla "
                "güncel haber"),
@@ -75,12 +79,12 @@ def test_swiss_web_snippet_european_dates_and_multilingual_anchor_are_valid_evid
             {
                 "title": "Arrivano i robotaxi anche in Svizzera nel Canton Zurigo",
                 "url": "https://www.cdt.ch/news/robotaxi",
-                "summary": "26.09.2026 · Robotaxi nel Canton Zurigo.",
+                "summary": f"{recent} · Robotaxi nel Canton Zurigo.",
             },
             {
                 "title": "Ab jetzt ist das erste Robotaxi der Schweiz im Einsatz",
                 "url": "https://www.srf.ch/news/schweiz/robotaxi",
-                "summary": "28.09.2026 · Das Robotaxi fährt im Zürcher Furttal.",
+                "summary": f"{newer} · Das Robotaxi fährt im Zürcher Furttal.",
             },
         ],
     )

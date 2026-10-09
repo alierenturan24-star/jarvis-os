@@ -43,26 +43,47 @@ class YouTubeLearningAgent:
                 continue
             imported.append((identity, manifest.get("successful_poses", []), manifest.get("failed_poses", [])))
         def persist(state: dict) -> None:
-            characters = state.setdefault("youtube_learning", {}).setdefault("characters", {})
+            learning = state.setdefault("youtube_learning", {})
+            if not isinstance(learning, dict):
+                learning = state["youtube_learning"] = {}
+            characters = learning.get("characters")
+            if not isinstance(characters, dict):
+                characters = learning["characters"] = {}
             for identity, successes, failures in imported:
                 current = characters.setdefault(identity["name"], dict(identity))
                 current.update({key: value for key, value in identity.items() if value not in (None, "", [])})
                 current["successful_poses"] = list(dict.fromkeys(current.get("successful_poses", []) + successes))
                 current["failed_poses"] = list(dict.fromkeys(current.get("failed_poses", []) + failures))
-            for record in state.setdefault("youtube_learning", {}).setdefault("productions", []):
-                if record.get("creative", {}).get("main_character_identity") in (None, "", "Leni") and "Leni" in characters:
-                    record["creative"]["main_character_identity"] = "Leni"
-                    record["quality"]["character_consistency"] = max(
-                        record["quality"].get("character_consistency", 0), 94)
+            productions = learning.get("productions")
+            if not isinstance(productions, list):
+                productions = learning["productions"] = []
+            for record in productions:
+                if not isinstance(record, dict):
+                    continue
+                creative = record.get("creative")
+                if not isinstance(creative, dict):
+                    creative = record["creative"] = {}
+                quality = record.get("quality")
+                if not isinstance(quality, dict):
+                    quality = record["quality"] = {}
+                if creative.get("main_character_identity") in (None, "", "Leni") and "Leni" in characters:
+                    creative["main_character_identity"] = "Leni"
+                    quality["character_consistency"] = max(
+                        int(quality.get("character_consistency", 0) or 0), 94)
         if imported:
             self.store.update(persist)
         return len(imported)
 
     def production_plan(self, goal: str) -> dict[str, Any]:
         memory = self.store.snapshot().get("youtube_learning", {})
-        history = memory.get("productions", [])
+        if not isinstance(memory, dict):
+            memory = {}
+        raw_history = memory.get("productions")
+        history = [row for row in raw_history if isinstance(row, dict)] if isinstance(raw_history, list) else []
+        raw_changes = memory.get("next_production_changes")
+        changes = raw_changes if isinstance(raw_changes, list) else []
         return {"based_on_productions": [r.get("production_id") for r in history[-5:]],
-                "required_changes": list(memory.get("next_production_changes", []))[:6],
+                "required_changes": list(changes)[:6],
                 "avoid_exact_reuse": [r.get("fingerprints", {}) for r in history[-20:]],
                 "bounded_exploration": {"max_variations": 3, "dimensions": ["hook", "story_structure",
                     "scene_pacing", "poses", "camera_motion", "motion_method", "narration_style",

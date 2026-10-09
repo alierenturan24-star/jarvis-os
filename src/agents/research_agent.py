@@ -189,6 +189,12 @@ class ResearchAgent(BaseAgent):
             "force_refresh": force_refresh,
             "preferred_provider": preferred_provider,
         }
+        if market_context is not None and topic_wants_current_information(query):
+            # A downstream media task needs traceable source rows and a fast
+            # structured handoff, not a second long provider cascade.  The
+            # opportunity gate below remains responsible for freshness and
+            # independent-source validation.
+            research_kwargs["provider_free_summary"] = True
         if excluded_topics:
             research_kwargs["exclude_topics"] = excluded_topics
         if requested_name:
@@ -235,6 +241,7 @@ class ResearchAgent(BaseAgent):
                     force_refresh=True,
                     preferred_provider=preferred_provider,
                     exclude_topics=excluded_topics,
+                    provider_free_summary=True,
                 )
                 retry_record = self.manager.knowledge.find_research(retry_query)
                 retry_opportunity = build_selected_opportunity(
@@ -278,6 +285,7 @@ class ResearchAgent(BaseAgent):
                             force_refresh=True,
                             preferred_provider=preferred_provider,
                             exclude_topics=[],
+                            provider_free_summary=True,
                         )
                         verification_record = self.manager.knowledge.find_research(verification_query)
                         combined_sources: list[dict] = []

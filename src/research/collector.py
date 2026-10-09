@@ -319,6 +319,12 @@ class ResearchCollector:
         for search in searches:
             remaining = None if deadline is None else deadline - time.monotonic()
             if remaining is not None and remaining <= 0:
+                # A bounded current-news pass may already have enough real
+                # rows from earlier channels. Preserve that evidence instead
+                # of raising and making ResearchManager discard the entire
+                # completed portion of the search.
+                if collected:
+                    break
                 raise TimeoutError("RESEARCH_CYCLE_MAX_RUNTIME_EXCEEDED")
             search_method = (
                 self.web.search_videos if search.get("video")

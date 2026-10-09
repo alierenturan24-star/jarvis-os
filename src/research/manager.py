@@ -7,7 +7,16 @@ from src.knowledge.knowledge_base import KnowledgeBase
 from src.research.collector import MAX_SEARCH_STEPS, ResearchCollector
 from src.research.report_builder import ReportBuilder
 from src.research.summarizer import Summarizer
-from src.utils.llm_utils import is_llm_failure
+from src.utils.llm_utils import is_llm_failure, source_fallback
+
+
+# A current-media task can perform the primary pass, a different-query retry,
+# and up to four same-story checks inside one 210-second department budget.
+# Keep every provider-free source pass bounded so the whole series cannot
+# consume that outer timeout. Partial results are retained by ResearchCollector.
+PROVIDER_FREE_SOURCE_TIMEOUT_SECONDS = min(
+    25.0, Settings.RESEARCH_PROVIDER_TIMEOUT_SECONDS * 2,
+)
 
 # Mission repair (real Swiss-Insider-Shorts follow-up evidence, item 5): a
 # real mission asking for "today's"/"current" opportunity got back a
@@ -72,6 +81,7 @@ class ResearchManager:
         self, topic: str, force_refresh: bool = False,
         preferred_provider: str | None = None, evidence_only: bool = False,
         exclude_topics: list[str] | None = None,
+        provider_free_summary: bool = False,
     ) -> str:
         topic = topic.strip()
         if not topic:
@@ -110,7 +120,12 @@ class ResearchManager:
         # passed, so a slow early search could silently eat into what the
         # outer department timeout assumed was available for the
         # summarization call after it).
-        deadline = time.monotonic() + Settings.RESEARCH_PROVIDER_TIMEOUT_SECONDS * MAX_SEARCH_STEPS
+        collection_budget = (
+            PROVIDER_FREE_SOURCE_TIMEOUT_SECONDS
+            if provider_free_summary
+            else Settings.RESEARCH_PROVIDER_TIMEOUT_SECONDS * MAX_SEARCH_STEPS
+        )
+        deadline = time.monotonic() + collection_budget
         try:
             results = self.collector.collect(topic=topic, max_results_per_source=3, deadline=deadline)
         except TimeoutError:
@@ -118,12 +133,26 @@ class ResearchManager:
         if not results:
             return "Araştırma sonucu bulunamadı. İnternet bağlantısını kontrol et."
 
-        summarize_kwargs = {
-            "topic": topic, "results": results, "preferred_provider": preferred_provider,
-        }
-        if exclude_topics:
-            summarize_kwargs["exclude_topics"] = exclude_topics
-        summary = self.summarizer.summarize(**summarize_kwargs)
+        if provider_free_summary:
+            # Current-news media missions already have factual source rows at
+            # this point.  Waiting for the normal provider fallback chain
+            # (Claude Code -> configured cloud/local providers) can consume
+            # the entire department budget and discard those usable rows.
+            # Build the same structured, non-generative fallback that
+            # Summarizer uses after a provider failure.  Freshness,
+            # independent-source and market checks are still enforced by
+            # build_selected_opportunity in ResearchAgent; this only removes
+            # an unnecessary LLM wait and never invents a fact.
+            summary = source_fallback(
+                topic, results, limit=10, exclude_topics=exclude_topics,
+            )
+        else:
+            summarize_kwargs = {
+                "topic": topic, "results": results, "preferred_provider": preferred_provider,
+            }
+            if exclude_topics:
+                summarize_kwargs["exclude_topics"] = exclude_topics
+            summary = self.summarizer.summarize(**summarize_kwargs)
         if is_llm_failure(summary):
             return "Araştırma kaynakları toplandı ancak güvenilir bir sentez üretilemedi; bilgi kalıcı hafızaya yazılmadı."
         report_path = self.report_builder.save(topic=topic, summary=summary, results=results)

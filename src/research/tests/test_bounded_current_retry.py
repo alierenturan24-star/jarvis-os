@@ -18,9 +18,11 @@ def test_current_media_research_retries_once_with_different_query_shape():
         def __init__(self):
             self.knowledge = _Knowledge()
             self.calls = []
+            self.kwargs = []
 
         def research(self, topic, **kwargs):
             self.calls.append(topic)
+            self.kwargs.append(kwargs)
             if "alternative_source_pass" in topic.casefold():
                 self.knowledge.rows[topic] = {
                     "summary": "İsviçre'de güncel enerji tasarrufu kararı kısa video için seçildi.",
@@ -52,6 +54,7 @@ def test_current_media_research_retries_once_with_different_query_shape():
     output = agent.execute(task)
 
     assert len(agent.manager.calls) == 2
+    assert all(call["provider_free_summary"] is True for call in agent.manager.kwargs)
     assert "ALTERNATIVE_SOURCE_PASS" in agent.manager.calls[1]
     assert "OTOMATİK GÜNCEL KAYNAK YENİDEN DENEMESİ" in output
     assert task.metadata["report"]["sufficient"] is True
@@ -368,6 +371,7 @@ def test_media_research_passes_recent_video_topics_as_exclusions(monkeypatch):
     agent.execute(task)
 
     assert manager.kwargs["exclude_topics"] == ["Eski oylama konusu"]
+    assert manager.kwargs["provider_free_summary"] is True
 
 
 def test_failed_render_selected_topic_is_still_excluded_next_time(tmp_path, monkeypatch):

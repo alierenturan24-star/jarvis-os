@@ -166,6 +166,14 @@ def infer_completion_requirements(text: str, departments: Iterable[str] = ()) ->
     video_production = has_youtube_production_intent(text)
     if video_production:
         requirements.append(_artifact_requirement(ArtifactType.VIDEO))
+        if any(cue in lowered for cue in (
+            "public domain", "cc0", "cc by", "wikimedia commons",
+            "yeniden kullanıma açık", "yeniden kullanima acik",
+        )):
+            requirements.append(CompletionRequirement(
+                "youtube_evidence", "media_license_provenance",
+                "medya lisans/provenance kanıtı eksik", "youtube",
+            ))
 
     # Generic "Video üret" keeps the established artifact-only contract.
     # The richer evidence contract is for an explicit YouTube production.
@@ -347,6 +355,9 @@ def evaluate_goal_completion(mission) -> GoalCompletion:
                 "technical_validation": artifact.get("technical_validation") is True,
                 "semantic_validation": artifact.get("semantic_validation") is True and quality.get("production_readiness") is True,
                 "production_provenance": bool(artifact.get("production_provenance")),
+                "media_license_provenance": _valid_media_license_provenance(
+                    artifact.get("scene_provenance")
+                ),
                 "story_coverage": len(creative.get("story_beats", [])) >= 4 and creative.get("scene_count", 0) >= 4,
                 "motion_evidence": visual.get("body_motion") is True and (visual.get("body_motion_ratio") or 0) >= 1.8,
                 "audio_evidence": audio.get("silence_detected") is False and audio.get("peak_db") is not None,
@@ -609,3 +620,27 @@ def _has_evidence(report) -> bool:
         if key not in {"duration_seconds", "category"} and value not in (None, "", [], {}, ())
     }
     return bool(meaningful)
+
+
+def _valid_media_license_provenance(rows) -> bool:
+    if not isinstance(rows, list) or not rows:
+        return False
+    successful = [row for row in rows if isinstance(row, dict) and row.get("success") is True]
+    if not successful:
+        return False
+    for row in successful:
+        evidence = row.get("quality_evidence")
+        if not isinstance(evidence, dict):
+            return False
+        license_name = str(evidence.get("license") or "").casefold().replace("_", " ")
+        if evidence.get("external_media_used") is False:
+            if license_name != "original" or evidence.get("copyright_safe") is not True:
+                return False
+            continue
+        allowed = (
+            "public domain" in license_name or "cc0" in license_name
+            or ("cc by" in license_name and "sa" not in license_name and "nc" not in license_name)
+        )
+        if not allowed or not str(evidence.get("source_url") or "").strip():
+            return False
+    return True

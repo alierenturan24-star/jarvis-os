@@ -131,6 +131,23 @@ class TestUnavailableProviderNeverSilentlySelected:
 
 
 class TestRegistryFallbackCandidates:
+    def test_free_only_route_never_calls_paid_aiml_fallback(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        manager = ProviderManager()
+        ollama = _FakeProvider(response="Ollama zaman aşımına uğradı.")
+        aiml = _FakeProvider(response="ücretli cevap")
+        gemini = _FakeProvider(available=False)
+        manager._providers = {"ollama": ollama, "aiml": aiml, "gemini": gemini}
+
+        result = manager.route_and_generate(
+            "ücretsiz video planı", task_type="planning",
+            allowed_cost_classes=("free", "plan"),
+        )
+
+        assert result.success is False
+        assert result.attempted_providers == ("ollama",)
+        assert aiml.calls == 0
+
     def test_rate_limit_response_falls_back_and_exposes_attempt_chain(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         manager = ProviderManager()

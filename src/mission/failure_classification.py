@@ -53,6 +53,7 @@ _CLASS_MARKERS: dict[FailureClass, tuple[str, ...]] = {
     FailureClass.EVIDENCE_INSUFFICIENT: (
         "research_gap", "insufficient_evidence", "güncellik tarihli kaynaklarla doğrulanamadı",
         "tarihli ve istenen pazara ait güvenilir kaynak doğrulanamadı",
+        "blocked_unsupported_claims",
     ),
     FailureClass.QUALITY_INSUFFICIENT: ("kalite yetersiz",),
     # Genel yakalayıcı -- yukarıdaki DAHA SPESİFİK sınıflardan hiçbiri

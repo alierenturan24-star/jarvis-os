@@ -174,6 +174,7 @@ class YouTubeLearningAgent:
             "artifact": {"final_video_path": str(artifact.resolve()), "thumbnail_path": evidence.get("thumbnail_path"),
                 "technical_validation": check.technical_passed, "semantic_validation": check.semantic_passed,
                 "production_provenance": evidence.get("production_backend"),
+                "scene_provenance": evidence.get("scene_provenance", []),
                 "file_size": artifact.stat().st_size if artifact.is_file() else 0,
                 "codec": evidence.get("codec", "h264"), "fps": evidence.get("fps", 25)},
             "quality": {**scores, "production_readiness": check.passed and not exact_reuse and not failures},

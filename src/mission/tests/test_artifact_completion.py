@@ -338,3 +338,42 @@ def test_recovery_report_uses_goal_evidence_after_false_completed_media(tmp_path
     assert "NE KALDI? hiçbir şey" not in section
     assert "evidence_insufficient" in section
     assert "ŞU ANA KADAR NE TAMAMLANDI? hiçbiri" in section
+
+
+def test_requested_cc_license_requires_scene_level_provenance(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    video = _write(tmp_path / "licensed.mp4")
+    monkeypatch.setattr(
+        "src.media.quality.validate_media_goal_artifact",
+        lambda path, goal="": SimpleNamespace(passed=True),
+    )
+    title = "Public Domain veya CC BY görüntülerle video hazırla; yayınlama."
+    media = _completed_task("media", metadata={
+        "artifact_path": video,
+        "artifact_quality_validation": {"passed": True, "artifact_path": video},
+        "youtube_production": {"artifact": {"final_video_path": video}},
+    })
+    mission = _mission(title, [media])
+
+    assert evaluate_goal_completion(mission).satisfied is False
+    assert "media_license_provenance" in {
+        item.requirement.name for item in evaluate_goal_completion(mission).missing
+    }
+
+    media.metadata["youtube_production"]["artifact"]["scene_provenance"] = [{
+        "scene_id": "scene-1", "success": True,
+        "quality_evidence": {
+            "license": "CC BY 4.0",
+            "source_url": "https://commons.wikimedia.org/wiki/File:Example.webm",
+            "license_url": "https://creativecommons.org/licenses/by/4.0/",
+        },
+    }, {
+        "scene_id": "scene-2", "success": True,
+        "quality_evidence": {
+            "license": "original", "copyright_safe": True,
+            "external_media_used": False,
+        },
+    }]
+
+    assert evaluate_goal_completion(mission).satisfied is True

@@ -79,6 +79,7 @@ jobs:
             src/research/tests/test_manager_timeout.py `
             src/research/tests/test_staleness_warning.py `
             src/research/tests/test_summarizer_provider_free_fallback.py `
+            src/providers/tests/test_provider_manager_routing.py `
             src/mission/tests/test_swiss_insider_mission_repair_round5.py `
             src/control_center/tests/test_remote_control_v1.py `
             src/control_center/tests/test_finance_autonomous_cycle.py `

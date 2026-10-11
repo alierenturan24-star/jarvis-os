@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from src.knowledge.knowledge_base import KnowledgeBase
-from src.media.manager import MediaManager
+from src.media.manager import MediaManager, _unsupported_research_claims
 from src.media.quality import _check_narrative_relevance
 from src.media.renderer import find_edge_tts
 from src.research.collector import ResearchCollector
@@ -303,3 +303,93 @@ def test_cross_language_swiss_goal_relevance_is_not_falsely_rejected():
 
     assert result["passed"] is True
     assert result["overlap_ratio"] >= 0.15
+
+
+def test_live_pope_plan_rejects_claims_missing_from_source_snippets():
+    opportunity = {
+        "selected_topic": "Knoten in der Lunge: Papst wird operiert",
+        "supporting_evidence": [{
+            "title": "Papst wird wegen Knoten in der Lunge operiert",
+            "summary": "Der Knoten wurde früh entdeckt; eine Operation ist angekündigt.",
+        }],
+    }
+    plan = (
+        "İsviçre'den son dakika. Kötü hücre erken bulundu. Sağlık durumu stabil. "
+        "Doktorlar operasyonun başarılı geçmesini bekliyor. Erken teşhis hayat kurtardı. "
+        "Tüm dünyadan dualar geliyor."
+    )
+
+    unsupported = _unsupported_research_claims(plan, opportunity)
+
+    assert set(unsupported) == {
+        "kanser/kötü hücre", "sağlık durumunun stabil olduğu",
+        "doktorların başarı beklentisi", "hayat kurtardığı",
+        "dünya çapında dua/tepki", "olayın İsviçre kaynaklı olduğu",
+    }
+
+
+def test_media_manager_blocks_unsupported_claims_after_failed_correction(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    calls = []
+    bad_plan = """SENARYO
+İsviçre'den son dakika. Papa'nın sağlık durumu stabil ve erken teşhis hayat kurtardı.
+
+SAHNELER
+Sahne 1 (~15 sn): Anlatım: Sağlık durumu stabil | Görsel: Papa | Ekran yazısı: Stabil
+Sahne 2 (~15 sn): Anlatım: Erken teşhis hayat kurtardı | Görsel: Akciğer | Ekran yazısı: Hayat kurtardı
+Sahne 3 (~15 sn): Anlatım: Ameliyat planlandı | Görsel: Hastane | Ekran yazısı: Ameliyat
+Sahne 4 (~15 sn): Anlatım: Haber doğrulandı | Görsel: Kaynak | Ekran yazısı: Kaynaklı
+
+SESLENDİRME PLANI
+Türkçe anlatım.
+
+GÖRSEL/VİDEO PLANI
+Özgün kartlar.
+
+ALTYAZI PLANI
+Türkçe altyazı.
+
+THUMBNAIL FİKRİ
+Papa portresi.
+
+BAŞLIK
+Papa'nın Ameliyatı
+
+AÇIKLAMA
+Kaynaklı haber.
+
+ETİKETLER
+Papa, sağlık, haber"""
+
+    class _Manager:
+        def get(self, name):
+            return None
+
+        def route_and_generate(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                output=bad_plan, success=True, fallback_used=False,
+                chosen_provider="ollama", provider_used="ollama",
+            )
+
+    manager = MediaManager()
+    manager.router = SimpleNamespace(manager=_Manager())
+    output = manager.plan(
+        "Knoten in der Lunge: Papst wird operiert", produce_artifact=True,
+        request_text="Public Domain görüntülerle Türkçe video hazırla",
+        research_opportunity={
+            "selected_topic": "Knoten in der Lunge: Papst wird operiert",
+            "location_or_market": "İsviçre", "why_current": "3 kaynak",
+            "supporting_evidence": [{
+                "title": "Papst wird wegen Knoten operiert",
+                "summary": "Der Knoten wurde früh entdeckt; die Operation ist angekündigt.",
+                "url": "https://www.srf.ch/news/papst", "published_at": "2026-10-11",
+            }], "format_references": [],
+        },
+        free_only=True,
+    )
+
+    assert output.startswith("VIDEO RENDER: BLOCKED_UNSUPPORTED_CLAIMS")
+    assert manager.last_artifact_path == ""
+    assert len(calls) == 2
+    assert all(call["allowed_cost_classes"] == ("free", "plan") for call in calls)

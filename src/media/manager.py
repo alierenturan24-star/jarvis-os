@@ -82,6 +82,59 @@ def _research_domain_drift(plan_text: str, opportunity: dict | None) -> str | No
     return None
 
 
+def _unsupported_research_claims(plan_text: str, opportunity: dict | None) -> tuple[str, ...]:
+    """Reject concrete claims the selected source evidence never makes.
+
+    This is intentionally a narrow deterministic safety net for observed
+    news/health hallucinations.  It does not try to fact-check the world; it
+    only compares high-risk claims in the generated plan with the already
+    collected titles/snippets that are the production's sole factual basis.
+    """
+    if not opportunity:
+        return ()
+    plan = (plan_text or "").casefold()
+    evidence = _research_evidence_text(opportunity).casefold()
+    claim_families = (
+        ("kanser/kötü hücre", ("kanser", "kötü hücre", "kotu hucre"),
+         ("kanser", "kötü hücre", "kotu hucre", "cancer", "malign")),
+        ("sağlık durumunun stabil olduğu", ("durumu stabil", "sağlık durumu stabil"),
+         ("durumu stabil", "sağlık durumu stabil", "stable condition", "état stable", "stabile")),
+        ("doktorların başarı beklentisi", ("doktorlar operasyonun başarılı", "başarıyla geçmesi bekleniyor"),
+         ("doktorlar operasyonun başarılı", "başarıyla geçmesi bekleniyor", "expected to be successful")),
+        ("hayat kurtardığı", ("hayat kurtardı", "hayat kurtarır"),
+         ("hayat kurtardı", "hayat kurtarır", "saved his life", "rettete sein leben")),
+        ("dünya çapında dua/tepki", ("tüm dünyadan dualar", "dünyadan dualar"),
+         ("tüm dünyadan dualar", "dünyadan dualar", "prayers from around the world")),
+    )
+    unsupported = [
+        label for label, plan_cues, evidence_cues in claim_families
+        if any(cue in plan for cue in plan_cues)
+        and not any(cue in evidence for cue in evidence_cues)
+    ]
+    # A Swiss publisher is not evidence that an international event happened
+    # "from Switzerland".  Keep target-market framing separate from location.
+    if any(cue in plan for cue in ("sviçre'den", "svicre'den", "isviçreden", "isvicreden")) and not any(
+        cue in evidence for cue in ("isviçre", "schweiz", "suisse", "svizzera", "switzerland")
+    ):
+        unsupported.append("olayın İsviçre kaynaklı olduğu")
+    return tuple(unsupported)
+
+
+def _license_evidence_lines(record: dict | None) -> list[str]:
+    rows = (((record or {}).get("artifact") or {}).get("scene_provenance") or [])
+    lines: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict) or row.get("success") is not True:
+            continue
+        evidence = row.get("quality_evidence") if isinstance(row.get("quality_evidence"), dict) else {}
+        license_name = str(evidence.get("license") or "belirtilmedi")
+        source = str(evidence.get("source_url") or "yerel özgün üretim")
+        lines.append(
+            f"- {row.get('scene_id')}: {row.get('provider')} · {license_name} · {source}"
+        )
+    return lines
+
+
 def _looks_predominantly_english(text: str) -> bool:
     words = re.findall(r"[a-zA-ZçğıöşüÇĞİÖŞÜ]+", text or "")
     if not words:
@@ -173,6 +226,14 @@ class MediaManager:
             prior = next((row for row in reversed(history)
                           if row.get("original_goal") == topic
                           and row.get("quality", {}).get("production_readiness") is True
+                          and not _unsupported_research_claims(
+                              " ".join((
+                                  str((row.get("creative") or {}).get("script") or ""),
+                                  str((row.get("titles") or {}).get("selected") or ""),
+                                  str((row.get("titles") or {}).get("description") or ""),
+                              )), research_opportunity,
+                          )
+                          and (not free_only or _license_evidence_lines(row))
                           and Path(row.get("artifact", {}).get("final_video_path", "")).is_file()), None)
             if prior:
                 self.last_artifact_path = prior["artifact"]["final_video_path"]
@@ -369,6 +430,7 @@ Kurallar:
         # ÜCRETSİZ kazanır, yeni bir fallback mantığı İCAT EDİLMEDİ.
         route_result = self.router.manager.route_and_generate(
             prompt=prompt, task_type="planning", preferred_provider=provider_name,
+            allowed_cost_classes=("free", "plan") if free_only else None,
         )
         plan_text = route_result.output
 
@@ -380,6 +442,7 @@ Kurallar:
                     "yeniden yaz. Yalnızca düzeltilmiş planı döndür.\n\n" + plan_text
                 ),
                 task_type="planning", preferred_provider=route_result.provider_used,
+                allowed_cost_classes=("free", "plan") if free_only else None,
             )
             if correction.success and not is_llm_failure(correction.output):
                 plan_text = correction.output
@@ -417,6 +480,7 @@ Kurallar:
                     + "\n\nYANLIŞ PLAN:\n" + plan_text
                 ),
                 task_type="planning", preferred_provider=route_result.provider_used,
+                allowed_cost_classes=("free", "plan") if free_only else None,
             )
             if correction.success and not is_llm_failure(correction.output):
                 plan_text = correction.output
@@ -426,6 +490,34 @@ Kurallar:
                 return (
                     "VIDEO RENDER: BLOCKED_RESEARCH_DRIFT\n"
                     f"{drift_reason} Yanlış bilgiyle video oluşturulmadı; hiçbir şey yayınlanmadı."
+                )
+
+        unsupported_claims = _unsupported_research_claims(plan_text, research_opportunity)
+        if unsupported_claims:
+            correction = self.router.manager.route_and_generate(
+                prompt=(
+                    "Aşağıdaki haber videosu planında kaynakların söylemediği iddialar var: "
+                    + ", ".join(unsupported_claims)
+                    + ". Bu iddiaları tamamen çıkar. Yeni olgu, sağlık yorumu veya yer bilgisi ekleme; "
+                    "dokuz bölüm başlığını ve Türkçe dili koru. Yalnızca düzeltilmiş planı döndür.\n\n"
+                    "DOĞRULANMIŞ KAYNAK KANITI:\n"
+                    + _research_evidence_text(research_opportunity)[:5000]
+                    + "\n\nDÜZELTİLECEK PLAN:\n" + plan_text
+                ),
+                task_type="planning", preferred_provider=route_result.provider_used,
+                allowed_cost_classes=("free", "plan") if free_only else None,
+            )
+            if correction.success and not is_llm_failure(correction.output):
+                plan_text = _normalize_plan_headings(correction.output)
+                route_result = correction
+            unsupported_claims = _unsupported_research_claims(plan_text, research_opportunity)
+            if unsupported_claims:
+                if stage_sink is not None:
+                    stage_sink["last_stage"] = "unsupported_claims_stop"
+                return (
+                    "VIDEO RENDER: BLOCKED_UNSUPPORTED_CLAIMS\n"
+                    "Kaynakların doğrulamadığı ifadeler: " + ", ".join(unsupported_claims)
+                    + ". Yanlış bilgiyle video oluşturulmadı; hiçbir şey yayınlanmadı."
                 )
 
         if route_result.fallback_used:
@@ -544,12 +636,19 @@ Kurallar:
             if self.last_artifact_path else
             "Gerçek video artifact üretilemedi; hiçbir şey YouTube'a yüklenmedi."
         )
+        license_block = ""
+        if self.last_artifact_path:
+            lines = _license_evidence_lines(self.last_production_record)
+            license_block = (
+                "\n\nMEDYA LİSANS KANITI\n" + "\n".join(lines)
+                if lines else "\n\nMEDYA LİSANS KANITI\nEKSİK"
+            )
         return (
             f"YouTube içerik planı tamamlandı (hedef: {duration_seconds} sn).\n\n"
             f"{plan_text}\n\n"
             f"KALİTE KONTROL\n{quality.summary}\n\n"
             f"ORTAM DURUMU\n{capability_note}\n\n{production_note}\n\n"
-            f"Rapor kaydedildi:\n{report_path}{artifact_block}"
+            f"Rapor kaydedildi:\n{report_path}{artifact_block}{license_block}"
         )
 
     def _produce_with_bounded_repair(

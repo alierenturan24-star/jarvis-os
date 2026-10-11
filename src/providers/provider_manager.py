@@ -230,6 +230,7 @@ class ProviderManager:
         system: str | None = None,
         model_name: str | None = None,
         preferred_provider: str | None = None,
+        allowed_cost_classes: tuple[str, ...] | None = None,
     ) -> RouteResult:
         """Görev türüne göre provider seçer ve çalıştırır. Seçilen provider
         başarısız olursa kullanılabilir profil alternatiflerini birer kez
@@ -265,7 +266,9 @@ class ProviderManager:
         else:
             chosen, reason = self.choose_provider_for_task(task_type)
 
-        candidates = self._route_candidates(task_type, chosen)
+        candidates = self._route_candidates(
+            task_type, chosen, allowed_cost_classes=allowed_cost_classes,
+        )
         started = time.monotonic()
         output = "Kullanılabilir yapay zekâ sağlayıcısı bulunamadı."
         provider_used = chosen
@@ -308,9 +311,13 @@ class ProviderManager:
             attempted_providers=tuple(attempted),
         )
 
-    def _route_candidates(self, task_type: str, chosen: str) -> list[str]:
+    def _route_candidates(
+        self, task_type: str, chosen: str, *,
+        allowed_cost_classes: tuple[str, ...] | None = None,
+    ) -> list[str]:
         """Kullanılabilir, benzersiz ve sonlu deneme sırası üretir."""
         ordered: list[str | None] = [chosen]
+        cost_task = _COST_TASK_ALIASES.get(task_type, task_type)
         try:
             from src.providers.cost_optimizer import (
                 CostOptimizer,
@@ -319,7 +326,6 @@ class ProviderManager:
                 TASK_COST_PROFILES,
             )
 
-            cost_task = _COST_TASK_ALIASES.get(task_type, task_type)
             profile = TASK_COST_PROFILES.get(cost_task)
             if profile:
                 decision = CostOptimizer(self).decide(cost_task)
@@ -330,6 +336,15 @@ class ProviderManager:
             pass
         ordered.append(FALLBACK_PROVIDER)
 
+        def cost_is_allowed(name: str) -> bool:
+            if allowed_cost_classes is None:
+                return True
+            try:
+                from src.providers.cost_optimizer import CostOptimizer
+                return CostOptimizer.cost_class(name) in set(allowed_cost_classes)
+            except Exception:
+                return False
+
         profile_candidates: list[str] = []
         for name in ordered:
             normalized = self.normalize(name or "")
@@ -339,6 +354,7 @@ class ProviderManager:
                 and normalized not in profile_candidates
                 and provider
                 and provider.is_available()
+                and cost_is_allowed(normalized)
             ):
                 profile_candidates.append(normalized)
 
@@ -353,7 +369,7 @@ class ProviderManager:
                 continue
             if cost_task != TASK_CODING and normalized in PLAN_CLI_PROVIDERS:
                 continue
-            if provider.is_available():
+            if provider.is_available() and cost_is_allowed(normalized):
                 registry_candidates.append(normalized)
 
         def history_score(name: str) -> float:

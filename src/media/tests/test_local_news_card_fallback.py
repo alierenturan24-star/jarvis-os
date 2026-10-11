@@ -159,6 +159,18 @@ def test_local_news_fallback_passes_full_publication_quality_gate(tmp_path, monk
         )
 
     monkeypatch.setattr(GeneralProductionBuilder, "_generate_scene_image", staticmethod(failed_provider))
+
+    def local_audio(root, script, language, voice):
+        target = root / "narration.wav"
+        with wave.open(str(target), "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(16_000)
+            handle.writeframes(b"\x00\x10\x00\xf0" * 8_000 * 16)
+        return target, "local-test-voice", True
+
+    # Regression tests must never disclose their script to Edge/Bing TTS.
+    monkeypatch.setattr("src.media.production.write_narration_audio", local_audio)
     built = GeneralProductionBuilder(output_root=tmp_path / "generated")._build_via_dynamic_provider(
         goal="Malezya'nın Rohingya geri gönderme kararı", parsed=parsed, memory={},
         channel_id="swiss-insider", channel_market="Switzerland", channel_language="tr-TR",

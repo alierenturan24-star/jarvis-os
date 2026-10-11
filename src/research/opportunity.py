@@ -102,10 +102,18 @@ def _parse_published_at(value: Any) -> datetime | None:
     # of ISO/RFC dates (for example ``Opinion18 hours ago``).  Treat these as
     # real dated evidence rather than silently discarding the source.
     normalized = raw.casefold().strip()
-    relative = re.search(r"(\d+)\s*(?:hours?|stunden?|heures?)\s*(?:ago|zuvor|vor)?", normalized)
+    relative = re.search(
+        r"(\d+)\s*(?:hours?|stunden?|heures?|ore|saat)\s*"
+        r"(?:ago|zuvor|vor|fa|önce)?",
+        normalized,
+    )
     if relative:
         return datetime.now(timezone.utc) - timedelta(hours=int(relative.group(1)))
-    relative = re.search(r"(\d+)\s*(?:days?|tage?|jours?)\s*(?:ago|zuvor|vor)?", normalized)
+    relative = re.search(
+        r"(\d+)\s*(?:days?|tage?|jours?|giorni?|gün)\s*"
+        r"(?:ago|zuvor|vor|fa|önce)?",
+        normalized,
+    )
     if relative:
         return datetime.now(timezone.utc) - timedelta(days=int(relative.group(1)))
     # Swiss result snippets commonly expose dates as ``28.09.2026`` or
@@ -185,7 +193,25 @@ def _normalized_distinctive_words(text: str) -> set[str]:
         "isvicre", "switzerland", "schweiz", "suisse", "svizzera",
         "haber", "haberi", "guncel", "bugun", "today", "news",
     }
-    return {word for word in re.findall(r"\w+", normalized) if len(word) >= 4 and word not in generic}
+    aliases = {
+        # Small deterministic cross-language news anchors.  They do not
+        # establish corroboration on their own: the existing gate still
+        # requires two anchors (or one long/numeric anchor), independent
+        # publishers, trusted domains and fresh dates.  They only stop the
+        # same event from looking unrelated merely because SRF/RTS/RSI use
+        # German, French and Italian words for it.
+        "papst": "pope", "pape": "pope", "papa": "pope",
+        "knoten": "nodule", "nodulo": "nodule", "nodule": "nodule",
+        "lunge": "lung", "lung": "lung", "polmone": "lung",
+        "polmonare": "lung", "pulmonaire": "lung",
+        "operiert": "operation", "operato": "operation",
+        "operata": "operation", "operation": "operation", "opere": "operation",
+    }
+    return {
+        aliases.get(word, word)
+        for word in re.findall(r"\w+", normalized)
+        if len(word) >= 4 and word not in generic
+    }
 
 
 def _same_story_evidence(selected_topic: str, evidence: tuple[dict, ...]) -> tuple[dict, ...]:

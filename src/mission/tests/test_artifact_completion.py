@@ -9,7 +9,7 @@ from src.mission.completion import evaluate_goal_completion, infer_completion_re
 from src.mission.department_orchestrator import DepartmentOrchestrator
 from src.mission.models import Mission, MissionStatus, MissionType
 from src.mission.recovery import MissionRecoveryReport, plan_needs_recovery, recover_mission
-from src.mission.report_builder import _recovery_section
+from src.mission.report_builder import _production_ceo_decision, _recovery_section
 from src.strategy.execution_planner import build_self_check
 
 
@@ -284,3 +284,57 @@ def test_q_capability_candidate_survives_from_existing_task_report():
     recover_mission(mission, plan, evolution_collector=EmptyCollector())
 
     assert [item["title"] for item in mission.capability_candidates] == ["kept"]
+
+
+def test_research_gap_cannot_reuse_old_video_as_current_success(tmp_path, monkeypatch):
+    """A stale but technically valid MP4 must not override this run's gate."""
+    from types import SimpleNamespace
+
+    old_video = _write(tmp_path / "old-production.mp4")
+    monkeypatch.setattr(
+        "src.media.quality.validate_media_goal_artifact",
+        lambda path, goal="": SimpleNamespace(passed=True),
+    )
+    media = _completed_task(
+        "media",
+        output=f"RESEARCH_GAP seçilen haber doğrulanamadı\nKanıt: {old_video}",
+        metadata={
+            "artifact_path": old_video,
+            "artifact_quality_validation": {"passed": True, "artifact_path": old_video},
+        },
+    )
+    mission = _mission(
+        "İsviçre için güncel haber bul ve 9:16 kısa video hazırla; yayınlama.",
+        [media], ["research", "media"],
+    )
+
+    completion = evaluate_goal_completion(mission)
+    _, decision, reason, _ = _production_ceo_decision(mission, {"media": media})
+
+    assert completion.satisfied is False
+    assert next(item for item in completion.requirements if item.requirement.name == "video").satisfied is False
+    assert decision != "ONAYLA"
+    assert "gerçek video üretimi" in reason
+
+
+def test_recovery_report_uses_goal_evidence_after_false_completed_media(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    old_video = _write(tmp_path / "stale.mp4")
+    monkeypatch.setattr(
+        "src.media.quality.validate_media_goal_artifact",
+        lambda path, goal="": SimpleNamespace(passed=True),
+    )
+    media = _completed_task(
+        "media", output=f"RESEARCH_GAP iki kaynak bulunamadı\n{old_video}",
+        metadata={"artifact_path": old_video},
+    )
+    mission = _mission("Güncel haber bul ve video hazırla; yayınlama.", [media])
+    mission.recovery = MissionRecoveryReport(goal=mission.goal, ran=True)
+
+    section = _recovery_section(mission)
+
+    assert "NE KALDI? gerçek video üretimi" in section
+    assert "NE KALDI? hiçbir şey" not in section
+    assert "evidence_insufficient" in section
+    assert "ŞU ANA KADAR NE TAMAMLANDI? hiçbiri" in section

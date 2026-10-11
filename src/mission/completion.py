@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Iterable
 
 from src.jobs.task_status import TaskStatus
+from src.mission.failure_classification import FailureClass, classify_failure
 from src.research.opportunity import selected_opportunity_has_verified_current_evidence
 
 
@@ -302,11 +303,15 @@ def evaluate_goal_completion(mission) -> GoalCompletion:
 
     paths = tuple(_reported_paths(mission))
     quality_approved_paths = _quality_approved_artifact_paths(mission)
+    media_task = next((task for task in mission.tasks if task.agent == "media"), None)
+    media_output_failure = _current_media_output_failure(media_task)
     statuses: list[RequirementStatus] = []
     for requirement in requirements:
         if requirement.kind == "artifact":
             kind = ArtifactType(requirement.name)
-            valid = tuple(dict.fromkeys(
+            valid = () if (
+                kind == ArtifactType.VIDEO and media_output_failure is not FailureClass.UNKNOWN
+            ) else tuple(dict.fromkeys(
                 path for path in paths
                 if (
                     _normalized_path(path) in quality_approved_paths
@@ -319,7 +324,6 @@ def evaluate_goal_completion(mission) -> GoalCompletion:
             )
             statuses.append(RequirementStatus(requirement, satisfied, valid, rendered_not_approved))
         elif requirement.kind == "youtube_evidence":
-            media_task = next((task for task in mission.tasks if task.agent == "media"), None)
             research_task = next((task for task in mission.tasks if task.agent == "research"), None)
             research_report = (
                 research_task.metadata.get("report")
@@ -355,6 +359,16 @@ def evaluate_goal_completion(mission) -> GoalCompletion:
                                              and media_task.metadata.get("learning_persisted") is True),
                 "publish_not_used": not any((task.metadata or {}).get("publish_used") is True for task in mission.tasks),
             }
+            # A current run that ended at a truthful semantic blocker (for
+            # example RESEARCH_GAP or a failed quality gate) may still carry
+            # metadata from an earlier recovery attempt.  That stale state is
+            # not evidence for the current production.  The explicit
+            # no-publish safety fact remains independently valid.
+            if media_output_failure is not FailureClass.UNKNOWN:
+                mapping = {
+                    name: (value if name == "publish_not_used" else False)
+                    for name, value in mapping.items()
+                }
             statuses.append(RequirementStatus(requirement, bool(mapping.get(requirement.name))))
         elif requirement.kind == "finance_evidence":
             task = next((task for task in mission.tasks if task.agent == "finance"), None)
@@ -463,6 +477,8 @@ def evidence_progress(mission, fallback: float = 0.0) -> float:
 def collect_valid_artifact_paths(mission) -> list[str]:
     """Return verified artifacts and bridge task metadata to mission state."""
     valid: list[str] = []
+    media_task = next((task for task in mission.tasks if task.agent == "media"), None)
+    media_output_failure = _current_media_output_failure(media_task)
     for raw_path in _reported_paths(mission):
         cleaned = raw_path.strip().strip("'\"")
         suffix = Path(cleaned).suffix.casefold()
@@ -470,9 +486,35 @@ def collect_valid_artifact_paths(mission) -> list[str]:
             (candidate for candidate, extensions in ARTIFACT_EXTENSIONS.items() if suffix in extensions),
             None,
         )
+        if (
+            kind == ArtifactType.VIDEO
+            and media_output_failure is not FailureClass.UNKNOWN
+        ):
+            continue
         if kind is not None and _valid_artifact(cleaned, kind, mission.title) and cleaned not in valid:
             valid.append(cleaned)
     return valid
+
+
+def _current_media_output_failure(task) -> FailureClass:
+    """Return a semantic blocker from this run's media result.
+
+    Task status alone is insufficient because handlers can truthfully return
+    ``RESEARCH_GAP``/quality failures while the generic runner records a clean
+    function return.  Conversely, an old MP4 mentioned in metadata/output
+    cannot override that explicit current-run blocker.
+    """
+    if task is None or task.result is None:
+        return FailureClass.UNKNOWN
+    failure = classify_failure(task.result.output)
+    # These two classes are semantic terminal gates: they explicitly say
+    # the requested story was not grounded or the produced media failed its
+    # quality contract.  Provider warnings can also appear inside a final
+    # successful fallback report, so they must not invalidate a path-bound,
+    # approved artifact here.
+    if failure in {FailureClass.EVIDENCE_INSUFFICIENT, FailureClass.QUALITY_INSUFFICIENT}:
+        return failure
+    return FailureClass.UNKNOWN
 
 
 def _reported_paths(mission) -> Iterable[str]:

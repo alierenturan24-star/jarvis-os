@@ -302,6 +302,49 @@ def test_live_shape_prioritizes_seven_day_candidate_before_widened_results():
     assert task.metadata["report"]["selected_topic"] == fresh
 
 
+def test_live_pope_story_accepts_fresh_relative_dates_across_swiss_languages():
+    """Regression for the 2026-10-12 live mission report.
+
+    Search results supplied dates only inside snippets and the same event in
+    German/French/Italian.  They are fresh, independent and directly about
+    the selected story, so the evidence gate must not return RESEARCH_GAP.
+    """
+    from src.research.opportunity import build_selected_opportunity
+
+    selected = "Entdeckt im frühen Stadium - Knoten in der Lunge: Papst wird operiert"
+    sources = [
+        {
+            "title": "Il Papa verrà operato per un nodulo polmonare - RSI",
+            "summary": "22 ore fa · Il Papa verrà operato per un nodulo polmonare.",
+            "url": "https://www.rsi.ch/info/mondo/Il-Papa-ha-un-tumore--4151654.html",
+        },
+        {
+            "title": "Pape Léon XIV: opération prochaine d'un nodule pulmonaire",
+            "summary": "22 heures · Le pape sera opéré pour retirer un nodule pulmonaire.",
+            "url": "https://www.rts.ch/info/monde/2026/article/pape-leon-xiv-operation-29382483.html",
+        },
+        {
+            "title": "Knoten in der Lunge entdeckt: Papst Leo XIV. wird operiert",
+            "summary": "22 hours ago · Papst Leo XIV. wird wegen eines Knotens operiert.",
+            "url": "https://de.euronews.com/2026/10/11/papst-leo-xiv-lunge-knoten-operation",
+        },
+    ]
+
+    opportunity = build_selected_opportunity(
+        topic="İsviçre son 30 gün aynı haberi en az iki bağımsız kaynakla doğrula",
+        location_or_market="İsviçre",
+        summary=f"SEÇİLEN KONU: {selected}\nHedef pazar: İsviçre",
+        sources=sources,
+    )
+
+    assert opportunity.sufficient is True
+    assert opportunity.freshness_status == "CURRENT"
+    assert len(opportunity.supporting_evidence) == 3
+    assert {item["source_identity"] for item in opportunity.supporting_evidence} == {
+        "www.rsi.ch", "www.rts.ch", "de.euronews.com",
+    }
+
+
 def test_structured_fallback_survives_clean_research_task_rewrite():
     now = datetime.now(timezone.utc)
     older = (now - timedelta(days=12)).isoformat()

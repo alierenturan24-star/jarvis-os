@@ -6,6 +6,7 @@ from src.jobs.task import Task
 from src.jobs.task_status import TaskStatus
 from src.mission.completion import evaluate_goal_completion
 from src.mission.models import Mission
+from src.strategy.execution_planner import task_output_is_false_success
 
 # Sprint 16 (CEO Report Engine): Mission çalışıyor, department'lar
 # çalışıyor, GitHub/Evaluation/Sandbox/Integration gerçekten çalışıyor
@@ -868,19 +869,26 @@ def _recovery_section(mission: Mission) -> str:
     if recovery is None or not recovery.ran:
         return f"{header}\nBu mission'da hiç başarısız görev olmadı -- kurtarma hiç tetiklenmedi."
 
-    completed_titles = [task.title for task in mission.tasks if task.status == TaskStatus.COMPLETED]
+    completed_titles = [
+        task.title for task in mission.tasks
+        if task.status == TaskStatus.COMPLETED and not task_output_is_false_success(task)
+    ]
     still_failed_titles = [
         task.title for task in mission.tasks if task.id in recovery.still_failed_task_ids
     ]
-    remaining_items = still_failed_titles + list(getattr(recovery, "remaining_goals", ()))
+    completion = evaluate_goal_completion(mission)
+    completion_missing = [item.requirement.remaining for item in completion.missing]
+    remaining_items = list(dict.fromkeys(
+        still_failed_titles + list(getattr(recovery, "remaining_goals", ())) + completion_missing
+    ))
     failure_reasons = sorted({attempt.failure_class.value for attempt in recovery.attempts})
     # Non-retryable truthful gates (notably RESEARCH_GAP) produce no provider
     # ladder attempt by design.  Still name their real blocker instead of
     # printing "bilinmiyor" merely because no irrelevant provider was tried.
-    if recovery.still_failed_task_ids:
+    if recovery.still_failed_task_ids or any(task_output_is_false_success(task) for task in mission.tasks):
         from src.mission.failure_classification import FailureClass, classify_failure
         for task in mission.tasks:
-            if task.id not in recovery.still_failed_task_ids:
+            if task.id not in recovery.still_failed_task_ids and not task_output_is_false_success(task):
                 continue
             output = str(task.result.output) if task.result is not None else str(task.error or "")
             failure_class = classify_failure(output)

@@ -42,6 +42,7 @@ for /f %%H in ('git rev-parse "refs/remotes/origin/%TARGET_BRANCH%"') do set "RE
 for /f %%H in ('git rev-parse --short^=12 "refs/remotes/origin/%TARGET_BRANCH%"') do set "SHORT_HEAD=%%H"
 if not defined REMOTE_HEAD goto :HATA
 set "NEW_REPO=%INSTALL_ROOT%\jarvis-active-%SHORT_HEAD%"
+echo GitHub surumu: %SHORT_HEAD%
 
 echo.
 echo [2/4] Eski projeye dokunmadan yeni klasor olusturuluyor...
@@ -55,6 +56,12 @@ if exist "%NEW_REPO%\.git" (
 ) else (
   git worktree add --detach "%NEW_REPO%" "refs/remotes/origin/%TARGET_BRANCH%"
   if errorlevel 1 goto :HATA
+)
+
+for /f %%H in ('git -C "%NEW_REPO%" rev-parse HEAD') do set "ACTIVE_HEAD=%%H"
+if /I not "!ACTIVE_HEAD!"=="!REMOTE_HEAD!" (
+  echo HATA: Acilacak surum GitHub surumuyle ayni degil.
+  goto :HATA
 )
 
 if exist "%SOURCE_REPO%\.env" (
@@ -88,6 +95,7 @@ echo.
 echo ============================================================
 echo JARVIS HAZIR
 echo Kurulum klasoru: %NEW_REPO%
+echo Dogrulanan surum: %SHORT_HEAD%
 echo Bundan sonra masaustundeki JARVIS AC kisayolunu kullanin.
 echo Eski proje ve degisiklikleriniz aynen korundu.
 echo ============================================================

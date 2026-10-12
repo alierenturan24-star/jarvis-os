@@ -187,7 +187,10 @@ def infer_completion_requirements(text: str, departments: Iterable[str] = ()) ->
     # Generic "Video üret" keeps the established artifact-only contract.
     # The richer evidence contract is for an explicit YouTube production.
     youtube_production = video_production and any(
-        cue in lowered for cue in ("youtube", "short", "çizgi film")
+        cue in lowered for cue in (
+            "youtube", "short", "çizgi film", "kısa video", "kisa video",
+            "dikey video", "9:16",
+        )
     )
     if youtube_production:
         if not any(item.kind == "artifact" and item.name == ArtifactType.VIDEO.value for item in requirements):
@@ -235,8 +238,11 @@ def infer_completion_requirements(text: str, departments: Iterable[str] = ()) ->
     ):
         requirements.append(_artifact_requirement(ArtifactType.AUDIO))
 
-    if re.search(rf"(?:thumbnail|görsel|resim)\w*\s+{production}", lowered) or re.search(
-        rf"{production}\w*[^.!?]{{0,30}}(?:thumbnail|görsel|resim)", lowered
+    explicit_cover = video_production and any(cue in lowered for cue in (
+        "kapak", "thumbnail", "küçük resim", "kucuk resim",
+    ))
+    if explicit_cover or re.search(rf"(?:thumbnail|görsel|resim|kapak)\w*\s+{production}", lowered) or re.search(
+        rf"{production}\w*[^.!?]{{0,48}}(?:thumbnail|görsel|resim|kapak)", lowered
     ):
         requirements.append(_artifact_requirement(ArtifactType.IMAGE))
 

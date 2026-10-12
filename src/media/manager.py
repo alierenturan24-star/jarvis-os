@@ -180,6 +180,35 @@ def _license_evidence_lines(record: dict | None) -> list[str]:
     return lines
 
 
+def _production_evidence_block(record: dict | None) -> str:
+    """Expose the real cover path and render-quality result in mission text.
+
+    These values already exist in the persisted production record; surfacing
+    them here lets the panel and completion engine prove an explicitly
+    requested cover and quality result instead of showing only the plan-level
+    ``KALİTE KONTROL`` sentence.
+    """
+    if not isinstance(record, dict):
+        return "\n\nKAPAK ARTIFACT\nEKSİK\n\nGERÇEK ÜRETİM KALİTESİ\nEKSİK"
+    artifact = record.get("artifact") if isinstance(record.get("artifact"), dict) else {}
+    quality = record.get("quality") if isinstance(record.get("quality"), dict) else {}
+    thumbnail = str(artifact.get("thumbnail_path") or "").strip()
+    cover = thumbnail if thumbnail and Path(thumbnail).is_file() else "EKSİK"
+    ready = quality.get("production_readiness") is True
+    fields = (
+        ("Hazır", "EVET" if ready else "HAYIR"),
+        ("Genel", quality.get("overall", "—")),
+        ("Hikâye", quality.get("story", "—")),
+        ("Görsel", quality.get("visual", "—")),
+        ("Hareket", quality.get("motion", "—")),
+        ("Ses", quality.get("audio", "—")),
+    )
+    return (
+        f"\n\nKAPAK ARTIFACT\n{cover}\n\nGERÇEK ÜRETİM KALİTESİ\n"
+        + " · ".join(f"{name}: {value}" for name, value in fields)
+    )
+
+
 def _looks_predominantly_english(text: str) -> bool:
     words = re.findall(r"[a-zA-ZçğıöşüÇĞİÖŞÜ]+", text or "")
     if not words:
@@ -682,18 +711,20 @@ Kurallar:
             "Gerçek video artifact üretilemedi; hiçbir şey YouTube'a yüklenmedi."
         )
         license_block = ""
+        production_evidence_block = ""
         if self.last_artifact_path:
             lines = _license_evidence_lines(self.last_production_record)
             license_block = (
                 "\n\nMEDYA LİSANS KANITI\n" + "\n".join(lines)
                 if lines else "\n\nMEDYA LİSANS KANITI\nEKSİK"
             )
+            production_evidence_block = _production_evidence_block(self.last_production_record)
         return (
             f"YouTube içerik planı tamamlandı (hedef: {duration_seconds} sn).\n\n"
             f"{plan_text}\n\n"
             f"KALİTE KONTROL\n{quality.summary}\n\n"
             f"ORTAM DURUMU\n{capability_note}\n\n{production_note}\n\n"
-            f"Rapor kaydedildi:\n{report_path}{artifact_block}{license_block}"
+            f"Rapor kaydedildi:\n{report_path}{artifact_block}{production_evidence_block}{license_block}"
         )
 
     def _produce_with_bounded_repair(

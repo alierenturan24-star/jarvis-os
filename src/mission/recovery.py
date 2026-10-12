@@ -1194,6 +1194,17 @@ def recover_mission(
                     job_manager.run_task(learning_task)
                 break
 
+    # ``failed_tasks`` is a start-of-recovery snapshot. A research retry can
+    # reset and successfully resume its media dependent before that same
+    # media item is reached later in the snapshot loop. Reconcile the report
+    # with final task state so a recovered, completed mission does not retain
+    # a stale media id and print "NE KALDI? [media] ..." next to 100%.
+    task_by_id = {task.id: task for task in plan.all_tasks()}
+    report.still_failed_task_ids = [
+        task_id for task_id in dict.fromkeys(report.still_failed_task_ids)
+        if task_id in task_by_id and not _task_genuinely_succeeded(task_by_id[task_id])
+    ]
+
     remaining = evaluate_goal_completion(mission).missing
     report.remaining_goals = [item.requirement.remaining for item in remaining]
     if remaining:

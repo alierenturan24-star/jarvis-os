@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from src.knowledge.knowledge_base import KnowledgeBase
-from src.media.manager import MediaManager, _unsupported_research_claims
+from src.media.manager import MediaManager, _production_evidence_block, _unsupported_research_claims
 from src.media.quality import _check_narrative_relevance
 from src.media.renderer import find_edge_tts
 from src.research.collector import ResearchCollector
@@ -424,3 +424,20 @@ Papa, sağlık, haber"""
     assert manager.last_artifact_path == ""
     assert len(calls) == 2
     assert all(call["allowed_cost_classes"] == ("free", "plan") for call in calls)
+
+
+def test_production_evidence_block_shows_real_cover_and_quality(tmp_path):
+    cover = tmp_path / "cover.png"
+    cover.write_bytes(b"real-cover")
+    block = _production_evidence_block({
+        "artifact": {"thumbnail_path": str(cover)},
+        "quality": {
+            "production_readiness": True, "overall": 96, "story": 95,
+            "visual": 90, "motion": 91, "audio": 94,
+        },
+    })
+
+    assert f"KAPAK ARTIFACT\n{cover}" in block
+    assert "GERÇEK ÜRETİM KALİTESİ" in block
+    assert "Hazır: EVET" in block
+    assert "Genel: 96" in block

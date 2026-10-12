@@ -437,3 +437,34 @@ def test_current_video_with_render_but_without_current_research_is_not_complete(
     assert next(
         item for item in completion.requirements if item.requirement.name == "video"
     ).rendered_not_approved is True
+
+
+def test_turkish_vertical_short_with_cover_requires_full_production_evidence():
+    title = (
+        "İsviçre için güncel haber bul. Public Domain görüntülerle 9:16 Türkçe "
+        "kısa video hazırla: anlatım, altyazı ve yeni kapak. Yayınlama."
+    )
+
+    names = {item.name for item in infer_completion_requirements(title, ("research", "media"))}
+
+    assert {
+        "video", "image", "current_research_grounding", "media_license_provenance",
+        "youtube_opportunity_or_content_plan", "technical_validation",
+        "semantic_validation", "production_provenance", "story_coverage",
+        "motion_evidence", "audio_evidence", "thumbnail_artifact_or_reasoned_not_required",
+        "youtube_learning_persisted", "publish_not_used",
+    } <= names
+
+
+def test_recovery_section_ignores_stale_failed_id_after_task_recovers():
+    media = _completed_task("media", output="video hazır")
+    mission = _mission("Basit görev tamamla.", [media])
+    mission.recovery = MissionRecoveryReport(
+        goal=mission.goal, ran=True, still_failed_task_ids=[media.id],
+        resolved_task_ids=[media.id],
+    )
+
+    section = _recovery_section(mission)
+
+    assert "NE KALDI? hiçbir şey (tümü kurtarıldı)" in section
+    assert f"NE KALDI? {media.title}" not in section

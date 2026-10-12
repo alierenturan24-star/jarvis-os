@@ -874,7 +874,9 @@ def _recovery_section(mission: Mission) -> str:
         if task.status == TaskStatus.COMPLETED and not task_output_is_false_success(task)
     ]
     still_failed_titles = [
-        task.title for task in mission.tasks if task.id in recovery.still_failed_task_ids
+        task.title for task in mission.tasks
+        if task.id in recovery.still_failed_task_ids
+        and not (task.status == TaskStatus.COMPLETED and not task_output_is_false_success(task))
     ]
     completion = evaluate_goal_completion(mission)
     completion_missing = [item.requirement.remaining for item in completion.missing]

@@ -57,7 +57,11 @@ def _research_evidence_text(opportunity: dict | None) -> str:
     parts = [str(opportunity.get("selected_topic") or "")]
     for item in opportunity.get("supporting_evidence") or ():
         if isinstance(item, dict):
-            parts.extend((str(item.get("title") or ""), str(item.get("summary") or "")))
+            parts.extend((
+                str(item.get("title") or ""), str(item.get("summary") or ""),
+                str(item.get("url") or ""), str(item.get("source_identity") or ""),
+                str(item.get("publisher") or ""),
+            ))
     return "\n".join(part for part in parts if part.strip())
 
 
@@ -105,18 +109,59 @@ def _unsupported_research_claims(plan_text: str, opportunity: dict | None) -> tu
          ("hayat kurtardı", "hayat kurtarır", "saved his life", "rettete sein leben")),
         ("dünya çapında dua/tepki", ("tüm dünyadan dualar", "dünyadan dualar"),
          ("tüm dünyadan dualar", "dünyadan dualar", "prayers from around the world")),
+        ("dünya çapında yankı/tepki", ("tüm dünyada yankı", "dünya çapında yankı"),
+         ("tüm dünyada yankı", "dünya çapında yankı", "worldwide reaction", "around the world")),
+        ("durumun kontrol altında olduğu", ("durum kontrol altında", "durumun kontrol altında"),
+         ("durum kontrol altında", "durumun kontrol altında", "under control", "sous contrôle")),
+        ("yetkililerin açıklaması", ("yetkililer belirtiyor", "yetkililer bildirdi", "yetkililer açıkladı"),
+         ("yetkililer", "authorities", "officials", "behörden", "autorités")),
+        ("ameliyatın riski önleme gerekçesi", (
+            "risk oluşmasını engellemek", "risk olusmasini engellemek",
+            "risk oluşturmasını önlemek", "risk olusturmasini onlemek",
+        ), ("risk oluşmasını engellemek", "risk oluşturmasını önlemek", "prevent risk", "risiko verhindern")),
     )
     unsupported = [
         label for label, plan_cues, evidence_cues in claim_families
         if any(cue in plan for cue in plan_cues)
         and not any(cue in evidence for cue in evidence_cues)
     ]
+    if (
+        re.search(r"yetkililer[^.!?]{0,90}(?:belirtiyor|bildirdi|açıkladı)", plan)
+        and not any(cue in evidence for cue in ("yetkililer", "authorities", "officials", "behörden", "autorités"))
+        and "yetkililerin açıklaması" not in unsupported
+    ):
+        unsupported.append("yetkililerin açıklaması")
     # A Swiss publisher is not evidence that an international event happened
     # "from Switzerland".  Keep target-market framing separate from location.
     if any(cue in plan for cue in ("sviçre'den", "svicre'den", "isviçreden", "isvicreden")) and not any(
         cue in evidence for cue in ("isviçre", "schweiz", "suisse", "svizzera", "switzerland")
     ):
         unsupported.append("olayın İsviçre kaynaklı olduğu")
+    # In medical copy, a nodule/knot must not silently be upgraded into a
+    # mass/tumour when the evidence only says nodule.  The ordinary audience
+    # meaning of "kitle" is deliberately excluded by requiring lung/health
+    # context in the generated plan.
+    if (
+        "kitle" in plan
+        and any(cue in plan for cue in ("akciğer", "akciger", "nodül", "nodul", "ameliyat"))
+        and not any(cue in evidence for cue in ("kitle", "mass", "tumor", "tümör", "tumour"))
+    ):
+        unsupported.append("nodülün kitle/tümör diye büyütülmesi")
+
+    # Naming a publisher as a verifier is a concrete attribution, not style.
+    # Check the outlets observed in the live failure; absent outlets must be
+    # removed by the correction pass before rendering.
+    for outlet, evidence_cues in {
+        "SRF": ("srf.ch", " srf ", "source_identity: srf"),
+        "RTS": ("rts.ch", " rts ", "source_identity: rts"),
+        "RSI": ("rsi.ch", " rsi ", "source_identity: rsi"),
+        "NZZ": ("nzz.ch", " nzz ", "neue zürcher zeitung"),
+        "SWI": ("swissinfo.ch", " swissinfo ", " swi "),
+    }.items():
+        if re.search(rf"(?<![a-z]){outlet.casefold()}(?![a-z])", plan) and not any(
+            cue in f" {evidence} " for cue in evidence_cues
+        ):
+            unsupported.append(f"kanıtta bulunmayan {outlet} kaynak atfı")
     return tuple(unsupported)
 
 

@@ -166,6 +166,15 @@ def infer_completion_requirements(text: str, departments: Iterable[str] = ()) ->
     video_production = has_youtube_production_intent(text)
     if video_production:
         requirements.append(_artifact_requirement(ArtifactType.VIDEO))
+        # A rendered file is not a completed current-news video unless the
+        # research used for this same mission still has verified, fresh,
+        # independent evidence.  This applies to Turkish "kısa video" too,
+        # not only requests that literally say YouTube/Shorts.
+        if has_current_information_intent(text):
+            requirements.append(CompletionRequirement(
+                "youtube_evidence", "current_research_grounding",
+                "güncel video araştırma kanıtı eksik", "youtube",
+            ))
         if any(cue in lowered for cue in (
             "public domain", "cc0", "cc by", "wikimedia commons",
             "yeniden kullanıma açık", "yeniden kullanima acik",
@@ -312,13 +321,29 @@ def evaluate_goal_completion(mission) -> GoalCompletion:
     paths = tuple(_reported_paths(mission))
     quality_approved_paths = _quality_approved_artifact_paths(mission)
     media_task = next((task for task in mission.tasks if task.agent == "media"), None)
+    research_task = next((task for task in mission.tasks if task.agent == "research"), None)
+    research_report = (
+        research_task.metadata.get("report")
+        if research_task is not None and research_task.metadata else None
+    )
+    current_research_verified = bool(
+        research_task and research_task.status == TaskStatus.COMPLETED
+        and selected_opportunity_has_verified_current_evidence(research_report)
+    )
+    current_video_requires_grounding = bool(
+        has_youtube_production_intent(mission.title)
+        and has_current_information_intent(mission.title)
+    )
     media_output_failure = _current_media_output_failure(media_task)
     statuses: list[RequirementStatus] = []
     for requirement in requirements:
         if requirement.kind == "artifact":
             kind = ArtifactType(requirement.name)
             valid = () if (
-                kind == ArtifactType.VIDEO and media_output_failure is not FailureClass.UNKNOWN
+                kind == ArtifactType.VIDEO and (
+                    media_output_failure is not FailureClass.UNKNOWN
+                    or (current_video_requires_grounding and not current_research_verified)
+                )
             ) else tuple(dict.fromkeys(
                 path for path in paths
                 if (
@@ -332,11 +357,6 @@ def evaluate_goal_completion(mission) -> GoalCompletion:
             )
             statuses.append(RequirementStatus(requirement, satisfied, valid, rendered_not_approved))
         elif requirement.kind == "youtube_evidence":
-            research_task = next((task for task in mission.tasks if task.agent == "research"), None)
-            research_report = (
-                research_task.metadata.get("report")
-                if research_task is not None and research_task.metadata else None
-            )
             report = media_task.metadata.get("youtube_production") if media_task and media_task.metadata else None
             artifact = (report or {}).get("artifact", {}) if isinstance(report, dict) else {}
             visual = (report or {}).get("visual", {}) if isinstance(report, dict) else {}
@@ -349,8 +369,7 @@ def evaluate_goal_completion(mission) -> GoalCompletion:
                     or (media_task and media_task.metadata.get("youtube_content_plan") is True)
                 ),
                 "current_research_grounding": bool(
-                    research_task and research_task.status == TaskStatus.COMPLETED
-                    and selected_opportunity_has_verified_current_evidence(research_report)
+                    current_research_verified
                 ),
                 "technical_validation": artifact.get("technical_validation") is True,
                 "semantic_validation": artifact.get("semantic_validation") is True and quality.get("production_readiness") is True,

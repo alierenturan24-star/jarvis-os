@@ -11,6 +11,7 @@ from src.mission.models import Mission, MissionStatus, MissionType
 from src.mission.recovery import MissionRecoveryReport, plan_needs_recovery, recover_mission
 from src.mission.report_builder import _production_ceo_decision, _recovery_section
 from src.strategy.execution_planner import build_self_check
+from src.strategy.execution_planner import task_output_is_false_success
 
 
 def _completed_task(agent="media", output="plan hazır", metadata=None, handler=lambda task: "ok"):
@@ -377,3 +378,62 @@ def test_requested_cc_license_requires_scene_level_provenance(tmp_path, monkeypa
     }]
 
     assert evaluate_goal_completion(mission).satisfied is True
+
+
+def test_successful_current_fallback_log_does_not_trigger_research_recovery():
+    """An early failed pass must not erase a later verified fallback."""
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    selected = "İsviçre'de doğrulanan yeni ulaşım haberi"
+    research = _completed_task(
+        "research",
+        output=(
+            "Araştırma sonucu bulunamadı. İnternet bağlantısını kontrol et.\n"
+            "--- OTOMATİK 30 GÜNLÜK YEDEK KAYNAK TARAMASI ---\n"
+            f"Araştırma tamamlandı. SEÇİLEN KONU: {selected}"
+        ),
+        metadata={"report": {
+            "selected_topic": selected,
+            "sufficient": True,
+            "freshness_status": "CURRENT",
+            "freshness_window_days": 30,
+            "supporting_evidence": [
+                {"url": "https://srf.ch/news/a", "published_at": now},
+                {"url": "https://rts.ch/info/a", "published_at": now},
+            ],
+        }},
+    )
+    mission = _mission("İsviçre için güncel haber araştır.", [research], ["research"])
+    plan = TaskPlan(mission.title)
+    plan.add_task(research)
+
+    assert task_output_is_false_success(research) is False
+    assert plan_needs_recovery(plan, mission) is False
+
+
+def test_current_video_with_render_but_without_current_research_is_not_complete(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    video = _write(tmp_path / "stale-topic.mp4")
+    monkeypatch.setattr(
+        "src.media.quality.validate_media_goal_artifact",
+        lambda path, goal="": SimpleNamespace(passed=True),
+    )
+    media = _completed_task("media", metadata={
+        "artifact_path": video,
+        "artifact_quality_validation": {"passed": True, "artifact_path": video},
+    })
+    mission = _mission(
+        "İsviçre için güncel haber bul ve 9:16 kısa video hazırla; yayınlama.",
+        [media], ["research", "media"],
+    )
+
+    completion = evaluate_goal_completion(mission)
+    names = {item.requirement.name for item in completion.missing}
+
+    assert "video" in names
+    assert "current_research_grounding" in names
+    assert next(
+        item for item in completion.requirements if item.requirement.name == "video"
+    ).rendered_not_approved is True

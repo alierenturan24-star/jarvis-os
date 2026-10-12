@@ -328,6 +328,37 @@ def test_live_pope_plan_rejects_claims_missing_from_source_snippets():
     }
 
 
+def test_live_pope_plan_rejects_exaggeration_and_fake_outlet_attribution():
+    opportunity = {
+        "selected_topic": "Knoten in der Lunge: Papst wird operiert",
+        "supporting_evidence": [{
+            "title": "Knoten in der Lunge: Papst wird operiert",
+            "summary": "Der Knoten wurde früh entdeckt; eine Operation ist angekündigt.",
+            "url": "https://www.srf.ch/news/international/papst",
+            "source_identity": "srf.ch",
+        }],
+    }
+    plan = (
+        "Vatikan’dan gelen haber tüm dünyada yankı uyandırdı. Papa’nın akciğerinde "
+        "bir kitle tespit edildi. SRF, RTS ve RSI tarafından doğrulandı. Doktorlar "
+        "risk oluşmasını engellemek için ameliyat kararı aldı. Yetkililer durumun "
+        "kontrol altında olduğunu belirtiyor."
+    )
+
+    unsupported = set(_unsupported_research_claims(plan, opportunity))
+
+    assert {
+        "dünya çapında yankı/tepki",
+        "durumun kontrol altında olduğu",
+        "yetkililerin açıklaması",
+        "ameliyatın riski önleme gerekçesi",
+        "nodülün kitle/tümör diye büyütülmesi",
+        "kanıtta bulunmayan RTS kaynak atfı",
+        "kanıtta bulunmayan RSI kaynak atfı",
+    } <= unsupported
+    assert "kanıtta bulunmayan SRF kaynak atfı" not in unsupported
+
+
 def test_media_manager_blocks_unsupported_claims_after_failed_correction(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     calls = []

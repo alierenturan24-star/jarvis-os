@@ -191,6 +191,26 @@ def task_output_is_false_success(task) -> bool:
 
     output_text = str(task.result.output)
 
+    # A current-news research task may truthfully record an unsuccessful
+    # first (7-day) pass before a later bounded fallback finds and validates
+    # the story.  Looking for failure words in the concatenated log used to
+    # classify that *successful* fallback as a false success, rerun research,
+    # and leave an already-started media task attached to the old topic.  The
+    # structured opportunity is the authoritative result, but only when it
+    # is current, independently sourced, and its selected topic is also
+    # present in this task's output (so stale metadata cannot mask a failure).
+    if getattr(task, "agent", "") == "research":
+        from src.research.opportunity import selected_opportunity_has_verified_current_evidence
+
+        report = (getattr(task, "metadata", None) or {}).get("report")
+        selected_topic = str((report or {}).get("selected_topic") or "").strip()
+        if (
+            selected_topic
+            and selected_topic.casefold() in output_text.casefold()
+            and selected_opportunity_has_verified_current_evidence(report)
+        ):
+            return False
+
     if is_llm_failure(output_text):
         return True
 

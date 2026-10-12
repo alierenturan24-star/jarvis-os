@@ -153,6 +153,7 @@ def test_concise_video_and_cover_wording_requires_full_video_production():
     research = next(task for task in tasks if task.agent == "research")
     media = next(task for task in tasks if task.agent == "media")
     assert "son 7 gün" in research.target
+    assert "aynı haberi doğrulayan en az iki bağımsız kaynakla" in research.target
     assert research.metadata["market_context"] == "İsviçre için"
     assert research.metadata["allow_30_day_fallback"] is True
     assert research.id in media.depends_on

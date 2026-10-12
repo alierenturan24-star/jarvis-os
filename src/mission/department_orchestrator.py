@@ -411,6 +411,14 @@ def _media_research_requirements(source_text: str) -> str:
         requirements.append("güvenilir")
     if _MEDIA_TWO_SOURCE_PATTERN.search(source):
         requirements.append("aynı haberi doğrulayan en az iki bağımsız kaynakla")
+    elif has_current_information_intent(source):
+        # A short Control Center command commonly says only "bugün
+        # doğrulanmış haber seç".  Verification must apply to the selected
+        # story, not to an unrelated pile of recent headlines.  Make the
+        # established same-story/two-independent-source gate explicit in the
+        # derived research query so ResearchAgent can automatically move to
+        # the next candidate (and then the 30-day fallback) when needed.
+        requirements.append("aynı haberi doğrulayan en az iki bağımsız kaynakla")
     return " ".join(requirements)
 
 

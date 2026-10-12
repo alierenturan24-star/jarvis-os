@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from src.media.manager import MediaManager
-from src.media.production import GeneralProductionBuilder, PackageBuildResult
+from src.media.production import GeneralProductionBuilder, PackageBuildResult, parse_plan_text
 from src.media.quality import MediaArtifactQuality
 from src.media.renderer import LocalVideoRenderer, RenderResult
 from src.providers.provider_manager import ProviderManager, RouteResult
@@ -75,6 +75,67 @@ class TestMediaManagerPlan:
 
         assert "üretilemedi" in result
         assert "uydurulmadı" in result
+
+    def test_failed_claude_and_gemini_use_source_bound_local_plan_for_artifact(
+        self, tmp_path, monkeypatch,
+    ):
+        """Regression for the real 2026-10-13 Control Center report.
+
+        Claude Code failed and Gemini returned a timeout sentence which did
+        not match the legacy string markers.  That sentence reached the
+        production parser and was reported as malformed SENARYO/SAHNELER.
+        """
+        monkeypatch.chdir(tmp_path)
+        failed = RouteResult(
+            output="gemini sağlayıcı hatası: HTTPS read timed out",
+            chosen_provider="claude_code", provider_used="gemini",
+            reason="test", fallback_used=True, duration_seconds=120.0,
+            success=False, attempted_providers=("claude_code", "gemini"),
+        )
+        monkeypatch.setattr(
+            ProviderManager, "route_and_generate",
+            lambda self, prompt, task_type, **kw: failed,
+        )
+        monkeypatch.setattr("src.media.manager.find_goal_production_package", lambda topic: None)
+        captured = {}
+
+        def stop_after_plan(self, **kwargs):
+            captured["plan_text"] = kwargs["plan_text"]
+            return PackageBuildResult(False, error="TEST_STOP_AFTER_VALID_PLAN")
+
+        monkeypatch.setattr(GeneralProductionBuilder, "build", stop_after_plan)
+        opportunity = {
+            "selected_topic": "Zürich'te doğrulanmış yeni ulaşım gelişmesi",
+            "location_or_market": "İsviçre",
+            "freshness_status": "CURRENT",
+            "why_current": "son 7 gün",
+            "supporting_evidence": [
+                {
+                    "title": "Zürich ulaşım gelişmesi", "publisher": "SRF",
+                    "source_identity": "srf.ch", "published_at": "2026-10-12T10:00:00+00:00",
+                    "url": "https://www.srf.ch/news/example",
+                },
+                {
+                    "title": "Le transport à Zurich", "publisher": "RTS",
+                    "source_identity": "rts.ch", "published_at": "2026-10-12T11:00:00+00:00",
+                    "url": "https://www.rts.ch/info/example",
+                },
+            ],
+        }
+
+        result = MediaManager().plan(
+            topic=opportunity["selected_topic"], duration_seconds=60,
+            request_text="9:16 Türkçe video ve kapak hazırla; yayınlama.",
+            produce_artifact=True, research_opportunity=opportunity, free_only=True,
+        )
+
+        parsed = parse_plan_text(captured["plan_text"])
+        assert parsed is not None
+        assert opportunity["selected_topic"] in parsed.script
+        assert "çizgi karakter" not in captured["plan_text"]
+        assert "PROVIDER RECOVERY" in captured["plan_text"]
+        assert "gemini sağlayıcı hatası" not in captured["plan_text"]
+        assert "TEST_STOP_AFTER_VALID_PLAN" in result
 
     def test_fallback_used_is_surfaced_in_output(self, tmp_path, monkeypatch):
         # Sprint 40: route_and_generate fallback'e düştüğünde (bkz.

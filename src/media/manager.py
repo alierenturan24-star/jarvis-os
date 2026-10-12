@@ -507,6 +507,7 @@ Kurallar:
             allowed_cost_classes=("free", "plan") if free_only else None,
         )
         plan_text = route_result.output
+        used_deterministic_fallback = False
 
         if requested_turkish and not is_llm_failure(plan_text) and _looks_predominantly_english(plan_text):
             correction = self.router.manager.route_and_generate(
@@ -528,9 +529,27 @@ Kurallar:
                     "Yanlış dilde video oluşturulmadı; hiçbir şey yayınlanmadı."
                 )
 
-        if is_llm_failure(plan_text) and produce_artifact:
-            plan_text = self._deterministic_fallback_plan(topic, duration_seconds)
-            plan_text += "\n\nPROVIDER RECOVERY\nYerel deterministik üretim planı kullanıldı."
+        route_succeeded = bool(getattr(
+            route_result, "success", not is_llm_failure(plan_text),
+        ))
+        if (not route_succeeded or is_llm_failure(plan_text)) and produce_artifact:
+            # ``RouteResult.success`` is authoritative.  Provider error text
+            # is not guaranteed to contain one of llm_utils' legacy Turkish
+            # markers (the live Gemini timeout returned "sağlayıcı hatası"),
+            # so checking only ``is_llm_failure`` let an error sentence reach
+            # the production parser as if it were a nine-section plan.
+            plan_text = self._deterministic_fallback_plan(
+                topic, duration_seconds, research_opportunity=research_opportunity,
+            )
+            attempted = " -> ".join(getattr(route_result, "attempted_providers", ())) or str(
+                getattr(route_result, "provider_used", "bilinmeyen")
+            )
+            plan_text += (
+                "\n\nPROVIDER RECOVERY\n"
+                "Metin sağlayıcıları sonuç veremedi; doğrulanmış araştırma kanıtından "
+                f"yerel deterministik üretim planı kullanıldı. Denenenler: {attempted}."
+            )
+            used_deterministic_fallback = True
 
         if is_llm_failure(plan_text):
             return (
@@ -594,7 +613,7 @@ Kurallar:
                     + ". Yanlış bilgiyle video oluşturulmadı; hiçbir şey yayınlanmadı."
                 )
 
-        if route_result.fallback_used:
+        if route_result.fallback_used and not used_deterministic_fallback:
             plan_text += (
                 f"\n\n(Not: birincil sağlayıcı ({route_result.chosen_provider}) başarısız oldu, "
                 f"otomatik olarak {route_result.provider_used}'a geçildi.)"
@@ -845,37 +864,78 @@ Kurallar:
                 return f"\n\nVIDEO RENDER: BLOCKED\n{rebuilt.error}"
 
     @staticmethod
-    def _deterministic_fallback_plan(topic: str, duration_seconds: int) -> str:
-        scene_seconds = max(1, duration_seconds // 4)
+    def _deterministic_fallback_plan(
+        topic: str, duration_seconds: int, *, research_opportunity: dict | None = None,
+    ) -> str:
+        """Build a parseable, source-bound Turkish plan without an LLM.
+
+        This is deliberately conservative: it never translates or invents
+        details from a foreign headline.  It names the verified headline,
+        dated publishers and source links already approved by the research
+        gate, then uses neutral contextual Commons visuals.  The production
+        builder still enforces licenses, rendering and quality normally.
+        """
+
+        evidence = [
+            item for item in ((research_opportunity or {}).get("supporting_evidence") or [])
+            if isinstance(item, dict)
+        ]
+        selected = str((research_opportunity or {}).get("selected_topic") or topic).strip()
+        selected = re.sub(r"\s+", " ", selected)[:300] or "İsviçre'den güncel gelişme"
+        publishers: list[str] = []
+        for item in evidence:
+            identity = str(
+                item.get("publisher") or item.get("source_identity") or ""
+            ).strip()
+            if identity and identity not in publishers:
+                publishers.append(identity)
+        publisher_text = " ve ".join(publishers[:3]) or "tarihli güvenilir kaynaklar"
+        source_urls = [str(item.get("url") or "").strip() for item in evidence]
+        source_urls = [url for url in source_urls if url][:3]
+        sources_for_description = " ".join(source_urls) or "Kaynak bağlantıları panelde gösterilir."
+
+        total = max(8, int(duration_seconds))
+        base, remainder = divmod(total, 4)
+        scene_durations = [base + (1 if index < remainder else 0) for index in range(4)]
+        title = f"İsviçre Gündemi: {selected}"
+        if len(title) > 60:
+            title = title[:57].rstrip(" -–—:;,.!") + "..."
+        script = (
+            f"İsviçre gündeminde doğrulanmış yeni bir başlık var: {selected}. "
+            f"Bu gelişme {publisher_text} tarafından tarihli olarak yayımlandı. "
+            "Burada yalnızca doğrulanmış başlığı ve kaynak bilgisini aktarıyoruz; "
+            "ayrıntılar paneldeki bağlantılardan kontrol edilebilir."
+        )
+
         return f"""SENARYO
-{topic}. Bu yerel taslak yalnız verilen hedefi görselleştirir; doğrulanmamış olgu veya istatistik içermez.
+{script}
 
 SAHNELER
-Sahne 1 (~{scene_seconds} sn): Anlatım: Konuya giriş | Görsel: Renkli gökyüzü ve çizgi karakter | Ekran yazısı: Merhaba
-Sahne 2 (~{scene_seconds} sn): Anlatım: Karakter keşfe çıkar | Görsel: Hareket eden çizgi karakter | Ekran yazısı: Keşfet
-Sahne 3 (~{scene_seconds} sn): Anlatım: Dostluk ve merak | Görsel: Renkli sahne | Ekran yazısı: Birlikte
-Sahne 4 (~{scene_seconds} sn): Anlatım: Kapanış | Görsel: Mutlu karakter | Ekran yazısı: Görüşürüz
+Sahne 1 (~{scene_durations[0]} sn): Anlatım: İsviçre gündeminde doğrulanmış yeni bir başlık var. | Görsel: Public Domain, CC0 veya CC BY lisanslı güncel İsviçre şehir manzarası | Ekran yazısı: İsviçre'de bugün
+Sahne 2 (~{scene_durations[1]} sn): Anlatım: {selected} | Görsel: Public Domain, CC0 veya CC BY lisanslı İsviçre şehir ve kamusal yaşam görüntüsü | Ekran yazısı: Doğrulanan başlık
+Sahne 3 (~{scene_durations[2]} sn): Anlatım: Bu gelişme {publisher_text} tarafından tarihli olarak yayımlandı. | Görsel: Public Domain, CC0 veya CC BY lisanslı gazete, haber ve İsviçre bağlam görseli | Ekran yazısı: Kaynaklar doğrulandı
+Sahne 4 (~{scene_durations[3]} sn): Anlatım: Ayrıntıları panelde gösterilen kaynak bağlantılarından kontrol edebilirsiniz. | Görsel: Public Domain, CC0 veya CC BY lisanslı İsviçre panoraması | Ekran yazısı: Kaynaklar panelde
 
 SESLENDİRME PLANI
-Windows System.Speech denenir; uygun ses yoksa sessiz audio track dürüstçe kullanılır.
+Türkçe yerel seslendirme denenir; uygun ses yoksa metin altyazıyla eksiksiz gösterilir.
 
 GÖRSEL/VİDEO PLANI
-Yerel deterministic scene-card görselleri FFmpeg ile birleştirilir.
+Her sahnede lisansı ve kaynak adresi manifestte kaydedilen Commons görüntüsü kullanılır; görüntüler olayın gerçek kaydıymış gibi sunulmaz.
 
 ALTYAZI PLANI
-Verilen hedef metni zamanlanmış SRT taslağına yazılır.
+Dört sahnenin Türkçe anlatımı zamanlanmış SRT altyazısına yazılır.
 
 THUMBNAIL FİKRİ
-Renkli gökyüzünde dost canlısı çizgi karakter.
+Lisanslı İsviçre şehir karesi üzerinde büyük ve okunaklı "İSVİÇRE'DE BUGÜN" yazısı.
 
 BAŞLIK
-Çocuklar İçin Renkli Bir Keşif
+{title}
 
 AÇIKLAMA
-Yerel araçlarla oluşturulan yayınlanmamış video taslağı.
+Doğrulanmış ve tarihli kaynaklara dayanan, yayınlanmamış Türkçe kısa video taslağı. Kaynaklar: {sources_for_description}
 
 ETİKETLER
-çocuk, çizgi film, keşif, dostluk"""
+İsviçre, güncel haber, gündem, Türkçe, kısa video"""
 
     def _resolve_provider(self, preferred_provider: str | None) -> str:
         """Sprint 39: ``FinanceManager._resolve_provider`` ile BİREBİR AYNI

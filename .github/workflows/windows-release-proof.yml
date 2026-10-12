@@ -73,12 +73,14 @@ jobs:
             src/media/tests/test_legacy_state_recovery.py `
             src/media/tests/test_local_news_card_fallback.py `
             src/media/tests/test_licensed_video_remix.py `
+            src/media/tests/test_manager.py::TestMediaManagerPlan::test_failed_claude_and_gemini_use_source_bound_local_plan_for_artifact `
             src/mission/tests/test_swiss_video_pipeline_round7.py `
             src/mission/tests/test_artifact_completion.py `
             src/research/tests/test_bounded_current_retry.py `
             src/research/tests/test_manager_timeout.py `
             src/research/tests/test_staleness_warning.py `
             src/research/tests/test_summarizer_provider_free_fallback.py `
+            src/providers/tests/test_claude_code_provider.py `
             src/providers/tests/test_provider_manager_routing.py `
             src/mission/tests/test_swiss_insider_mission_repair_round5.py `
             src/control_center/tests/test_remote_control_v1.py `

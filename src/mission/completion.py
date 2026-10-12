@@ -86,7 +86,7 @@ _DIRECT_MEDIA_PRODUCTION_PATTERN = re.compile(
 )
 _DEFERRED_MEDIA_PRODUCTION_PATTERN = re.compile(
     rf"\b{_MEDIA_NOUN_PATTERN}\b[^.;!?]{{0,48}}\b"
-    r"(?:üret(?!im\b)\w*|render\w*|kaydet\w*)\b",
+    r"(?:üret(?!im\b)\w*|oluştur\w*|hazırla\w*|render\w*|kaydet\w*)\b",
     re.IGNORECASE,
 )
 _PRODUCTION_BEFORE_MEDIA_PATTERN = re.compile(

@@ -394,6 +394,14 @@ def _media_research_requirements(source_text: str) -> str:
     window = _MEDIA_RECENCY_PATTERN.search(source)
     if window:
         requirements.append(f"son {window.group(1)} gün içinde")
+    elif has_current_information_intent(source):
+        # A concise command such as "bugün doğrulanmış haber seç" still
+        # needs a bounded primary window.  Without this default the search
+        # query said only "güncel", while the evidence gate silently used
+        # its broader generic window.  Seven days is the established first
+        # pass used by the long-form Control Center prompt; ResearchAgent
+        # widens it to 30 days only when that first pass is insufficient.
+        requirements.append("son 7 gün içinde")
     languages = [label for label, aliases in _MEDIA_LANGUAGE_CUES if any(alias in lowered for alias in aliases)]
     if languages:
         requirements.append(", ".join(languages) + " kaynaklardan")
@@ -943,7 +951,7 @@ class DepartmentOrchestrator:
                 # text alone used to lose this permission and retry the same
                 # 7-day window instead of widening it.
                 lowered_source = source_text.casefold()
-                metadata["allow_30_day_fallback"] = any(cue in lowered_source for cue in (
+                metadata["allow_30_day_fallback"] = has_current_information_intent(source_text) or any(cue in lowered_source for cue in (
                     "30 güne genişlet", "30 günlük yedek", "30 gün yedek",
                 ))
 

@@ -7,6 +7,7 @@ from src.jobs.task_result import TaskResult
 from src.jobs.task_status import TaskStatus
 from src.mission.completion import evaluate_goal_completion, infer_completion_requirements
 from src.mission.department_orchestrator import DepartmentOrchestrator
+from src.mission.mission_engine import MissionEngine
 from src.mission.models import Mission, MissionStatus, MissionType
 from src.mission.recovery import MissionRecoveryReport, plan_needs_recovery, recover_mission
 from src.mission.report_builder import _production_ceo_decision, _recovery_section
@@ -125,6 +126,36 @@ def test_current_youtube_plan_requires_research_and_plan_but_not_video():
         "youtube_opportunity_or_content_plan", "current_research_grounding", "publish_not_used",
     }
     assert evaluate_goal_completion(mission).satisfied
+
+
+def test_concise_video_and_cover_wording_requires_full_video_production():
+    title = (
+        "İsviçre için bugün doğrulanmış yeni haber seç. En az bir Public Domain, "
+        "CC0 veya CC BY gerçek görsel/video kullan. 9:16 Türkçe video ve kapak "
+        "hazırla; yayınlama."
+    )
+    departments = DepartmentOrchestrator().select_departments(title)
+    requirements = infer_completion_requirements(title, departments)
+    names = {item.name for item in requirements}
+
+    assert departments == ["research", "media"]
+    assert {"video", "image", "current_research_grounding", "media_license_provenance"} <= names
+    assert {
+        "youtube_opportunity_or_content_plan", "technical_validation",
+        "semantic_validation", "production_provenance", "story_coverage",
+        "motion_evidence", "audio_evidence",
+        "thumbnail_artifact_or_reasoned_not_required", "youtube_learning_persisted",
+        "publish_not_used",
+    } <= names
+
+    mission = MissionEngine().create_mission(title)
+    tasks = MissionEngine().orchestrator.create_tasks(mission)
+    research = next(task for task in tasks if task.agent == "research")
+    media = next(task for task in tasks if task.agent == "media")
+    assert "son 7 gün" in research.target
+    assert research.metadata["market_context"] == "İsviçre için"
+    assert research.metadata["allow_30_day_fallback"] is True
+    assert research.id in media.depends_on
 
 
 def test_h_explicit_repo_evaluation_requires_planned_evidence():

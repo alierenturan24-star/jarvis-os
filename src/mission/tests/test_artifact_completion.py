@@ -363,6 +363,15 @@ def test_requested_cc_license_requires_scene_level_provenance(tmp_path, monkeypa
     }
 
     media.metadata["youtube_production"]["artifact"]["scene_provenance"] = [{
+        "scene_id": "scene-original", "success": True,
+        "quality_evidence": {
+            "license": "original", "copyright_safe": True,
+            "external_media_used": False,
+        },
+    }]
+    assert evaluate_goal_completion(mission).satisfied is False
+
+    media.metadata["youtube_production"]["artifact"]["scene_provenance"].extend([{
         "scene_id": "scene-1", "success": True,
         "quality_evidence": {
             "license": "CC BY 4.0",
@@ -375,7 +384,7 @@ def test_requested_cc_license_requires_scene_level_provenance(tmp_path, monkeypa
             "license": "original", "copyright_safe": True,
             "external_media_used": False,
         },
-    }]
+    }])
 
     assert evaluate_goal_completion(mission).satisfied is True
 

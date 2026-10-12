@@ -381,7 +381,8 @@ def evaluate_goal_completion(mission) -> GoalCompletion:
                 "semantic_validation": artifact.get("semantic_validation") is True and quality.get("production_readiness") is True,
                 "production_provenance": bool(artifact.get("production_provenance")),
                 "media_license_provenance": _valid_media_license_provenance(
-                    artifact.get("scene_provenance")
+                    artifact.get("scene_provenance"),
+                    require_external=_requires_external_licensed_media(mission.title),
                 ),
                 "story_coverage": len(creative.get("story_beats", [])) >= 4 and creative.get("scene_count", 0) >= 4,
                 "motion_evidence": visual.get("body_motion") is True and (visual.get("body_motion_ratio") or 0) >= 1.8,
@@ -647,12 +648,21 @@ def _has_evidence(report) -> bool:
     return bool(meaningful)
 
 
-def _valid_media_license_provenance(rows) -> bool:
+def _requires_external_licensed_media(text: str) -> bool:
+    lowered = (text or "").casefold()
+    return any(cue in lowered for cue in (
+        "public domain", "cc0", "cc by", "wikimedia commons",
+        "yeniden kullanıma açık", "yeniden kullanima acik",
+    ))
+
+
+def _valid_media_license_provenance(rows, *, require_external: bool = False) -> bool:
     if not isinstance(rows, list) or not rows:
         return False
     successful = [row for row in rows if isinstance(row, dict) and row.get("success") is True]
     if not successful:
         return False
+    external_count = 0
     for row in successful:
         evidence = row.get("quality_evidence")
         if not isinstance(evidence, dict):
@@ -668,4 +678,5 @@ def _valid_media_license_provenance(rows) -> bool:
         )
         if not allowed or not str(evidence.get("source_url") or "").strip():
             return False
-    return True
+        external_count += 1
+    return external_count > 0 if require_external else True

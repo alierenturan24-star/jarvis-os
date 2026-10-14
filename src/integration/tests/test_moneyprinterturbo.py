@@ -64,6 +64,10 @@ def test_windows_installer_preserves_unmanaged_copy_and_validates_runtime():
     assert "uvPath sync --frozen --no-dev --python $systemPython" in script
     assert "import moviepy, edge_tts" in script
     assert "Write-SetupState 'FAILED'" in script
+    assert "Get-Command $Name -CommandType Application -All" in script
+    assert "notmatch '\\\\WindowsApps\\\\'" in script
+    assert "& $pyPath $selector" in script
+    assert "& $pythonPath -c" in script
 
 
 def test_command_uses_only_local_materials_and_no_publish_switch(tmp_path):

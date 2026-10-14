@@ -16,6 +16,18 @@ function Assert-ExitCode([string]$Step) {
     if ($LASTEXITCODE -ne 0) { throw "$Step basarisiz oldu (cikis kodu $LASTEXITCODE)." }
 }
 
+function Get-PreferredApplication([string]$Name) {
+    # Windows can expose both the real executable and a Microsoft Store
+    # WindowsApps alias for the same command. Get-Command without -All may
+    # return an array whose .Source values are joined into one invalid path.
+    $commands = @(Get-Command $Name -CommandType Application -All -ErrorAction SilentlyContinue)
+    $selected = $commands |
+        Where-Object { $_.Source -and $_.Source -notmatch '\\WindowsApps\\' } |
+        Select-Object -First 1
+    if (-not $selected) { $selected = $commands | Select-Object -First 1 }
+    return $selected
+}
+
 function Set-SafeMoneyPrinterConfig([string]$ConfigPath) {
     $content = Get-Content -LiteralPath $ConfigPath -Raw
     $content = ([regex]'(?m)^llm_provider\s*=\s*"[^"]*"').Replace($content, 'llm_provider = "claude_code"', 1)
@@ -76,25 +88,27 @@ Assert-ExitCode 'MoneyPrinterTurbo sabit surum alma'
 Assert-ExitCode 'MoneyPrinterTurbo sabit surume gecis'
 
 $systemPython = $null
-$py = Get-Command py.exe -CommandType Application -ErrorAction SilentlyContinue
+$py = Get-PreferredApplication 'py.exe'
 if ($py) {
+    $pyPath = [string]$py.Source
     # Prefer the most broadly supported CPython releases. The pinned upstream
     # accepts >=3.11; each candidate is verified instead of trusting PATH.
     foreach ($selector in @('-3.11', '-3.12', '-3.13', '-3')) {
-        $candidate = (& $py.Source $selector -c "import sys; print(sys.executable if sys.version_info >= (3,11) else '')" 2>$null | Select-Object -Last 1)
+        $candidate = (& $pyPath $selector -c "import sys; print(sys.executable if sys.version_info >= (3,11) else '')" 2>$null | Select-Object -Last 1)
         if ($candidate) { $systemPython = $candidate; break }
     }
 }
 if (-not $systemPython) {
-    $python = Get-Command python.exe -CommandType Application -ErrorAction SilentlyContinue
+    $python = Get-PreferredApplication 'python.exe'
     if ($python) {
-        $candidate = (& $python.Source -c "import sys; print(sys.executable if sys.version_info >= (3,11) else '')" 2>$null | Select-Object -Last 1)
+        $pythonPath = [string]$python.Source
+        $candidate = (& $pythonPath -c "import sys; print(sys.executable if sys.version_info >= (3,11) else '')" 2>$null | Select-Object -Last 1)
         if ($candidate) { $systemPython = $candidate }
     }
 }
 if (-not $systemPython) { throw 'Python 3.11 veya yenisi bulunamadi.' }
 
-$uv = Get-Command uv.exe -CommandType Application -ErrorAction SilentlyContinue
+$uv = Get-PreferredApplication 'uv.exe'
 if (-not $uv) {
     Write-Host 'MoneyPrinterTurbo paket yoneticisi ayri ortama kuruluyor...' -ForegroundColor Cyan
     & $systemPython -m pip install --disable-pip-version-check 'uv>=0.9.4,<1'
@@ -102,7 +116,7 @@ if (-not $uv) {
     $scripts = Join-Path (Split-Path -Parent $systemPython) 'Scripts\uv.exe'
     if (Test-Path -LiteralPath $scripts) { $uvPath = $scripts }
     else {
-        $uv = Get-Command uv.exe -CommandType Application -ErrorAction SilentlyContinue
+        $uv = Get-PreferredApplication 'uv.exe'
         if (-not $uv) { throw 'uv kuruldu ancak calistirilabilir dosya bulunamadi.' }
         $uvPath = $uv.Source
     }

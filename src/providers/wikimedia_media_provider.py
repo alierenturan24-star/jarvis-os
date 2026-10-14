@@ -119,6 +119,7 @@ class WikimediaMediaProvider(MediaProvider):
                         "author": author,
                         "license": license_name,
                         "license_url": license_url,
+                        "external_media_used": True,
                         "attribution_required": "public domain" not in license_name.casefold()
                         and "cc0" not in license_name.casefold(),
                     },
@@ -203,6 +204,7 @@ class WikimediaMediaProvider(MediaProvider):
                         "generation_type": "licensed_stock_video_retrieval",
                         "source_url": source_url, "author": author,
                         "license": license_name, "license_url": license_url,
+                        "external_media_used": True,
                         "mime": str(info.get("mime") or "video/webm"),
                         "attribution_required": "public domain" not in license_name.casefold()
                         and "cc0" not in license_name.casefold(),

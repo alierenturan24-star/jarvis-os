@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Iterable
 
 from src.jobs.task_status import TaskStatus
+from src.media.licensing import is_allowed_reuse_license, requires_external_licensed_media
 from src.mission.failure_classification import FailureClass, classify_failure
 from src.research.opportunity import selected_opportunity_has_verified_current_evidence
 
@@ -175,10 +176,7 @@ def infer_completion_requirements(text: str, departments: Iterable[str] = ()) ->
                 "youtube_evidence", "current_research_grounding",
                 "güncel video araştırma kanıtı eksik", "youtube",
             ))
-        if any(cue in lowered for cue in (
-            "public domain", "cc0", "cc by", "wikimedia commons",
-            "yeniden kullanıma açık", "yeniden kullanima acik",
-        )):
+        if requires_external_licensed_media(text):
             requirements.append(CompletionRequirement(
                 "youtube_evidence", "media_license_provenance",
                 "medya lisans/provenance kanıtı eksik", "youtube",
@@ -649,11 +647,7 @@ def _has_evidence(report) -> bool:
 
 
 def _requires_external_licensed_media(text: str) -> bool:
-    lowered = (text or "").casefold()
-    return any(cue in lowered for cue in (
-        "public domain", "cc0", "cc by", "wikimedia commons",
-        "yeniden kullanıma açık", "yeniden kullanima acik",
-    ))
+    return requires_external_licensed_media(text)
 
 
 def _valid_media_license_provenance(rows, *, require_external: bool = False) -> bool:
@@ -672,10 +666,7 @@ def _valid_media_license_provenance(rows, *, require_external: bool = False) -> 
             if license_name != "original" or evidence.get("copyright_safe") is not True:
                 return False
             continue
-        allowed = (
-            "public domain" in license_name or "cc0" in license_name
-            or ("cc by" in license_name and "sa" not in license_name and "nc" not in license_name)
-        )
+        allowed = is_allowed_reuse_license(license_name)
         if not allowed or not str(evidence.get("source_url") or "").strip():
             return False
         external_count += 1

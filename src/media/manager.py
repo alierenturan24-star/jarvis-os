@@ -7,6 +7,7 @@ from src.media.quality import check_media_plan_quality, validate_media_goal_arti
 from src.media.report_builder import MediaReportBuilder
 from src.media.renderer import LocalVideoRenderer, find_ffmpeg, has_production_media_capability, find_goal_production_package
 from src.media.learning import YouTubeLearningAgent
+from src.media.licensing import requires_external_licensed_media
 from src.media.production import GeneralProductionBuilder, parse_plan_text
 from src.providers.router import ModelRouter
 from src.research.manager import topic_wants_current_information
@@ -180,6 +181,21 @@ def _license_evidence_lines(record: dict | None) -> list[str]:
     return lines
 
 
+def _has_external_licensed_media(record: dict | None) -> bool:
+    rows = (((record or {}).get("artifact") or {}).get("scene_provenance") or [])
+    for row in rows:
+        if not isinstance(row, dict) or row.get("success") is not True:
+            continue
+        evidence = row.get("quality_evidence") or {}
+        if (
+            evidence.get("external_media_used") is not False
+            and str(evidence.get("source_url") or "").strip()
+            and str(evidence.get("license") or "").strip()
+        ):
+            return True
+    return False
+
+
 def _production_evidence_block(record: dict | None) -> str:
     """Expose the real cover path and render-quality result in mission text.
 
@@ -296,6 +312,7 @@ class MediaManager:
         # exact same goal. This is not a new production/experiment and must
         # not append duplicate learning history.
         if produce_artifact:
+            require_external_media = requires_external_licensed_media(request_text or topic)
             history = self.learning.store.snapshot().get("youtube_learning", {}).get("productions", [])
             prior = next((row for row in reversed(history)
                           if row.get("original_goal") == topic
@@ -308,6 +325,7 @@ class MediaManager:
                               )), research_opportunity,
                           )
                           and (not free_only or _license_evidence_lines(row))
+                          and (not require_external_media or _has_external_licensed_media(row))
                           and Path(row.get("artifact", {}).get("final_video_path", "")).is_file()), None)
             if prior:
                 self.last_artifact_path = prior["artifact"]["final_video_path"]
@@ -326,6 +344,7 @@ class MediaManager:
         # DOĞRUDAN okuyamayız, bkz. Sprint 39 mimari notu).
         prior = self.knowledge.find_research(topic)
         full_request = (request_text or topic).strip()
+        require_external_media = requires_external_licensed_media(full_request)
         if (
             topic_wants_current_information(full_request)
             and research_opportunity is None
@@ -683,6 +702,7 @@ Kurallar:
                     stage_sink=stage_sink,
                     standing_permission=standing_permission,
                     free_only=free_only,
+                    require_external_media=require_external_media,
                 )
 
             if find_goal_production_package(topic) is None:

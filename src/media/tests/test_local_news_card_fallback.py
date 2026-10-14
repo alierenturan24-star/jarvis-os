@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from src.media.capability_model import MediaModelProfile, SceneProvenance, TEXT_TO_IMAGE
+from src.media.capability_model import MediaGenerationResult, MediaModelProfile, SceneProvenance, TEXT_TO_IMAGE
 from src.media.production import GeneralProductionBuilder, ParsedProductionPlan, ScenePlan
 from src.media.quality import validate_media_goal_artifact
 from src.media.renderer import LocalVideoRenderer, find_ffmpeg
@@ -107,6 +107,104 @@ def test_free_only_package_continues_when_commons_has_no_scene(tmp_path, monkeyp
     assert rendered.success is True, rendered.error
     assert Path(rendered.artifact_path).is_file()
     assert Path(rendered.artifact_path).stat().st_size > 10_000
+
+
+def test_required_external_media_does_not_accept_only_local_news_cards(tmp_path, monkeypatch):
+    if not Path(find_ffmpeg()).is_file():
+        pytest.skip("ffmpeg unavailable")
+    scenes = tuple(
+        ScenePlan(
+            scene_id=f"scene-{index:02d}", script_beat_id="HOOK", purpose="news",
+            narration_segment=f"Doğrulanmış haber sahnesi {index}.",
+            visual_description=f"Swiss news scene {index}", duration_seconds=1.0,
+            caption_text=f"Güncel gelişme {index}",
+        )
+        for index in range(1, 5)
+    )
+    parsed = ParsedProductionPlan(
+        hook=scenes[0].narration_segment,
+        script=" ".join(scene.narration_segment for scene in scenes),
+        ending=scenes[-1].narration_segment, scenes=scenes,
+        title="İsviçre Güncel Haber Testi", description="Kaynaklı test",
+        tags=("İsviçre", "haber"), thumbnail_concept="İsviçre gündemi",
+    )
+    profile = MediaModelProfile(
+        provider_id="wikimedia_commons", model_id="licensed-media-search-v1",
+        capabilities=(TEXT_TO_IMAGE,), availability=True, auth_required=False,
+        cost_class="free", free_tier=True, subscription_cli=False,
+        local_or_remote="remote", quality_tier=60, speed_tier=50,
+    )
+    monkeypatch.setattr("src.media.production.rank_available_providers",
+                        lambda *args, **kwargs: ([(profile, object())], []))
+    monkeypatch.setattr(GeneralProductionBuilder, "_licensed_commons_clip",
+                        staticmethod(lambda *args, **kwargs: (None, None)))
+
+    def failed_provider(ranked, scene, index, root, **kwargs):
+        return None, SceneProvenance(
+            scene_id=scene.scene_id, capability=TEXT_TO_IMAGE,
+            provider="wikimedia_commons", model="licensed-media-search-v1",
+            generation_type=TEXT_TO_IMAGE, output_path="", success=False,
+            quality_evidence={"reason": "no licensed result"},
+        )
+
+    monkeypatch.setattr(GeneralProductionBuilder, "_generate_scene_image", staticmethod(failed_provider))
+    builder = GeneralProductionBuilder(output_root=tmp_path / "generated")
+
+    result = builder._build_via_dynamic_provider(
+        goal="İsviçre güncel haber", parsed=parsed, memory={}, channel_id="default",
+        channel_market="Switzerland", channel_language="tr-TR", research_grounded=True,
+        research_evidence_ref={"source_count": 2}, required=("scene_generation",),
+        available=(), missing=("scene_generation",), free_only=True,
+        require_external_media=True,
+    )
+
+    assert result.success is False
+    assert "EXTERNAL_MEDIA_REQUIRED" in result.error
+    assert "licensed_external_media" in result.missing_capabilities
+
+
+def test_commons_image_search_uses_selected_story_title_before_verbose_scene(tmp_path):
+    calls = []
+
+    class Provider:
+        def generate_image(self, prompt, **kwargs):
+            calls.append(prompt)
+            if prompt == "Citroën 2CV electric comeback":
+                return MediaGenerationResult(
+                    True, "wikimedia_commons", "licensed-image-search-v1", TEXT_TO_IMAGE,
+                    content_bytes=b"x" * 6000, content_url="https://upload.wikimedia.org/example.jpg",
+                    cost_class="free", provenance={
+                        "generation_type": "licensed_stock_retrieval",
+                        "source_url": "https://commons.wikimedia.org/wiki/File:Citroen_2CV.jpg",
+                        "license": "CC BY 4.0", "external_media_used": True,
+                    },
+                )
+            return MediaGenerationResult(
+                False, "wikimedia_commons", "licensed-image-search-v1", TEXT_TO_IMAGE,
+                error="no match", cost_class="free",
+            )
+
+    profile = MediaModelProfile(
+        provider_id="wikimedia_commons", model_id="licensed-image-search-v1",
+        capabilities=(TEXT_TO_IMAGE,), availability=True, auth_required=False,
+        cost_class="free", free_tier=True, subscription_cli=False,
+        local_or_remote="remote", quality_tier=60, speed_tier=50,
+    )
+    scene = ScenePlan(
+        scene_id="scene-01", script_beat_id="HOOK", purpose="news",
+        narration_segment="Efsane geri dönüyor.",
+        visual_description="Klasik otomobil arşiv görüntüleri ve fuar atmosferi",
+        duration_seconds=5.0, caption_text="Efsane geri döndü",
+    )
+
+    path, provenance = GeneralProductionBuilder._generate_scene_image(
+        [(profile, Provider())], scene, 1, tmp_path,
+        search_context="Citroën 2CV electric comeback",
+    )
+
+    assert calls == ["Citroën 2CV electric comeback"]
+    assert path is not None and path.is_file()
+    assert provenance.quality_evidence["source_url"].startswith("https://commons.wikimedia.org/")
 
 
 def test_local_news_fallback_passes_full_publication_quality_gate(tmp_path, monkeypatch):

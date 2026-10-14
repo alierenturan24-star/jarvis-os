@@ -159,6 +159,16 @@ def test_concise_video_and_cover_wording_requires_full_video_production():
     assert research.id in media.depends_on
 
 
+def test_plain_licensed_real_media_wording_requires_external_provenance():
+    title = (
+        "İsviçre için bugün doğrulanmış yeni haber seç. Lisanslı gerçek medya "
+        "kullanarak 9:16 Türkçe video ve kapak hazırla; yayınlama."
+    )
+    names = {item.name for item in infer_completion_requirements(title, ["research", "media"])}
+
+    assert "media_license_provenance" in names
+
+
 def test_h_explicit_repo_evaluation_requires_planned_evidence():
     tasks = [_completed_task(name) for name in ("research", "evaluation", "sandbox", "integration")]
     tasks[1].metadata["report"] = {"candidates": []}

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from src.media.capability_model import IMAGE_TO_VIDEO, MediaModelProfile, SceneProvenance, TEXT_TO_IMAGE
+from src.media.licensing import is_allowed_reuse_license
 from src.media.provider_selection import rank_available_providers
 from src.media.quality import REQUIRED_SECTIONS
 from src.media.renderer import (
@@ -327,7 +328,8 @@ class GeneralProductionBuilder:
               enable_scene_motion: bool = False,
               stage_sink: dict | None = None,
               standing_permission: bool = False,
-              free_only: bool = False) -> PackageBuildResult:
+              free_only: bool = False,
+              require_external_media: bool = False) -> PackageBuildResult:
         video_render_available = bool(find_ffmpeg())
         narration_available = narration_capability_available()
         matching = self._matching_visual_assets(allow_legacy_authored_series)
@@ -361,7 +363,8 @@ class GeneralProductionBuilder:
                 research_grounded=research_grounded, research_evidence_ref=research_evidence_ref,
                 required=required, available=available, missing=missing,
                 enable_scene_motion=enable_scene_motion, stage_sink=stage_sink,
-                standing_permission=standing_permission, free_only=free_only)
+                standing_permission=standing_permission, free_only=free_only,
+                require_external_media=require_external_media)
 
         previous = list(memory.get("productions", []))
         used = {row.get("visual", {}).get("source_generation_fingerprint") for row in previous}
@@ -524,7 +527,8 @@ class GeneralProductionBuilder:
                                      enable_scene_motion: bool = False,
                                      stage_sink: dict | None = None,
                                      standing_permission: bool = False,
-                                     free_only: bool = False) -> PackageBuildResult:
+                                     free_only: bool = False,
+                                     require_external_media: bool = False) -> PackageBuildResult:
         """Real per-scene generation via whichever genuinely available,
         ranked text_to_image provider exists (see
         ``src.media.provider_selection``) -- e.g. NVIDIA NIM once
@@ -573,12 +577,12 @@ class GeneralProductionBuilder:
             # source carries author/license/URL evidence into the manifest.
             if free_only:
                 image_path, entry = self._licensed_commons_clip(
-                    scene, index, root, stage_sink=stage_sink,
+                    scene, index, root, search_context=parsed.title, stage_sink=stage_sink,
                 )
             if image_path is None:
                 image_path, entry = self._generate_scene_image(
                     ranked, scene, index, root, enable_motion=enable_scene_motion, stage_sink=stage_sink,
-                    standing_permission=standing_permission)
+                    standing_permission=standing_permission, search_context=parsed.title)
             # Free-only news production must not die merely because Commons
             # has no matching downloadable file for one scene.  Build an
             # original local motion-graphics card from the verified script;
@@ -613,6 +617,26 @@ class GeneralProductionBuilder:
                     production_id=production_id, required_capabilities=required,
                     available_capabilities=(), missing_capabilities=missing)
             scene_files.append(image_path)
+
+        external_scenes = [
+            row for row in provenance
+            if row.get("success") is True
+            and (row.get("quality_evidence") or {}).get("external_media_used") is not False
+            and str((row.get("quality_evidence") or {}).get("source_url") or "").strip()
+            and is_allowed_reuse_license((row.get("quality_evidence") or {}).get("license"))
+        ]
+        if require_external_media and not external_scenes:
+            reason = (
+                "EXTERNAL_MEDIA_REQUIRED: görev lisanslı gerçek medya istedi ancak hiçbir sahnede "
+                "kaynak URL'si ve uygun lisans kanıtı bulunan gerçek medya elde edilemedi; "
+                "yerel hareketli grafikler bu şartın yerine geçirilmedi"
+            )
+            self._checkpoint(checkpoint, production_id, "SCENES_AND_MOTION", "failed", reason)
+            return PackageBuildResult(
+                False, error=reason, production_id=production_id,
+                required_capabilities=required, available_capabilities=available,
+                missing_capabilities=("licensed_external_media",),
+            )
         self._checkpoint(checkpoint, production_id, "SCENES_AND_MOTION", "completed")
 
         script = parsed.script
@@ -811,7 +835,8 @@ class GeneralProductionBuilder:
 
     @staticmethod
     def _licensed_commons_clip(scene: ScenePlan, index: int, root: Path,
-                               *, stage_sink: dict | None = None) -> tuple[Path | None, SceneProvenance | None]:
+                               *, search_context: str = "",
+                               stage_sink: dict | None = None) -> tuple[Path | None, SceneProvenance | None]:
         from src.providers.wikimedia_media_provider import WikimediaMediaProvider
 
         if stage_sink is not None:
@@ -825,10 +850,11 @@ class GeneralProductionBuilder:
         }
         content_words = [word for word in words if len(word) >= 4 and word.casefold() not in stop]
         queries = list(dict.fromkeys(filter(None, (
+            search_context,
             description,
             " ".join(content_words[:7]),
             " ".join(content_words[-5:]),
-        ))))[:3]
+        ))))[:4]
         provider = WikimediaMediaProvider()
         result = None
         for attempt, query in enumerate(queries, 1):
@@ -877,7 +903,8 @@ class GeneralProductionBuilder:
     def _generate_scene_image(ranked, scene: ScenePlan, index: int, root: Path,
                                *, enable_motion: bool = False,
                                stage_sink: dict | None = None,
-                               standing_permission: bool = False) -> tuple[Path | None, SceneProvenance]:
+                               standing_permission: bool = False,
+                               search_context: str = "") -> tuple[Path | None, SceneProvenance]:
         """Try the ranked candidates in order (bounded to the top 2 -- same
         bounded-retry spirit as the existing repair loop, never unbounded)
         so one candidate's real execution failure triggers the existing
@@ -934,8 +961,20 @@ class GeneralProductionBuilder:
                 # (possibly outer-timed-out) background thread keeps
                 # mutating, so it survives even if this call never returns.
                 stage_sink["last_stage"] = f"{TEXT_TO_IMAGE}_scene_{index}_via_{profile.provider_id}/{profile.model_id}"
+            prompts = [scene.visual_description]
+            if profile.provider_id == "wikimedia_commons":
+                words = re.findall(r"[\wÀ-ÿ'-]+", scene.visual_description, flags=re.UNICODE)
+                compact = " ".join(word for word in words if len(word) >= 3)[:160]
+                prompts = list(dict.fromkeys(filter(None, (
+                    search_context, compact, scene.visual_description,
+                ))))[:3]
             try:
-                result = provider.generate_image(scene.visual_description, width=1024, height=1344)
+                result = None
+                for prompt in prompts:
+                    candidate = provider.generate_image(prompt, width=1024, height=1344)
+                    result = candidate
+                    if candidate is not None and candidate.success and candidate.content_bytes:
+                        break
             except Exception as error:
                 history.record(task_type=TEXT_TO_IMAGE, provider=profile.provider_id, success=False,
                                fallback_used=fallback_used, duration_seconds=0.0,

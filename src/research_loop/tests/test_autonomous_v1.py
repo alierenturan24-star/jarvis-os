@@ -6,7 +6,7 @@ import pytest
 
 from src.control_center.store import ControlCenterStore
 from src.knowledge.knowledge_base import KnowledgeBase
-from src.research_loop.autonomous import AutonomousResearchService
+from src.research_loop.autonomous import AutonomousResearchService, CAPABILITY_SCOUT_TAG
 
 
 def service(tmp_path, monkeypatch, **kwargs):
@@ -33,6 +33,45 @@ def test_topic_create_disable_due_and_persistence(tmp_path, monkeypatch):
     svc.set_enabled(topic["id"], False)
     assert svc.due_topics() == []
     with pytest.raises(RuntimeError): svc.run_topic(topic["id"], raw_findings=[finding()])
+
+
+def test_capability_scout_seeds_three_safe_idempotent_topics_and_can_be_requeued(tmp_path, monkeypatch):
+    svc = service(tmp_path, monkeypatch)
+    first = svc.ensure_capability_scout_topics(run_immediately=False)
+    second = svc.ensure_capability_scout_topics(run_immediately=False)
+    assert len(first) == len(second) == 3
+    assert {row["scout_key"] for row in first} == {"video", "finance", "agents"}
+    assert all(row["source_preferences"] == ["GITHUB"] for row in first)
+    assert all(CAPABILITY_SCOUT_TAG in row["tags"] and "FREE_FIRST" in row["tags"] for row in first)
+    assert svc.due_topics() == []
+    queued = svc.request_capability_scout_scan()
+    assert len(queued) == 3 and len(svc.due_topics()) == 3
+
+
+def test_scout_discovery_records_candidate_but_never_installs_or_activates_it(tmp_path, monkeypatch):
+    svc = service(tmp_path, monkeypatch)
+    topic = svc.ensure_capability_scout_topics(run_immediately=True)[0]
+    github = finding(
+        subject="Acme Video", value="Open source video editor",
+        source_url="https://github.com/acme/video-tool", source_identity="GitHub",
+        source_type="GITHUB", verification_state="VERIFIED_SOURCE", tool=None,
+    )
+    cycle = svc.run_topic(topic["id"], raw_findings=[github])
+    state = svc.store.snapshot()["autonomous_research"]
+    assert cycle["status"] == "COMPLETED"
+    assert state["tools"][0]["repository"] == "acme/video-tool"
+    assert CAPABILITY_SCOUT_TAG in state["tools"][0]["discovery_tags"]
+    assert state["tools"][0]["status"] == "VERIFIED_CANDIDATE"
+    assert state["capabilities"] == [] and state["proposals"] == []
+
+
+def test_run_due_limit_keeps_scout_bounded(tmp_path, monkeypatch):
+    svc = service(tmp_path, monkeypatch)
+    svc.ensure_capability_scout_topics(run_immediately=True)
+    calls = []
+    monkeypatch.setattr(svc, "run_topic", lambda topic_id, reason="SCHEDULED": calls.append(topic_id) or {"id": topic_id})
+    assert len(svc.run_due(limit=1)) == 1
+    assert len(calls) == 1
 
 
 def test_evidence_gate_duplicate_supersession_conflict_and_history(tmp_path, monkeypatch):

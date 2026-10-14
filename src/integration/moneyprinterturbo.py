@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import shutil
 import subprocess
 import uuid
@@ -25,6 +26,8 @@ class MoneyPrinterTurboStatus:
     claude_cli: bool = False
     publishing_disabled: bool = True
     detail: str = ""
+    setup_state: str = "NOT_STARTED"
+    setup_error: str = ""
 
 
 @dataclass(frozen=True)
@@ -81,6 +84,17 @@ def _publishing_is_disabled(root: Path) -> bool:
     )
 
 
+def _setup_state(root: Path) -> dict:
+    path = root.parent / "MoneyPrinterTurbo.setup.json"
+    if not path.is_file():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8-sig"))
+        return value if isinstance(value, dict) else {}
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {"status": "UNKNOWN", "message": "Kurulum durum kaydı okunamadı."}
+
+
 class MoneyPrinterTurboBridge:
     """Safe, local-only bridge to the upstream MoneyPrinterTurbo CLI.
 
@@ -106,11 +120,18 @@ class MoneyPrinterTurboBridge:
         python = _python_for(root)
         installed = cli.is_file()
         publishing_disabled = _publishing_is_disabled(root)
+        setup = _setup_state(root)
+        setup_state = str(setup.get("status") or "NOT_STARTED").upper()
+        setup_error = str(setup.get("message") or "")[:1000] if setup_state == "FAILED" else ""
         ready = bool(installed and python and publishing_disabled)
         if ready:
             detail = "Yerel kurgu motoru hazır; Claude Code bağlantısı kullanılabilir, yayın kapalı."
+        elif setup_state == "RUNNING":
+            detail = "Ayrı Python ortamı ve bağımlılıklar kuruluyor; JARVIS açık kalabilir."
+        elif setup_state == "FAILED":
+            detail = f"Kurulum tamamlanamadı: {setup_error or 'ayrıntı kaydı yok'}"
         elif installed and not python:
-            detail = "Kaynak bulundu fakat ayrı Python ortamı tamamlanmamış."
+            detail = "Kaynak hazır; ayrı Python ortamı eksik. Güvenli kurulum kaldığı yerden devam edebilir."
         elif installed and not publishing_disabled:
             detail = "Yayın güvenlik kilidi doğrulanamadı; motor kullanılmayacak."
         else:
@@ -123,6 +144,8 @@ class MoneyPrinterTurboBridge:
             claude_cli=bool(shutil.which("claude") or shutil.which("claude.exe")),
             publishing_disabled=publishing_disabled,
             detail=detail,
+            setup_state="READY" if ready else setup_state,
+            setup_error=setup_error,
         )
 
     def status_dict(self) -> dict:

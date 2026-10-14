@@ -90,6 +90,8 @@ jobs:
             src/providers/tests/test_claude_code_provider.py `
             src/providers/tests/test_provider_manager_routing.py `
             src/integration/tests/test_moneyprinterturbo.py `
+            src/research_loop/tests/test_autonomous_v1.py `
+            src/control_center/tests/test_autonomous_research_http.py `
             src/mission/tests/test_swiss_insider_mission_repair_round5.py `
             src/control_center/tests/test_remote_control_v1.py `
             src/control_center/tests/test_finance_autonomous_cycle.py `

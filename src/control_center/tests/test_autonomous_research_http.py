@@ -70,6 +70,17 @@ def test_authenticated_topic_and_observability_endpoints(api_server):
         assert call(api_server, "GET", path)[0] == 200
 
 
+def test_capability_scout_http_is_safe_and_idempotently_queued(api_server):
+    status, initial = call(api_server, "GET", "/api/capabilities/scout")
+    assert status == 200 and initial["safety"] == {
+        "automatic_install": False, "automatic_activation": False,
+        "automatic_publish": False, "live_finance": False,
+    }
+    status, queued = call(api_server, "POST", "/api/capabilities/scout/run")
+    assert status == 202 and queued["queued"] is True and len(queued["topics"]) == 3
+    assert call(api_server, "POST", "/api/capabilities/scout/run", authorized=False)[0] == 401
+
+
 def test_http_auth_invalid_malformed_and_duplicate_fail_closed(api_server):
     assert call(api_server, "GET", "/api/research/topics", authorized=False)[0] == 401
     assert call(api_server, "POST", "/api/research/topics", b"{")[0] == 409

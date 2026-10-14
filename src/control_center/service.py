@@ -28,7 +28,7 @@ from src.media.renderer import (
     narration_capability_available,
 )
 from src.providers.execution_history import ProviderExecutionHistory
-from src.research_loop.autonomous import AutonomousResearchService
+from src.research_loop.autonomous import AutonomousResearchService, CAPABILITY_SCOUT_TAG
 from src.capabilities.capability_registry import CapabilityRegistry
 from src.capabilities.capability_manager import CapabilityManager
 from src.capabilities.capability_evaluator import RepositoryEvidence, local_environment
@@ -160,6 +160,20 @@ class ControlCenterService:
             cwd=script.parents[1], stdout=stdout, stderr=stderr,
             creationflags=creationflags,
         )
+        process = self._mpt_setup_process
+        def watch_setup() -> None:
+            try:
+                exit_code = process.wait()
+            finally:
+                stdout.close(); stderr.close()
+            current = self.moneyprinterturbo_status()
+            if exit_code == 0 and current.get("ready"):
+                self.activity("INTEGRATION", "MoneyPrinterTurbo kurulumu doğrulandı ve kullanıma hazır.",
+                              worker="System worker")
+            else:
+                self.activity("RECOVERY", current.get("detail", "MoneyPrinterTurbo kurulumu tamamlanamadı."),
+                              worker="System worker", level="error")
+        threading.Thread(target=watch_setup, daemon=True, name="jarvis-mpt-setup-watch").start()
         self.activity(
             "INTEGRATION", "MoneyPrinterTurbo izole kurulumu arka planda başlatıldı; yayın kapalı.",
             worker="System worker",
@@ -794,6 +808,11 @@ class ControlCenterService:
     def scheduler_tick(self) -> list[dict]:
         results = []
         if self.busy or self._paused: return results
+        # The old watch-list was empty until the user manually named a tool.
+        # Every real scheduler process now owns an idempotent, free-first
+        # GitHub watch-list; constructing a service in a test or one-shot CLI
+        # remains side-effect free until a scheduler tick actually runs.
+        self.autonomous_research.ensure_capability_scout_topics(run_immediately=True)
         for due in self.workforce.due_jobs():
             try:
                 if due["job_type"] == "PUBLICATION":
@@ -818,7 +837,11 @@ class ControlCenterService:
                 self.workforce.advance_schedule(due["worker_id"])
             if self.busy: break
         if not self.busy and not self._paused:
-            results.extend({"type": "AUTONOMOUS_RESEARCH", **row} for row in self.autonomous_research.run_due())
+            # One bounded research topic per 30-second scheduler tick keeps an
+            # 8 GB / CPU-only Windows machine responsive while still draining
+            # the due queue automatically.
+            results.extend({"type": "AUTONOMOUS_RESEARCH", **row} for row in self.autonomous_research.run_due(limit=1))
+            results.extend({"type": "CAPABILITY_SCOUT", **row} for row in self.evaluate_scout_candidates(limit=1))
         return results
 
     def research_topics(self) -> list[dict[str, Any]]:
@@ -834,6 +857,89 @@ class ControlCenterService:
         state = self.store.snapshot()["autonomous_research"]
         return {key: state[key] for key in ("topics", "cycles", "findings", "tools", "capabilities", "evaluations", "capability_audit", "proposals",
                                                   "integration_plans", "integration_verifications", "mission_continuations")}
+
+    def capability_scout_status(self) -> dict[str, Any]:
+        state = self.store.snapshot()["autonomous_research"]
+        topics = [row for row in state["topics"] if CAPABILITY_SCOUT_TAG in row.get("tags", [])]
+        candidates = [row for row in state["tools"] if CAPABILITY_SCOUT_TAG in row.get("discovery_tags", [])]
+        running = any(row.get("running_cycle_id") for row in topics)
+        last_scan = max((str(row.get("last_researched_at") or "") for row in topics), default="") or None
+        next_scan = min((str(row.get("next_research_at") or "") for row in topics), default="") or None
+        return {
+            "enabled": bool(topics) and all(row.get("enabled") for row in topics),
+            "running": running,
+            "topics": [{"key": row.get("scout_key"), "name": row.get("name"),
+                        "last_researched_at": row.get("last_researched_at"),
+                        "next_research_at": row.get("next_research_at"),
+                        "failures": row.get("consecutive_failures", 0)} for row in topics],
+            "last_scan_at": last_scan,
+            "next_scan_at": next_scan,
+            "candidate_count": len(candidates),
+            "evaluated_count": sum(bool(row.get("evaluation_fingerprint")) for row in candidates),
+            "candidates": [{key: row.get(key) for key in (
+                "capability_id", "name", "repository", "status", "project_type",
+                "scout_assessment", "scout_summary", "discovered_at", "last_verified_at")}
+                for row in sorted(candidates, key=lambda item: str(item.get("discovered_at") or ""), reverse=True)[:20]],
+            "safety": {"automatic_install": False, "automatic_activation": False,
+                       "automatic_publish": False, "live_finance": False},
+        }
+
+    def request_capability_scout(self) -> dict[str, Any]:
+        self.autonomous_research.request_capability_scout_scan()
+        self.activity("AI_DISCOVERY", "Yetenek Avcısı taraması sıraya alındı; kurulum ve aktivasyon kapalıdır.")
+        return {**self.capability_scout_status(), "queued": True,
+                "message": "Video, finance ve ajan araçları için güvenli GitHub taraması sıraya alındı."}
+
+    def evaluate_scout_candidates(self, *, limit: int = 1) -> list[dict[str, Any]]:
+        """Passively inspect a bounded number of new scout candidates.
+
+        This may read repository metadata/README through the GitHub API. It
+        never clones, installs or executes repository code. Executable tools
+        can only advance to a human approval for isolated sandbox verification.
+        """
+        state = self.store.snapshot()["autonomous_research"]
+        candidates = [row for row in state["tools"]
+                      if CAPABILITY_SCOUT_TAG in row.get("discovery_tags", [])
+                      and row.get("status") == "VERIFIED_CANDIDATE"
+                      and not any(item.get("capability_id") == row.get("capability_id") and item.get("current")
+                                  for item in state["evaluations"])]
+        outcomes: list[dict[str, Any]] = []
+        for candidate in candidates[:max(0, limit)]:
+            capability_id = str(candidate["capability_id"])
+            try:
+                evaluation = self.evaluate_capability(capability_id)
+                assessment, summary = self._scout_fit(evaluation, candidate)
+                self.store.update(lambda current, cid=capability_id, value=assessment, note=summary:
+                    next(row for row in current["autonomous_research"]["tools"]
+                         if row.get("capability_id") == cid).update(
+                             scout_assessment=value, scout_summary=note))
+                outcomes.append({"capability_id": capability_id, "status": assessment, "summary": summary})
+            except Exception as error:
+                self.capability_manager._audit(capability_id, "AUTO_SCOUT_EVALUATION_FAILED", {
+                    "error_type": type(error).__name__, "error": str(error)[:500]})
+                outcomes.append({"capability_id": capability_id, "status": "EVALUATION_FAILED",
+                                 "summary": str(error)[:500]})
+        return outcomes
+
+    @staticmethod
+    def _scout_fit(evaluation: dict[str, Any], candidate: dict[str, Any]) -> tuple[str, str]:
+        hardware = evaluation.get("hardware_requirements", {})
+        runtime = evaluation.get("runtime_requirements", {})
+        maintenance = evaluation.get("maintenance", {})
+        tags = {str(item).casefold() for item in candidate.get("discovery_tags", [])}
+        if maintenance.get("archived") is True:
+            return "REFERENCE_ONLY", "Depo arşivlenmiş; entegrasyon adayı yapılmadı."
+        if hardware.get("gpu") == "REQUIRED" or runtime.get("cuda") == "REQUIRED":
+            return "UNSUITABLE_FOR_LOCAL_PC", "GPU/CUDA zorunlu; düşük kaynaklı Windows kurulumu için uygun değil."
+        if evaluation.get("requires_payment") is True:
+            return "REFERENCE_ONLY", "Ücretli servis gereksinimi bulundu; ücretsiz-önce politikasında elendi."
+        if "finance" in tags and (evaluation.get("requires_api_key") is True or evaluation.get("requires_account") is True):
+            return "PAPER_ONLY_REVIEW", "Finans adayı yalnız araştırma/backtest/paper için incelenebilir; live emir kapalı."
+        if evaluation.get("recommended_action") == "REQUEST_APPROVAL_FOR_SANDBOX":
+            return "READY_FOR_SANDBOX_APPROVAL", "Lisanslı çalıştırılabilir aday; kurulumdan önce insan onaylı sandbox gerekir."
+        if evaluation.get("recommended_action") == "KEEP_FOR_REFERENCE":
+            return "REFERENCE_ONLY", "Çalıştırılabilir entegrasyon değil; kaynak listesi/dokümantasyon olarak tutuldu."
+        return "NEEDS_MORE_EVIDENCE", "Uyumluluk veya lisans kanıtı yetersiz; sisteme kurulmadı."
 
     def evaluate_capability(self, capability_id: str) -> dict[str, Any]:
         candidate = next((row for row in self.store.snapshot()["autonomous_research"]["tools"]

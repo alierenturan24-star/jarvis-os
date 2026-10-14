@@ -348,6 +348,8 @@ class ControlCenterHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/health": return self._json(self.server.service.health())
         if parsed.path == "/api/integrations/moneyprinterturbo":
             return self._json(self.server.service.moneyprinterturbo_status())
+        if parsed.path == "/api/capabilities/scout":
+            return self._json(self.server.service.capability_scout_status())
         if parsed.path == "/api/dashboard": return self._json(self.server.service.read_model.dashboard())
         if parsed.path == "/api/tasks": return self._json(self.server.service.read_model.tasks())
         if parsed.path == "/api/approvals": return self._json(self.server.service.read_model.approvals())
@@ -398,6 +400,8 @@ class ControlCenterHandler(BaseHTTPRequestHandler):
                     202,
                 )
             if path == "/api/research/topics": return self._json(self.server.service.create_research_topic(data), 201)
+            if path == "/api/capabilities/scout/run":
+                return self._json(self.server.service.request_capability_scout(), 202)
             if path.startswith("/api/capabilities/"):
                 parts = path.strip("/").split("/")
                 if len(parts) == 4 and parts[3] == "evaluate":

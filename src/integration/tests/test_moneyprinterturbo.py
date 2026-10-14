@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 from src.integration.moneyprinterturbo import (
     PINNED_REVISION,
@@ -40,6 +41,29 @@ def test_bridge_fails_closed_when_upstream_publishing_is_enabled(tmp_path):
     assert status.installed is True
     assert status.ready is False
     assert "kilidi" in status.detail
+
+
+def test_bridge_reports_persistent_setup_failure_and_repairable_partial_source(tmp_path):
+    root = tmp_path / "MoneyPrinterTurbo"
+    root.mkdir()
+    (root / "cli.py").write_text("# source exists but venv failed\n", encoding="utf-8")
+    (tmp_path / "MoneyPrinterTurbo.setup.json").write_text(json.dumps({
+        "status": "FAILED", "message": "dependency sync failed",
+    }), encoding="utf-8")
+    status = MoneyPrinterTurboBridge(root).status()
+    assert status.installed is True and status.ready is False
+    assert status.setup_state == "FAILED"
+    assert status.setup_error == "dependency sync failed"
+    assert "dependency sync failed" in status.detail
+
+
+def test_windows_installer_preserves_unmanaged_copy_and_validates_runtime():
+    script = (Path(__file__).resolve().parents[3] / "tools" / "setup_moneyprinterturbo.ps1").read_text(encoding="utf-8")
+    assert "MoneyPrinterTurbo.setup.json" in script
+    assert "Move-Item -LiteralPath $IntegrationRoot" in script
+    assert "uvPath sync --frozen --no-dev --python $systemPython" in script
+    assert "import moviepy, edge_tts" in script
+    assert "Write-SetupState 'FAILED'" in script
 
 
 def test_command_uses_only_local_materials_and_no_publish_switch(tmp_path):

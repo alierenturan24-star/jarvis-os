@@ -21,6 +21,34 @@ DECISIONS = {"ACCEPT_NEW", "UPDATE_EXISTING", "NO_CHANGE", "CONFLICT", "INSUFFIC
 PRIMARY_TYPES = {"OFFICIAL_DOCS", "OFFICIAL_API", "GITHUB", "LOCAL", "USER_CONFIRMED"}
 UNTRUSTED_EXTERNAL_CONTENT = "UNTRUSTED_EXTERNAL_CONTENT"
 INJECTION_MARKERS = ("ignore previous instructions", "send your api key", "run this command", "disable security")
+CAPABILITY_SCOUT_TAG = "SYSTEM_CAPABILITY_SCOUT_V1"
+CAPABILITY_SCOUT_PROFILES = (
+    {
+        "key": "video",
+        "name": "GitHub open source Windows CPU video editing subtitles thumbnail licensed media FFmpeg CLI",
+        "description": (
+            "JARVIS video hattı için ücretsiz ve açık kaynak araçları bul. Windows, CPU ve düşük bellek "
+            "uyumunu; lisansı, bakım durumunu ve yerel CLI/API entegrasyonunu doğrula. Otomatik yayınlama "
+            "ve izinsiz medya yeniden kullanımı içeren adayları kabul etme."
+        ),
+    },
+    {
+        "key": "finance",
+        "name": "GitHub open source finance backtesting paper trading research Python CPU no live broker",
+        "description": (
+            "JARVIS finance laboratuvarı için araştırma, backtest ve paper-only araçları bul. Gerçek broker "
+            "emri, para transferi veya otomatik live trading gerektiren adayları yalnız referans olarak işaretle."
+        ),
+    },
+    {
+        "key": "agents",
+        "name": "GitHub open source Claude Code Codex MCP agent orchestration Windows local",
+        "description": (
+            "JARVIS'in Claude Code, Codex ve MCP araçlarını güvenli biçimde birbirine bağlayabileceği ücretsiz "
+            "açık kaynak projeleri bul. Secret toplama, yetki atlatma veya denetimsiz komut çalıştırma isteyenleri reddet."
+        ),
+    },
+)
 
 
 def _parse(value: str | None) -> datetime | None:
@@ -45,6 +73,57 @@ class AutonomousResearchService:
 
     def topics(self) -> list[dict[str, Any]]:
         return self.store.snapshot()["autonomous_research"]["topics"]
+
+    def ensure_capability_scout_topics(self, *, run_immediately: bool = True) -> list[dict[str, Any]]:
+        """Seed JARVIS' own bounded capability watch-list exactly once.
+
+        Discovery is read-only.  A discovered repository is never installed,
+        activated, allowed to publish, or allowed to place a financial order.
+        """
+        now = datetime.now(timezone.utc)
+
+        def mutate(state: dict[str, Any]) -> None:
+            topics = state["autonomous_research"]["topics"]
+            known = {str(row.get("scout_key")): row for row in topics
+                     if CAPABILITY_SCOUT_TAG in row.get("tags", [])}
+            for profile in CAPABILITY_SCOUT_PROFILES:
+                if profile["key"] in known:
+                    continue
+                interval = max(Settings.RESEARCH_MIN_INTERVAL_SECONDS, 86400)
+                created = utc_now()
+                topics.append({
+                    "id": uuid.uuid4().hex,
+                    "name": profile["name"],
+                    "description": profile["description"],
+                    "enabled": True,
+                    "priority": 80,
+                    "created_at": created,
+                    "updated_at": created,
+                    "last_researched_at": None,
+                    "next_research_at": (now if run_immediately else now + timedelta(seconds=interval)).isoformat(timespec="seconds"),
+                    "research_interval": interval,
+                    "source_preferences": ["GITHUB"],
+                    "tags": [CAPABILITY_SCOUT_TAG, profile["key"], "FREE_FIRST", "WINDOWS_CPU"],
+                    "scout_key": profile["key"],
+                    "consecutive_failures": 0,
+                    "running_cycle_id": None,
+                })
+
+        state = self.store.update(mutate)
+        return [row for row in state["autonomous_research"]["topics"]
+                if CAPABILITY_SCOUT_TAG in row.get("tags", [])]
+
+    def request_capability_scout_scan(self) -> list[dict[str, Any]]:
+        """Make the three system scout topics due without creating duplicates."""
+        self.ensure_capability_scout_topics(run_immediately=True)
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        def mutate(state: dict[str, Any]) -> None:
+            for row in state["autonomous_research"]["topics"]:
+                if CAPABILITY_SCOUT_TAG in row.get("tags", []) and not row.get("running_cycle_id"):
+                    row.update(enabled=True, next_research_at=now, consecutive_failures=0, updated_at=utc_now())
+        state = self.store.update(mutate)
+        return [row for row in state["autonomous_research"]["topics"]
+                if CAPABILITY_SCOUT_TAG in row.get("tags", [])]
 
     def create_topic(self, name: str, description: str = "", **options: Any) -> dict[str, Any]:
         name = " ".join(name.split())
@@ -74,8 +153,11 @@ class AutonomousResearchService:
                 and (_parse(row.get("next_research_at")) or now) <= now
                 and row.get("consecutive_failures", 0) < Settings.RESEARCH_MAX_CONSECUTIVE_FAILURES]
 
-    def run_due(self, now: datetime | None = None) -> list[dict[str, Any]]:
-        return [self.run_topic(row["id"], reason="SCHEDULED") for row in self.due_topics(now)]
+    def run_due(self, now: datetime | None = None, *, limit: int | None = None) -> list[dict[str, Any]]:
+        rows = sorted(self.due_topics(now), key=lambda row: int(row.get("priority", 50)), reverse=True)
+        if limit is not None:
+            rows = rows[:max(0, int(limit))]
+        return [self.run_topic(row["id"], reason="SCHEDULED") for row in rows]
 
     def run_topic(self, topic_id: str, *, reason: str = "MANUAL", raw_findings: list[dict[str, Any]] | None = None,
                   max_runtime: float | None = None) -> dict[str, Any]:
@@ -117,6 +199,7 @@ class AutonomousResearchService:
                 item = dict(item); item["topic_id"] = topic_id; item["cycle_id"] = cycle_id
                 provenance = self._provenance(item, topic.get("source_preferences", []))
                 item["provenance"] = provenance
+                item["topic_tags"] = list(topic.get("tags", []))
                 if not item.get("tool"):
                     item["tool"] = self._candidate_from_finding(item)
                 decision, reason_text = self.learning_decision(item)
@@ -239,7 +322,8 @@ class AutonomousResearchService:
         return {"name": repository, "capability_id": f"github-{owner.casefold()}-{repository.casefold()}",
                 "repository": f"{owner}/{repository}", "category": "RESEARCH_DISCOVERED_TOOL",
                 "access_method": "MANUAL_ONLY", "discovery_state": "VERIFIED_CANDIDATE",
-                "description": f"Research-discovered GitHub repository {owner}/{repository}"}
+                "description": f"Research-discovered GitHub repository {owner}/{repository}",
+                "discovery_tags": list(finding.get("topic_tags", [])), "discovered_at": utc_now()}
 
     def _discover_tool(self, finding: dict[str, Any]) -> None:
         spec = dict(finding["tool"]); name = str(spec.get("name", "")).strip()

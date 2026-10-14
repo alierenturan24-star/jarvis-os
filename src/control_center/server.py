@@ -346,6 +346,8 @@ class ControlCenterHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
         if parsed.path == "/api/status": return self._json(self.server.service.snapshot())
         if parsed.path == "/api/health": return self._json(self.server.service.health())
+        if parsed.path == "/api/integrations/moneyprinterturbo":
+            return self._json(self.server.service.moneyprinterturbo_status())
         if parsed.path == "/api/dashboard": return self._json(self.server.service.read_model.dashboard())
         if parsed.path == "/api/tasks": return self._json(self.server.service.read_model.tasks())
         if parsed.path == "/api/approvals": return self._json(self.server.service.read_model.approvals())
@@ -429,6 +431,8 @@ class ControlCenterHandler(BaseHTTPRequestHandler):
                 self._schedule_restart()
                 return self._json({"ok": True, "restarting": True,
                                    "message": "JARVIS yeniden başlatılıyor."}, 202)
+            if path == "/api/integrations/moneyprinterturbo/setup":
+                return self._json(self.server.service.setup_moneyprinterturbo(), 202)
             if path == "/api/workers/stop-all": return self._json(self.server.service.workforce.stop_all())
             if path.startswith("/api/workers/"):
                 parts = path.strip("/").split("/")

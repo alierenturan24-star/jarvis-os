@@ -39,6 +39,7 @@ from src.capabilities.capability_installer import ControlledCapabilityInstaller
 from src.capabilities.integration_lifecycle import IntegrationLifecycleManager, local_environment_probe
 from src.capabilities.build_delegation import delegate_capability_build
 from src.jobs.job_manager import JobManager
+from src.integration.moneyprinterturbo import MoneyPrinterTurboBridge
 from src.workforce import AccountConnectionManager, WorkforceManager, YouTubePublisher
 from src.workforce.manager import ensure_channel_tag
 from src.workforce.publisher import artifact_id
@@ -100,6 +101,7 @@ class ControlCenterService:
         self._activities: list[dict[str, Any]] = []
         self._paused = False
         self._provider_health: dict[str, bool] = {}
+        self._mpt_setup_process: subprocess.Popen | None = None
         self._build_identity = _source_build_identity()
         self._started_at = utc_now()
         self._interrupted = self.store.recover_interrupted()
@@ -120,6 +122,52 @@ class ControlCenterService:
         if self.runtime.state == self.runtime.BOOTING:
             self.runtime.boot()
         self.read_model = ControlCenterReadModel(self)
+
+    def moneyprinterturbo_status(self) -> dict[str, Any]:
+        status = MoneyPrinterTurboBridge().status_dict()
+        process = self._mpt_setup_process
+        installing = bool(process is not None and process.poll() is None)
+        status["installing"] = installing
+        if process is not None and not installing:
+            status["last_setup_exit_code"] = process.returncode
+        return status
+
+    def setup_moneyprinterturbo(self) -> dict[str, Any]:
+        """Start the isolated installer without blocking the control center.
+
+        The installer is pinned, keeps its own venv, and forces upstream
+        publication switches off.  It is deliberately never run as part of
+        normal JARVIS startup because the optional package is large.
+        """
+        current = self.moneyprinterturbo_status()
+        if current.get("ready"):
+            return {"ok": True, **current, "message": "MoneyPrinterTurbo zaten hazır."}
+        if current.get("installing"):
+            return {"ok": True, **current, "message": "MoneyPrinterTurbo kurulumu sürüyor."}
+        powershell = shutil.which("powershell.exe") or shutil.which("powershell")
+        if not powershell:
+            raise RuntimeError("MoneyPrinterTurbo otomatik kurulumu yalnız Windows PowerShell üzerinde desteklenir.")
+        script = Path(__file__).resolve().parents[2] / "tools" / "setup_moneyprinterturbo.ps1"
+        if not script.is_file():
+            raise RuntimeError("MoneyPrinterTurbo kurulum dosyası bulunamadı.")
+        log_root = Path("workspace/control_center/logs")
+        log_root.mkdir(parents=True, exist_ok=True)
+        stdout = (log_root / "moneyprinterturbo.stdout.log").open("a", encoding="utf-8")
+        stderr = (log_root / "moneyprinterturbo.stderr.log").open("a", encoding="utf-8")
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        self._mpt_setup_process = subprocess.Popen(
+            [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
+            cwd=script.parents[1], stdout=stdout, stderr=stderr,
+            creationflags=creationflags,
+        )
+        self.activity(
+            "INTEGRATION", "MoneyPrinterTurbo izole kurulumu arka planda başlatıldı; yayın kapalı.",
+            worker="System worker",
+        )
+        return {
+            "ok": True, **self.moneyprinterturbo_status(),
+            "message": "MoneyPrinterTurbo arka planda kuruluyor; JARVIS açık kalacak.",
+        }
 
     def activity(self, stage: str, message: str, *, worker: str = "", level: str = "info",
                  mission_id: str | None = None) -> None:
@@ -554,6 +602,7 @@ class ControlCenterService:
                 "ffmpeg-flite" if ffmpeg_has_flite() else ""
             )
         )
+        mpt = self.moneyprinterturbo_status()
         capabilities = [
             {"id": "command_pipeline", "label": "Gerçek görev hattı", "ready": True,
              "mode": "JARVIS RUNTIME", "detail": "Panel komutları /api/command üzerinden gerçek runtime'a gider."},
@@ -574,6 +623,11 @@ class ControlCenterService:
             {"id": "claude_code", "label": "Claude Code yardımcısı", "ready": bool(shutil.which("claude")),
              "mode": "KONTROLLÜ" if shutil.which("claude") else "İSTEĞE BAĞLI",
              "detail": "Kurulu ve giriş yapılmışsa kod görevlerinde izin listesi ve süre sınırıyla kullanılabilir."},
+            {"id": "moneyprinterturbo", "label": "MoneyPrinterTurbo video motoru",
+             "ready": bool(mpt.get("ready")),
+             "mode": ("KURULUYOR" if mpt.get("installing") else
+                      "CLAUDE + YEREL MEDYA" if mpt.get("ready") else "İSTEĞE BAĞLI"),
+             "detail": str(mpt.get("detail") or "")},
             {"id": "credential_vault", "label": "Güvenli kimlik kasası", "ready": self.workforce.vault.available,
              "mode": self.workforce.vault.backend,
              "detail": "OAuth belirteçleri state/log/frontend içine yazılmaz."},

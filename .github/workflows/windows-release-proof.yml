@@ -28,6 +28,13 @@ jobs:
         shell: powershell
         run: .\tools\setup_and_start.ps1 -SetupOnly
 
+      - name: Prove the isolated MoneyPrinterTurbo installation plan
+        shell: powershell
+        run: |
+          $plan = .\tools\setup_moneyprinterturbo.ps1 -DryRun | ConvertFrom-Json
+          if ($plan.revision -ne 'c184fccd05621d7a654b6e6ea34102a0a0de0657') { throw 'Wrong MoneyPrinterTurbo pin.' }
+          if ($plan.isolated -ne $true -or $plan.publishing -ne $false) { throw 'Unsafe MoneyPrinterTurbo plan.' }
+
       - name: Boot panel and verify exact build identity
         shell: powershell
         run: |
@@ -82,6 +89,7 @@ jobs:
             src/research/tests/test_summarizer_provider_free_fallback.py `
             src/providers/tests/test_claude_code_provider.py `
             src/providers/tests/test_provider_manager_routing.py `
+            src/integration/tests/test_moneyprinterturbo.py `
             src/mission/tests/test_swiss_insider_mission_repair_round5.py `
             src/control_center/tests/test_remote_control_v1.py `
             src/control_center/tests/test_finance_autonomous_cycle.py `

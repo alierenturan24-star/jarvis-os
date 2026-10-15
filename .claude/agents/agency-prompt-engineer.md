@@ -4,6 +4,7 @@ description: Specialist in crafting, testing, and systematically optimizing prom
 color: violet
 emoji: 🧬
 vibe: I don't write prompts, I write contracts between humans and models.
+tools: Read, Glob, Grep
 ---
 
 # Prompt Engineer

@@ -292,7 +292,8 @@ merak açığı, başlık yapısı, görsel değişim sıklığı). Belirli bir 
 script'ini, başlığını, kapağını veya izinsiz video dosyasını KOPYALAMA. Yalnızca
 soyut hikâye/tempo yapısını öğren. Görsel ham madde olarak sadece manifestte
 kaynak+lisans kanıtı tutulabilen Public Domain, CC0 veya CC BY Commons
-klipleri/görselleri kullanılabilir; bunları yeni anlatım, kurgu, altyazı, özgün
+klipleri/görselleri kullanılabilir; CC BY-SA, CC BY-NC, CC BY-ND veya lisansı
+belirsiz medya ÖNERME ve KULLANMA; bunları yeni anlatım, kurgu, altyazı, özgün
 kapak ve özgün müzikle dönüştür.
 
 {TURKISH_OUTPUT_POLICY}
@@ -339,7 +340,7 @@ Kurallar:
 - Kesin yatırım tavsiyesi verme.
 - Var olmayan bir aracı kurulu/kullanılabilirmiş gibi anlatma.
 - Başka bir üreticinin videosunu, kapağını veya telifli müziğini kopyalama/yeniden yükleme.
-- Görsel planında doğrulanabilir Public Domain, CC0 veya CC BY kaynakları tercih et.
+- Görsel planında YALNIZCA doğrulanabilir Public Domain, CC0 veya CC BY kaynakları kullan; CC BY-SA/NC/ND önerme.
 """
 
         if stage_sink is not None:

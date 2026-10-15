@@ -253,6 +253,7 @@ class MediaManager:
         capability_note = (
             "Bu ortamda GERÇEKTEN kurulu olan: yerel Ollama, workspace-local "
             "FFmpeg/ffprobe, anahtarsız ve lisans kanıtlı Wikimedia Commons görsel/video araması, "
+            "yalnız açık CC BY/Public Domain metadata'sı varsa çalışan yt-dlp video keşif/indirme hattı, "
             "yerel özgün kapak/altyazı/müzik kompozisyonu ve Windows System.Speech TTS. "
             "Onay yokken ücretli görsel sağlayıcısı kullanılmaz; yayınlama capability'si kullanılmaz."
             if find_ffmpeg()

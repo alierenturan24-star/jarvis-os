@@ -19,6 +19,17 @@ from src.media.renderer import (
 from src.providers.execution_history import ProviderExecutionHistory
 from src.security.action_policy import ActionPolicy
 
+
+def _image_suffix(content: bytes) -> str:
+    """Choose the on-disk extension from bytes, not a remote/original MIME."""
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if content.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if content.startswith(b"RIFF") and content[8:12] == b"WEBP":
+        return ".webp"
+    return ".img"
+
 # Sprint: paid media provider approval safety fix. Inspection found NVIDIA/
 # fal/LTX/AIML (every real remote media provider in this codebase) had NO
 # approval gate before their actual HTTP/API call -- only capability/
@@ -935,9 +946,11 @@ class GeneralProductionBuilder:
                         standing_permission=standing_permission)
                     if motion_path is not None:
                         return motion_path, motion_entry
-                path = root / f"scene-{index:02d}.png"
+                suffix = _image_suffix(result.content_bytes)
+                path = root / f"scene-{index:02d}{suffix}"
                 path.write_bytes(result.content_bytes)
                 provenance = dict(result.provenance or {})
+                provenance["stored_suffix"] = suffix
                 generation_type = str(provenance.pop("generation_type", TEXT_TO_IMAGE))
                 return path, SceneProvenance(
                     scene_id=scene.scene_id, capability=TEXT_TO_IMAGE, provider=profile.provider_id,

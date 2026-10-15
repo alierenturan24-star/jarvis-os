@@ -1,7 +1,7 @@
 param([int]$Port = 8765)
 
 $ErrorActionPreference = 'Stop'
-$TargetBranch = 'codex/youtube-planning-gemini-images'
+$TargetBranch = 'main'
 $CurrentRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 Set-Location -LiteralPath $CurrentRoot
 

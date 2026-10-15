@@ -36,9 +36,11 @@ $ReadyBranch = "jarvis-ready-$RunId"
 # cakismasi engellenir. Yine de isim mevcutsa sayacla benzersizlestirilir.
 $BackupBranch = "backup/jarvis-before-update-$RunId"
 $BackupSuffix = 1
-while (& git.exe show-ref --verify --quiet "refs/heads/$BackupBranch"; $LASTEXITCODE -eq 0) {
+& git.exe show-ref --verify --quiet "refs/heads/$BackupBranch"
+while ($LASTEXITCODE -eq 0) {
     $BackupBranch = "backup/jarvis-before-update-$RunId-$BackupSuffix"
     $BackupSuffix++
+    & git.exe show-ref --verify --quiet "refs/heads/$BackupBranch"
 }
 $StashCreated = $false
 

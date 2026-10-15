@@ -586,6 +586,10 @@ class GeneralProductionBuilder:
                 image_path, entry = self._licensed_commons_clip(
                     scene, index, root, stage_sink=stage_sink,
                 )
+                if image_path is None:
+                    image_path, entry = self._licensed_yt_dlp_clip(
+                        scene, index, root, stage_sink=stage_sink,
+                    )
             if image_path is None:
                 image_path, entry = self._generate_scene_image(
                     ranked, scene, index, root, enable_motion=enable_scene_motion, stage_sink=stage_sink,
@@ -812,6 +816,60 @@ class GeneralProductionBuilder:
             },
         )
         return (target if success else None), entry
+
+    @staticmethod
+    def _licensed_yt_dlp_clip(scene: ScenePlan, index: int, root: Path,
+                              *, stage_sink: dict | None = None) -> tuple[Path | None, SceneProvenance | None]:
+        """Best-effort CC BY/Public Domain video retrieval through yt-dlp.
+
+        Never uses account cookies and never accepts missing/standard/ambiguous
+        license metadata.  The provider persists source/author/license evidence
+        and this method transcodes the downloaded source into the same local
+        scene MP4 contract used by the Commons-video path.
+        """
+        from src.providers.yt_dlp_media_provider import LicensedYtDlpVideoProvider
+
+        if stage_sink is not None:
+            stage_sink["last_stage"] = f"licensed_yt_dlp_scene_{index}"
+        provider = LicensedYtDlpVideoProvider()
+        source_root = root / f"scene-{index:02d}-yt-dlp"
+        result = provider.find_and_download(scene.visual_description, source_root)
+        if not result.success or not result.path:
+            if stage_sink is not None:
+                stage_sink[f"licensed_yt_dlp_scene_{index}_error"] = result.error[:500]
+            return None, None
+
+        source = Path(result.path)
+        if not source.is_file():
+            return None, None
+        output = root / f"scene-{index:02d}.mp4"
+        seconds = max(2.0, float(scene.duration_seconds or 5.0))
+        command = [
+            find_ffmpeg(), "-y", "-hide_banner", "-loglevel", "error",
+            "-stream_loop", "-1", "-i", str(source),
+            "-t", f"{seconds:.3f}", "-an",
+            "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,"
+                   "crop=1080:1920,fps=25,format=yuv420p",
+            "-c:v", "libx264", "-preset", "veryfast", str(output),
+        ]
+        try:
+            completed = subprocess.run(command, capture_output=True, text=True, timeout=90, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            return None, None
+        if completed.returncode != 0 or not output.is_file() or output.stat().st_size <= 10_000:
+            return None, None
+
+        provenance = dict(result.provenance or {})
+        generation_type = str(provenance.pop("generation_type", "licensed_stock_video_retrieval"))
+        return output, SceneProvenance(
+            scene_id=scene.scene_id, capability="text_to_video",
+            provider="yt_dlp_licensed_video", model="youtube-cc-search-v1",
+            generation_type=generation_type, output_path=str(output.resolve()),
+            success=True, fallback_used=True, cost_class="free",
+            input_reference=scene.visual_description[:200],
+            duration_seconds=result.duration_seconds,
+            quality_evidence=provenance,
+        )
 
     @staticmethod
     def _licensed_commons_clip(scene: ScenePlan, index: int, root: Path,

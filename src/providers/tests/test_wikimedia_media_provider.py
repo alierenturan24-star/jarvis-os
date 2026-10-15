@@ -126,3 +126,28 @@ def test_cc_by_without_attribution_is_rejected(monkeypatch):
         lambda *args, **kwargs: _Response(payload=payload),
     )
     assert not WikimediaMediaProvider().generate_image("Bundeshaus Bern").success
+
+
+def test_public_domain_svg_uses_downloadable_thumbnail(monkeypatch):
+    payload = {
+        "query": {"pages": {"1": {"index": 0, "imageinfo": [{
+            "mime": "image/svg+xml",
+            "thumburl": "https://upload.wikimedia.org/thumb/flag.png",
+            "descriptionurl": "https://commons.wikimedia.org/wiki/File:Flag_of_Switzerland.svg",
+            "extmetadata": {
+                "LicenseShortName": {"value": "Public domain"},
+                "Artist": {"value": "Swiss Confederation"},
+            },
+        }]}}},
+    }
+
+    def fake_get(url, **kwargs):
+        if "w/api.php" in url:
+            return _Response(payload=payload)
+        return _Response(content=b"\x89PNG\r\n\x1a\n" + b"x" * 6000)
+
+    monkeypatch.setattr("requests.get", fake_get)
+    result = WikimediaMediaProvider().generate_image("Flag of Switzerland")
+    assert result.success
+    assert result.provenance["license"] == "Public domain"
+    assert result.provenance["mime"] == "image/svg+xml"

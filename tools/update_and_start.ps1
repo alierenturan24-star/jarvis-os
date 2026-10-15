@@ -32,7 +32,14 @@ $OriginalBranch = $OriginalBranch.Trim()
 $Timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $RunId = "$Timestamp-$PID"
 $ReadyBranch = "jarvis-ready-$RunId"
-$BackupBranch = "backup/jarvis-before-update-$Timestamp"
+# PID eklenerek yarim kalmis onceki bir guncellemenin ayni saniye adiyla
+# cakismasi engellenir. Yine de isim mevcutsa sayacla benzersizlestirilir.
+$BackupBranch = "backup/jarvis-before-update-$RunId"
+$BackupSuffix = 1
+while (& git.exe show-ref --verify --quiet "refs/heads/$BackupBranch"; $LASTEXITCODE -eq 0) {
+    $BackupBranch = "backup/jarvis-before-update-$RunId-$BackupSuffix"
+    $BackupSuffix++
+}
 $StashCreated = $false
 
 Write-Host '[1/4] Mevcut JARVIS guvenli dala kaydediliyor...' -ForegroundColor Cyan

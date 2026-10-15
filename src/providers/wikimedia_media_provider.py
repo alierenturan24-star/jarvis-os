@@ -71,6 +71,8 @@ def _search_queries(description: str) -> tuple[str, ...]:
         candidates.append("Bundeshaus Bern")
     if ("isviçre" in folded or "isvicre" in folded) and "bayra" in folded:
         candidates.append("Flag of Switzerland")
+    if any(token in folded for token in ("isviçre", "isvicre", "swiss", "switzerland", "bern", "parmelin", "amaudruz")):
+        candidates.extend(("Bundeshaus Bern", "Flag of Switzerland"))
     # Prefer exact proper-name pairs for a person over broad keywords.
     names = re.findall(
         r"\b[A-ZÀ-ÖØ-ÞÇĞİÖŞÜ][a-zà-öø-ÿçğıöşü'-]+"
@@ -156,7 +158,7 @@ class WikimediaMediaProvider(MediaProvider):
                 for page in ordered:
                     info = next(iter(page.get("imageinfo") or ()), None)
                     if not info or str(info.get("mime", "")).lower() not in (
-                        "image/jpeg", "image/png", "image/webp",
+                        "image/jpeg", "image/png", "image/webp", "image/svg+xml",
                     ):
                         continue
                     metadata = info.get("extmetadata") or {}
@@ -193,7 +195,7 @@ class WikimediaMediaProvider(MediaProvider):
                             "generation_type": "licensed_stock_retrieval",
                             "source_url": source_url, "author": author,
                             "license": license_name, "license_url": license_url,
-                            "search_query": query,
+                            "search_query": query, "mime": str(info.get("mime") or ""),
                             "attribution_required": not is_public,
                         },
                     )

@@ -3,7 +3,7 @@ setlocal EnableExtensions EnableDelayedExpansion
 title JARVIS Video Surumunu Kur ve Ac - CANLI
 color 0B
 
-set "TARGET_BRANCH=codex/youtube-planning-gemini-images"
+set "TARGET_BRANCH=main"
 set "SOURCE_REPO=C:\Projects\jarvis-os\jarvis-os"
 if not exist "%SOURCE_REPO%\.git" set "SOURCE_REPO=C:\Projects\jarvis-os"
 

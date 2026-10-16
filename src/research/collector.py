@@ -270,9 +270,13 @@ class ResearchCollector:
                 else self.web.search_news if search.get("news")
                 else self.web.search
             )
+            from src.config.settings import Settings
+            per_call_timeout = Settings.RESEARCH_PROVIDER_TIMEOUT_SECONDS
+            if remaining is not None:
+                per_call_timeout = min(per_call_timeout, max(0.1, remaining))
             response = search_method(
                 query=search["query"], max_results=max_results_per_source,
-                timeout_seconds=remaining if remaining is not None else 15.0,
+                timeout_seconds=per_call_timeout,
             )
             if not response.get("success"):
                 continue

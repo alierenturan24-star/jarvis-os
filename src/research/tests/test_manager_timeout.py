@@ -48,3 +48,34 @@ def test_research_cycle_timeout_is_reported_honestly(monkeypatch, tmp_path):
     result = ResearchManager().research("timeout test topic")
 
     assert "süresi doldu" in result or "RESEARCH_CYCLE_MAX_RUNTIME_EXCEEDED" in result
+
+
+def test_each_search_call_is_clamped_to_provider_timeout():
+    observed: list[float] = []
+
+    class _Web:
+        def _run(self, **kwargs):
+            observed.append(float(kwargs["timeout_seconds"]))
+            return {"success": False, "results": []}
+
+        def search(self, **kwargs):
+            return self._run(**kwargs)
+
+        def search_news(self, **kwargs):
+            return self._run(**kwargs)
+
+        def search_videos(self, **kwargs):
+            return self._run(**kwargs)
+
+    collector = ResearchCollector()
+    collector.web = _Web()
+    deadline = time.monotonic() + Settings.RESEARCH_PROVIDER_TIMEOUT_SECONDS * MAX_SEARCH_STEPS
+
+    collector.collect(
+        "İsviçre için son 7 gün güncel gündem kısa video",
+        deadline=deadline,
+    )
+
+    assert observed
+    assert max(observed) <= Settings.RESEARCH_PROVIDER_TIMEOUT_SECONDS + 0.001
+    assert all(value > 0 for value in observed)

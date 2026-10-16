@@ -220,8 +220,10 @@ class ResearchAgent(BaseAgent):
                     # pass instead of either fabricating completion or asking
                     # the user to retry manually.
                     selected = retry_opportunity.selected_topic
+                    verification_window = 30 if allow_window_fallback else 7
                     verification_query = (
-                        f'"{selected}" aynı olayı doğrulayan bağımsız haber kaynakları '
+                        f'"{selected}" güncel son {verification_window} gün '
+                        "aynı olayı doğrulayan bağımsız haber kaynakları "
                         f"yayın tarihi {market_context}"
                     )
                     verification_result = self.manager.research(

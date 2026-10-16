@@ -121,3 +121,15 @@ class TestD_UnrelatedDepartmentsRetainExistingTimeoutBehavior:
         media_task = next(t for t in tasks if t.agent == "media")
         assert media_task.timeout_seconds == MEDIA_DEPARTMENT_TASK_TIMEOUT_SECONDS
         assert media_task.timeout_seconds != DEPARTMENT_TASK_TIMEOUT_SECONDS
+
+
+def test_media_research_budget_covers_all_bounded_research_passes():
+    from src.agents.research_agent import MEDIA_RESEARCH_MAX_PASSES
+
+    single_pass = (
+        Settings.RESEARCH_PROVIDER_TIMEOUT_SECONDS * MAX_SEARCH_STEPS
+        + DEPARTMENT_TASK_TIMEOUT_SECONDS
+    )
+    assert MEDIA_RESEARCH_MAX_PASSES == 3
+    assert RESEARCH_DEPARTMENT_TASK_TIMEOUT_SECONDS >= MEDIA_RESEARCH_MAX_PASSES * single_pass
+    assert RESEARCH_DEPARTMENT_TASK_TIMEOUT_SECONDS < 1200.0

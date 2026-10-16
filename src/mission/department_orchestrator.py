@@ -41,6 +41,7 @@ from src.providers.claude_code_provider import DEFAULT_TIMEOUT_SECONDS as _CLAUD
 from src.providers.codex_provider import DEFAULT_TIMEOUT_SECONDS as _CODEX_TIMEOUT_SECONDS
 from src.config.settings import Settings
 from src.research.collector import MAX_SEARCH_STEPS
+from src.agents.research_agent import MEDIA_RESEARCH_MAX_PASSES
 # Round 4 repair: "media"'s own outer department timeout, sized from its
 # REAL inner worst-case (bounded repair-attempt count + the quality gate's
 # own real subprocess timeout sum) -- SAME pattern as CODING/RESEARCH above.
@@ -117,9 +118,13 @@ CODING_DEPARTMENT_TASK_TIMEOUT_SECONDS = (
 # above: a single call can take 45-100+s) instead of inventing a second,
 # independent "how slow can Ollama be" constant -- PLUS a safety margin.
 RESEARCH_DEPARTMENT_TASK_TIMEOUT_MARGIN_SECONDS = 15.0
-RESEARCH_DEPARTMENT_TASK_TIMEOUT_SECONDS = (
+_RESEARCH_SINGLE_PASS_WORST_CASE_SECONDS = (
     Settings.RESEARCH_PROVIDER_TIMEOUT_SECONDS * MAX_SEARCH_STEPS
-    + DEPARTMENT_TASK_TIMEOUT_SECONDS + RESEARCH_DEPARTMENT_TASK_TIMEOUT_MARGIN_SECONDS
+    + DEPARTMENT_TASK_TIMEOUT_SECONDS
+)
+RESEARCH_DEPARTMENT_TASK_TIMEOUT_SECONDS = (
+    MEDIA_RESEARCH_MAX_PASSES * _RESEARCH_SINGLE_PASS_WORST_CASE_SECONDS
+    + RESEARCH_DEPARTMENT_TASK_TIMEOUT_MARGIN_SECONDS
 )
 
 # Round 4 repair (real live-mission evidence): a media task reached
@@ -790,15 +795,17 @@ class DepartmentOrchestrator:
         # an explicit user-given topic -- see the "research" task-building
         # branch below). Drives the explicit media->research dependency
         # wired after the task-creation loop.
+        # Reliability rule: when one YouTube production mission contains both
+        # research and media, media consumes that mission's research result and
+        # therefore MUST run after research.  The previous narrower heuristic
+        # incorrectly treated explicit commands such as "güncel haber bul ve
+        # videoyu hazırla" as independent branches; a research timeout then let
+        # media run early and permanently return RESEARCH_GAP.  Keep the graph
+        # explicit instead of relying on timing or KnowledgeBase coincidence.
         media_needs_research_grounding = (
             has_youtube_production_intent(source_text)
             and "research" in mission.departments
             and "media" in mission.departments
-            and _media_needs_topic_research(source_text.casefold())
-            and (
-                has_current_information_intent(source_text)
-                or not _EXPLICIT_MEDIA_TOPIC_PATTERN.search(source_text)
-            )
         )
         # Geriye dönük uyumluluk: ``mission.target`` zaten ``MissionEngine.
         # create_mission()`` içinde BİR KEZ dolduruluyor; Mission'ı
@@ -959,26 +966,11 @@ class DepartmentOrchestrator:
                 metadata=metadata,
             ))
 
-        # Round 5 repair (real live-mission evidence): media used to
-        # independently re-derive its own topic and rely on an internal,
-        # coincidental KnowledgeBase string-match to pick up research
-        # context -- the live mission's media task used a DIFFERENT topic
-        # string than research's own query, that lookup silently missed,
-        # and media fell back to generic evergreen content, never grounded
-        # in what research actually found. When media genuinely needs
-        # topic discovery (``media_needs_research_grounding``, set above --
-        # narrower than "research is in the bundle": excludes an explicit
-        # research ask and an explicit user-given topic, which must not
-        # unnecessarily wait), media now explicitly depends on research
-        # completing first (SAME mechanism as the finance->learning
-        # dependency below) and receives a live reference to the research
-        # task so it can read its structured ``SelectedOpportunity``
-        # (``task.metadata["report"]``) once done -- see
-        # MediaAgent.execute()/MediaManager.plan(). Media otherwise (no
-        # topic discovery needed, or research not selected at all) remains
-        # fully independent/runnable on its own, unchanged -- it can still
-        # consume persisted KnowledgeBase context and safely produce/block
-        # on its own capability gate.
+        # Media consumes research whenever both departments are selected for
+        # the same YouTube production mission.  This dependency is deliberate:
+        # recovery can now reset/re-run the cancelled media task after a timed-
+        # out research task succeeds, instead of preserving a stale RESEARCH_GAP.
+        # Missions without a research department remain independently runnable.
         if media_needs_research_grounding:
             research_task = next((task for task in tasks if task.agent == "research"), None)
             media_task = next((task for task in tasks if task.agent == "media"), None)

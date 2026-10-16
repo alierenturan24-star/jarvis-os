@@ -6,6 +6,17 @@ $ErrorActionPreference = 'Stop'
 $ProjectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $TargetBranch = 'main'
 $SetupScript = Join-Path $PSScriptRoot 'setup_and_start.ps1'
+$VenvPython = Join-Path $ProjectRoot '.venv\Scripts\python.exe'
+$CriticalTests = @(
+    'src/mission/tests/test_swiss_insider_conditional_routing.py::test_exact_current_user_command_forces_research_before_media',
+    'src/mission/tests/test_research_department_timeout.py::test_media_research_budget_covers_all_bounded_research_passes',
+    'src/research/tests/test_manager_timeout.py::test_each_search_call_is_clamped_to_provider_timeout',
+    'src/mission/tests/test_recovery.py::test_recovered_research_requeues_cancelled_media_dependency',
+    'src/mission/tests/test_recovery.py::test_research_timeout_retry_keeps_full_original_budget',
+    'src/providers/tests/test_yt_dlp_media_provider.py',
+    'src/providers/tests/test_wikimedia_media_provider.py',
+    'src/media/tests/test_production_helpers.py'
+)
 
 function Invoke-Git([string[]]$Arguments, [string]$Step) {
     & git.exe @Arguments
@@ -44,7 +55,7 @@ while ($LASTEXITCODE -eq 0) {
 }
 $StashCreated = $false
 
-Write-Host '[1/4] Mevcut JARVIS guvenli dala kaydediliyor...' -ForegroundColor Cyan
+Write-Host '[1/6] Mevcut JARVIS guvenli dala kaydediliyor...' -ForegroundColor Cyan
 Invoke-Git -Arguments @('branch', $BackupBranch, $OriginalHead) -Step 'Guvenlik dali olusturma'
 Write-Host "      Guvenlik dali: $BackupBranch" -ForegroundColor DarkGray
 
@@ -57,16 +68,32 @@ if ($LocalChanges.Count -gt 0) {
 }
 
 try {
-    Write-Host '[2/4] GitHub guncel surumu aliniyor...' -ForegroundColor Cyan
+    Write-Host '[2/6] GitHub guncel surumu aliniyor...' -ForegroundColor Cyan
     Invoke-Git -Arguments @('fetch', 'origin', $TargetBranch) -Step 'GitHub guncelleme'
 
-    Write-Host '[3/4] Dogrulanmis JARVIS dali aciliyor...' -ForegroundColor Cyan
+    Write-Host '[3/6] Dogrulanmis JARVIS dali aciliyor...' -ForegroundColor Cyan
     # Sabit bir dal adi baska bir Git worktree tarafindan kullaniliyor olabilir.
     # Her calistirmada benzersiz dal kullanmak eski guvenli kurulumlara dokunmadan
     # Windows'taki "already used by worktree" hatasini onler.
     Invoke-Git -Arguments @('switch', '-C', $ReadyBranch, "origin/$TargetBranch") -Step 'Guncel dala gecis'
 
-    Write-Host '[4/4] JARVIS baslatiliyor...' -ForegroundColor Cyan
+    Write-Host '[4/6] Bagimliliklar ve yerel araclar dogrulaniyor...' -ForegroundColor Cyan
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $SetupScript -SetupOnly -Port $Port
+    if ($LASTEXITCODE -ne 0) {
+        throw "JARVIS hazirlik asamasi basarisiz oldu (cikis kodu $LASTEXITCODE)."
+    }
+    if (-not (Test-Path -LiteralPath $VenvPython -PathType Leaf)) {
+        throw "JARVIS Python ortami bulunamadi: $VenvPython"
+    }
+
+    Write-Host '[5/6] Kritik Research -> Media testleri calistiriliyor...' -ForegroundColor Cyan
+    & $VenvPython -m pytest -q @CriticalTests
+    if ($LASTEXITCODE -ne 0) {
+        throw "Kritik JARVIS testleri basarisiz oldu (cikis kodu $LASTEXITCODE)."
+    }
+    Write-Host '      Kritik testler BASARILI.' -ForegroundColor Green
+
+    Write-Host '[6/6] JARVIS baslatiliyor...' -ForegroundColor Cyan
     Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue |
         Select-Object -ExpandProperty OwningProcess -Unique |
         ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }

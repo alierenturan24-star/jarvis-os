@@ -492,7 +492,17 @@ def recover_task(
         # exceeds-outer invariant as the coding department, applied to the
         # retry window instead of a subprocess.
         if failure_class == FailureClass.TIMEOUT and original_timeout:
-            task.timeout_seconds = min(original_timeout, Settings.RECOVERY_SAME_METHOD_RETRY_TIMEOUT_SECONDS)
+            # Research can legitimately execute its full bounded 7-day ->
+            # 30-day -> same-story corroboration chain.  Shrinking a retry
+            # below the original department budget recreates the exact timeout
+            # that recovery is trying to heal, so research keeps its already-
+            # bounded outer budget. Other provider-backed departments retain
+            # the configurable retry cap.
+            task.timeout_seconds = (
+                original_timeout
+                if task.agent == "research"
+                else min(original_timeout, Settings.RECOVERY_SAME_METHOD_RETRY_TIMEOUT_SECONDS)
+            )
         task.status = TaskStatus.PENDING
         task.error = ""
         task.result = None

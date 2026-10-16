@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 import time
 import unicodedata
 from datetime import datetime, timezone

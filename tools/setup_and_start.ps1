@@ -109,6 +109,9 @@ function Clear-StaleJarvisListener {
 Set-Location -LiteralPath $ProjectRoot
 $ExpectedBuild = (& git.exe -C $ProjectRoot rev-parse --short=12 HEAD).Trim()
 if (-not $ExpectedBuild) { throw 'JARVIS surum kimligi okunamadi.' }
+# Child Control Center inherits this exact source identity. Mission reports use
+# the same value so persisted/old results can be distinguished from a fresh run.
+$env:JARVIS_BUILD_ID = $ExpectedBuild
 $SystemPython = Resolve-JarvisPython
 Write-Host "[1/5] Python bulundu: $SystemPython" -ForegroundColor Cyan
 

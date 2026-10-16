@@ -169,30 +169,46 @@ def _normalized_distinctive_words(text: str) -> set[str]:
         "isvicre", "switzerland", "schweiz", "suisse", "svizzera",
         "haber", "haberi", "guncel", "bugun", "today", "news",
     }
-    return {word for word in re.findall(r"\w+", normalized) if len(word) >= 4 and word not in generic}
+    return {
+        word for word in re.findall(r"\w+", normalized)
+        if (
+            (word.isdigit() and len(word) >= 2)
+            or (len(word) >= 4 and word not in generic)
+        )
+    }
 
 
 def _same_story_evidence(selected_topic: str, evidence: tuple[dict, ...]) -> tuple[dict, ...]:
     """Keep only sources that actually corroborate the selected headline.
 
-    This narrow gate is used when the user explicitly asks for two sources.
-    Shared proper nouns/numbers or two distinctive content words are enough
-    for multilingual reporting, while unrelated headlines from the same
-    search result page no longer count as corroboration.
+    Identify the evidence row that best matches the chosen headline first.
+    Its factual excerpt becomes part of the story signature. This helps
+    multilingual reporting: translated headlines may share few words, while
+    stable campaign/entity names and numbers remain comparable.
     """
     selected_words = _normalized_distinctive_words(selected_topic)
-    if not selected_words:
+    if not selected_words or not evidence:
         return ()
-    matched: list[dict] = []
+
+    rows: list[tuple[dict, set[str], set[str]]] = []
     for item in evidence:
         source_words = _normalized_distinctive_words(
             f"{item.get('title', '')} {item.get('summary', '')}"
         )
-        overlap = selected_words & source_words
-        if len(overlap) >= 2 or any(word.isdigit() for word in overlap):
+        rows.append((item, source_words, selected_words & source_words))
+
+    lead_item, lead_words, lead_overlap = max(rows, key=lambda row: len(row[2]))
+    if len(lead_overlap) < 2 and not any(word.isdigit() for word in lead_overlap):
+        return ()
+
+    story_signature = selected_words | lead_words
+    matched: list[dict] = []
+    for item, source_words, selected_overlap in rows:
+        overlap = story_signature & source_words
+        shared_number = any(word.isdigit() for word in overlap)
+        if item is lead_item or len(selected_overlap) >= 2 or shared_number or len(overlap) >= 2:
             matched.append(item)
     return tuple(matched)
-
 
 def _topic_repeats(selected_topic: str, excluded_topics: list[str] | tuple[str, ...]) -> bool:
     selected = _normalized_distinctive_words(selected_topic)

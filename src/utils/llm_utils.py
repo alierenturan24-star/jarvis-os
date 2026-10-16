@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import re
+import unicodedata
+
 
 FAILURE_MARKERS = (
     "zaman aşımına uğradı",
@@ -71,14 +74,36 @@ def source_fallback(
         if item.get("reference_role") != "format_only" and item.get("rejected") is not True
     ]
     dated = [item for item in factual if str(item.get("published_at") or "").strip()]
-    excluded = [str(item or "").casefold().strip() for item in (exclude_topics or []) if str(item or "").strip()]
+    excluded = [str(item or "").strip() for item in (exclude_topics or []) if str(item or "").strip()]
+
+    def topic_tokens(value: str) -> set[str]:
+        normalized = "".join(
+            char for char in unicodedata.normalize("NFKD", value.casefold())
+            if not unicodedata.combining(char)
+        )
+        return {
+            token for token in re.findall(r"\w+", normalized)
+            if len(token) >= 4 and token not in {"isvicre", "switzerland", "schweiz", "suisse", "svizzera", "haber", "guncel"}
+        }
+
+    excluded_tokens = [topic_tokens(item) for item in excluded]
 
     def not_previously_attempted(item: dict) -> bool:
-        title = str(item.get("title") or "").casefold().strip()
-        return bool(title) and not any(title in old or old in title for old in excluded)
+        title_tokens = topic_tokens(str(item.get("title") or ""))
+        if not title_tokens:
+            return False
+        for old_tokens in excluded_tokens:
+            if not old_tokens:
+                continue
+            overlap = len(title_tokens & old_tokens) / max(1, min(len(title_tokens), len(old_tokens)))
+            if overlap >= 0.75:
+                return False
+        return True
 
     candidates = dated or factual or selected
     unseen = [item for item in candidates if not_previously_attempted(item)]
+    if excluded and not unseen:
+        return "Model cevap üretmedi: dışlama listesi dışında yeni bir konu bulunamadı."
     lead = (unseen or candidates)[0]
     lead_title = str(lead.get("title") or "Güncel kaynak taraması").strip()
 

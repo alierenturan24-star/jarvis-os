@@ -175,3 +175,26 @@ def test_approval_only_recovery_report_names_real_blocker_not_unknown():
     assert blocker in report
     assert "NEYİN BAŞARISIZ OLMASI BENİ DURDURDU? bilinmiyor" not in report
     assert "capability discovery onayın yerine geçmez" in report
+
+
+CURRENT_USER_VIDEO_COMMAND = (
+    "İsviçre için güncel ve ilgi çekici bir haber bul. Son 7 günü tara; "
+    "iki güvenilir kaynak yoksa 30 güne genişlet. Önceki konuları tekrarlama. "
+    "Public Domain, CC0 veya CC BY görüntülerle 9:16 Türkçe kısa video hazırla: "
+    "yeni kurgu, anlatım, altyazı, kapak ve telif güvenli müzik. Ücretli servis kullanma. "
+    "MP4 ve kalite sonucunu panelde göster. Yayınlama; son onayımı iste."
+)
+
+
+def test_exact_current_user_command_forces_research_before_media():
+    engine = MissionEngine()
+    mission = engine.create_mission(CURRENT_USER_VIDEO_COMMAND)
+    tasks = engine.orchestrator.create_tasks(mission)
+
+    research = next(task for task in tasks if task.agent == "research")
+    media = next(task for task in tasks if task.agent == "media")
+
+    assert research.id in media.depends_on
+    assert media.metadata["research_task"] is research
+    assert research.metadata["allow_30_day_fallback"] is True
+    assert "son 7 gün" in research.target.casefold()

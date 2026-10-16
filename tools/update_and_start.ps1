@@ -11,6 +11,7 @@ $CriticalTests = @(
     'src/mission/tests/test_swiss_insider_conditional_routing.py::test_exact_current_user_command_forces_research_before_media',
     'src/mission/tests/test_research_department_timeout.py::test_media_research_budget_covers_all_bounded_research_passes',
     'src/research/tests/test_manager_timeout.py::test_each_search_call_is_clamped_to_provider_timeout',
+    'src/research/tests/test_story_corroboration_regression.py',
     'src/mission/tests/test_recovery.py::test_recovered_research_requeues_cancelled_media_dependency',
     'src/mission/tests/test_recovery.py::test_research_timeout_retry_keeps_full_original_budget',
     'src/providers/tests/test_yt_dlp_media_provider.py',

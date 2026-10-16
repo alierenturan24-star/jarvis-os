@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 from src.jobs.task import Task
@@ -180,9 +181,11 @@ def _mission_section(mission: Mission) -> str:
         if _mission_uses_repo_acquisition(mission)
         else ""
     )
+    build_identity = os.getenv("JARVIS_BUILD_ID", "").strip() or "unknown"
     return (
         "MISSION\n"
         f"{mission.title}\n\n"
+        f"BUILD: {build_identity}\n"
         f"Tür: {mission.mission_type.value.upper()}\n"
         f"{target_line}"
         f"Risk: {mission.risk_level}\n"
@@ -233,16 +236,16 @@ def _execution_plan_section(mission: Mission) -> str:
     """Sprint 36 (AUTONOMOUS EXECUTION ENGINE): "Görev -> AI seçimi ->
     Tool seçimi -> Department zinciri -> Risk -> Maliyet" -- Execution
     Planner'ın (bkz. ``src.strategy.execution_planner``) ``ai_strategy``'den
-    TÜRETTİĞİ, okunabilir yürütme zinciri. Gerçek dispatch sırasını
-    DEĞİŞTİRMEZ (departmanlar hâlâ bağımsız/paralel çalışır) -- yalnızca
-    CEO'nun "sonucu değil, bütün yürütme planını" görebilmesi içindir."""
+    TÜRETTİĞİ, okunabilir yürütme zinciri. Gerçek yürütme bağımlılıkları
+    TaskPlan.depends_on üzerinden uygulanır; bu bölüm yalnızca CEO'nun
+    "sonucu değil, bütün yürütme planını" görebilmesi içindir."""
 
     header = "EXECUTION PLAN"
     plan = mission.execution_plan
     if plan is None:
         return f"{header}\nPlan üretilemedi (veri yok)."
 
-    lines = [header, "Department zinciri (anlatım sırası -- gerçek dispatch hâlâ bağımsız/paralel):"]
+    lines = [header, "Department zinciri (anlatım sırası; gerçek bağımlılıklar TaskPlan tarafından uygulanır):"]
     for step in plan.steps:
         ai_part = f"AI: {step.ai_note}" if step.uses_ai else step.ai_note
         lines.append(f"  {step.order}. {step.label} | Tool: {step.tool} | {ai_part}")

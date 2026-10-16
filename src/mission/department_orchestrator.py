@@ -437,7 +437,7 @@ def _media_research_query(source_text: str) -> str:
     evidence_clause = f" {requirements}" if requirements else ""
     return (
         f"{context}{evidence_clause} güncel gündem: bugün öne çıkan haberler, kamuoyunun ilgisini çeken "
-        "gelişmeler ve trend olan konular. Kısa video (Shorts) anlatımına uygun, "
+        "gelişmeler ve trend olan konular. Kısa video anlatımına uygun, "
         "güncelliği kaynaklarla doğrulanabilir TEK bir içerik fırsatı belirle."
     )
 

@@ -187,6 +187,21 @@ def _is_swiss_topic(topic: str) -> bool:
     return any(name in lowered for name in ("isviçre", "isvicre", "switzerland", "schweiz", "suisse", "svizzera"))
 
 
+def _corroboration_headline(topic: str) -> str:
+    lowered = (topic or "").casefold()
+    if not any(cue in lowered for cue in ("aynı olayı doğrulayan", "aynı haberi doğrulayan", "same story", "corroborat")):
+        return ""
+    match = re.search(r'"([^"]{8,240})"', topic or "")
+    return match.group(1).strip() if match else ""
+
+
+def _news_timelimit(topic: str) -> str:
+    match = re.search(r"\bson\s+(\d+)\s+gün", (topic or "").casefold())
+    if match and int(match.group(1)) > 7:
+        return "m"
+    return "w"
+
+
 class ResearchCollector:
 
     def __init__(self) -> None:
@@ -212,8 +227,27 @@ class ResearchCollector:
         from src.research.manager import topic_wants_current_information
 
         searches = []
+        corroboration_headline = _corroboration_headline(topic)
+        news_timelimit = _news_timelimit(topic)
         if topic_wants_current_information(topic) and hasattr(self.web, "search_news"):
-            if _is_swiss_topic(topic):
+            if corroboration_headline:
+                # Do not repeat the broad market scan when we already have a
+                # concrete candidate headline. Search that exact story first;
+                # this prevents generic Wikipedia/homepage results from being
+                # mistaken for corroboration evidence.
+                searches.extend((
+                    {
+                        "search_channel": "NEWS_STORY_EXACT",
+                        "query": f'"{corroboration_headline}"',
+                        "news": True, "timelimit": news_timelimit,
+                    },
+                    {
+                        "search_channel": "NEWS_STORY_SWISS",
+                        "query": f'{corroboration_headline} Schweiz Suisse Svizzera Switzerland',
+                        "news": True, "timelimit": news_timelimit,
+                    },
+                ))
+            elif _is_swiss_topic(topic):
                 today = datetime.now(timezone.utc).date().isoformat()
                 alternate = "alternative_source_pass" in (topic or "").casefold()
                 if alternate:
@@ -223,9 +257,9 @@ class ResearchCollector:
                     # set. The opportunity gate below still accepts only
                     # explicitly dated, trusted Swiss sources.
                     searches.extend((
-                        {"search_channel": "NEWS_DE_BROAD", "query": f"(site:srf.ch OR site:nzz.ch OR site:swissinfo.ch) Schweiz Nachrichten {today}", "news": True, "source_language": "de"},
-                        {"search_channel": "NEWS_FR_BROAD", "query": f"(site:rts.ch OR site:letemps.ch OR site:swissinfo.ch) Suisse actualités {today}", "news": True, "source_language": "fr"},
-                        {"search_channel": "NEWS_IT_BROAD", "query": f"(site:rsi.ch OR site:cdt.ch OR site:swissinfo.ch) Svizzera ultime notizie {today}", "news": True, "source_language": "it"},
+                        {"search_channel": "NEWS_DE_BROAD", "query": f"(site:srf.ch OR site:nzz.ch OR site:swissinfo.ch) Schweiz Nachrichten {today}", "news": True, "source_language": "de", "timelimit": news_timelimit},
+                        {"search_channel": "NEWS_FR_BROAD", "query": f"(site:rts.ch OR site:letemps.ch OR site:swissinfo.ch) Suisse actualités {today}", "news": True, "source_language": "fr", "timelimit": news_timelimit},
+                        {"search_channel": "NEWS_IT_BROAD", "query": f"(site:rsi.ch OR site:cdt.ch OR site:swissinfo.ch) Svizzera ultime notizie {today}", "news": True, "source_language": "it", "timelimit": news_timelimit},
                     ))
                 else:
                     searches.extend((
@@ -274,10 +308,14 @@ class ResearchCollector:
             per_call_timeout = Settings.RESEARCH_PROVIDER_TIMEOUT_SECONDS
             if remaining is not None:
                 per_call_timeout = min(per_call_timeout, max(0.1, remaining))
-            response = search_method(
-                query=search["query"], max_results=max_results_per_source,
-                timeout_seconds=per_call_timeout,
-            )
+            call_kwargs = {
+                "query": search["query"],
+                "max_results": max_results_per_source,
+                "timeout_seconds": per_call_timeout,
+            }
+            if search.get("news") and search.get("timelimit"):
+                call_kwargs["timelimit"] = search["timelimit"]
+            response = search_method(**call_kwargs)
             if not response.get("success"):
                 continue
             for item in response.get("results", []):

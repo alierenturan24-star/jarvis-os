@@ -769,3 +769,54 @@ class TestClaudeCodeRecoveryConnection:
         assert task.status == TaskStatus.FAILED
         assert "openai" not in calls
         assert attempts[-1].step == RecoveryStep.PAID_APPROVAL_REQUIRED
+
+
+def test_recovered_research_requeues_cancelled_media_dependency():
+    from src.mission.recovery import _reset_stale_dependents
+
+    research = Task(title="research", agent="research", handler=lambda task: "ok")
+    research.status = TaskStatus.COMPLETED
+    media = Task(
+        title="media", agent="media", handler=lambda task: "video",
+        depends_on=[research.id],
+    )
+    media.status = TaskStatus.CANCELLED
+
+    plan = TaskPlan(goal="research then media")
+    plan.add_task(research)
+    plan.add_task(media)
+
+    reset = _reset_stale_dependents(plan, research)
+
+    assert media.id in reset
+    assert media.status == TaskStatus.PENDING
+    assert media.error == ""
+    assert media.result is None
+
+
+def test_research_timeout_retry_keeps_full_original_budget():
+    observed_timeouts: list[float | None] = []
+
+    def handler(task: Task):
+        observed_timeouts.append(task.timeout_seconds)
+        return "Araştırma tamamlandı."
+
+    task = Task(
+        title="research", agent="research", handler=handler,
+        timeout_seconds=600.0,
+        metadata={"preferred_ai_provider": "ollama"},
+    )
+    task.status = TaskStatus.FAILED
+    task.error = "Görev zaman aşımına uğradı (600.0 sn)."
+
+    attempts = recover_task(
+        task, _mission(),
+        provider_manager=_provider_manager(ollama=True),
+        job_manager=JobManager(),
+        history=RecoveryAttemptHistory(),
+    )
+
+    assert attempts
+    assert observed_timeouts[0] == 600.0
+    assert task.status == TaskStatus.COMPLETED
+    assert task.timeout_seconds == 600.0

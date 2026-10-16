@@ -15,6 +15,12 @@ _WINDOW_FALLBACK_CUES = (
     "son 30 güne genişlet", "30 güne genişlet", "30 günlük yedek", "30 gün yedek",
 )
 
+# A current media-research handoff can perform at most three bounded
+# ResearchManager.research() passes: primary window, optional 30-day/alternate
+# pass, then one same-story corroboration pass for the selected headline.
+# Exported so the department outer timeout is derived from the real call graph.
+MEDIA_RESEARCH_MAX_PASSES = 3
+
 
 class ResearchAgent(BaseAgent):
 

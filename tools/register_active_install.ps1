@@ -23,9 +23,23 @@ title JARVIS AC
 set "POINTER=C:\Projects\JARVIS_ACTIVE_PATH.txt"
 if not exist "%POINTER%" goto :missing
 set /p "JARVIS_ROOT="<"%POINTER%"
-if not exist "%JARVIS_ROOT%\tools\update_active_install.ps1" goto :missing
+if not exist "%JARVIS_ROOT%\.git" goto :missing
+
+cd /d "%JARVIS_ROOT%"
+echo [0/3] JARVIS launcher guncelleniyor...
+git fetch origin main >nul 2>&1
+if errorlevel 1 goto :bootstrap_failed
+git checkout origin/main -- tools\update_active_install.ps1 tools\setup_and_start.ps1 START_JARVIS.bat >nul 2>&1
+if errorlevel 1 goto :bootstrap_failed
+
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%JARVIS_ROOT%\tools\update_active_install.ps1"
 exit /b %ERRORLEVEL%
+
+:bootstrap_failed
+echo En guncel JARVIS baslaticisi alinamadi.
+pause
+exit /b 1
+
 :missing
 echo JARVIS aktif kurulum yolu bulunamadi.
 echo JARVIS Tamir ve Ac dosyasini bir kez calistirin.

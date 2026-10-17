@@ -44,6 +44,14 @@ jobs:
             $errors | ForEach-Object { Write-Error $_.Message }
             exit 1
           }
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'tools/register_active_install.ps1'), [ref]$null, [ref]$errors
+          )
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
 
       - name: Check Control Center frontend syntax
         run: node --check src/control_center/web/app.js

@@ -52,7 +52,53 @@ function render(state){latest=state;const active=state.active_mission,performanc
   cards('history',[...(learned?[{learning:true,...learned}]:[]),...financeHistory,...state.provider_history],x=>x.learning?`<article><label>FINANCE LEARNING · ${esc(x.learned_at)}</label><h3>${x.qualified} qualified · ${x.rejected} rejected</h3><p>${esc((x.next_exploration||[]).join(' · ')||'Yeni arama alanı bekleniyor')}</p></article>`:x.finance?`<article><label>${esc(x.baseline_or_new)} · ${esc(x.last_tested_at)}</label><h3>${esc(x.name)} · ${esc(x.qualification_result)}</h3><p>${esc((x.rejection_reasons||[]).join(' · ')||x.paper_status)}</p><p>${esc((x.assets_tested||[]).join(', '))} · ${esc((x.timeframes_tested||[]).join(', '))} · ${esc((x.regimes_tested||[]).join(', '))}</p></article>`:`<article><label>${esc(x.recorded_at)}</label><h3>${esc(x.provider)}</h3><p>${esc(x.task_type)} · ${esc(x.duration_seconds)} sn · ${x.success?'Başarılı':'Başarısız'}</p></article>`);
 }
 function renderOfflineSnapshot(error){$('coreState').textContent=$('coreKpi').textContent=$('backendKpi').textContent='OFFLINE';$('coreState').dataset.state='STOPPED';$('healthDetail').textContent='Backend yanıt vermiyor · görev durumu doğrulanamıyor';$('missionStatus').textContent='CONNECTION LOST';$('missionReason').textContent='Backend bağlantısı kesildi. Ekrandaki görev yüzdesi yalnız son bilinen durumdur; görev çalışıyor kabul edilmez.';const p=Math.round(latest?.active_mission?.progress||0);$('progressText').textContent=p+'% · STALE';const rows=(latest?.missions||[]).map(x=>['QUEUED','WORKING','DISPATCHED'].includes(x.status)?{...x,status:'CONNECTION LOST',stage:'RECOVERY REQUIRED',result:'Backend bağlantısı kesildi; bu görevin hâlâ çalıştığı doğrulanamıyor.'}:x);cards('missionsList',rows,x=>`<article><div class="section-head"><label>${esc(x.status)} · ${esc(x.stage)}</label><span class="badge">${Math.round(x.progress||0)}%</span></div><h3>${esc(x.goal)}</h3><p><b>Sonuç:</b> ${esc(x.result||x.error||'Sonuç bekleniyor')}</p>${x.artifacts?.length?`<p><b>Kanıt:</b> ${x.artifacts.map(esc).join(', ')}</p>`:''}</article>`);toast(error?.message||'Backend bağlantısı kesildi')}
-async function refresh(){try{const [state,dashboard,workers]=await Promise.all([api('/api/status'),api('/api/dashboard'),api('/api/workers')]);state.workforce={...state.workforce,workers,summary:{active:workers.filter(x=>x.status==='working').length,idle:workers.filter(x=>x.status==='idle').length,blocked:0,paused:0}};render(state);$('coreState').textContent=dashboard.system_status}catch(e){renderOfflineSnapshot(e)}}
+async function refresh(){
+  let health;
+  try{
+    health=await api('/api/health');
+  }catch(e){
+    renderOfflineSnapshot(e);
+    return;
+  }
+
+  let state;
+  try{
+    state=await api('/api/status');
+  }catch(e){
+    $('backendKpi').textContent='ONLINE';
+    $('coreKpi').textContent='DEGRADED';
+    $('coreState').textContent='DEGRADED';
+    $('healthDetail').textContent='Backend canlı ancak /api/status okunamadı';
+    toast(e.message);
+    return;
+  }
+
+  const [dashboardResult,workersResult]=await Promise.allSettled([
+    api('/api/dashboard'),
+    api('/api/workers')
+  ]);
+  const workers=workersResult.status==='fulfilled'?workersResult.value:[];
+  state.workforce={...state.workforce,workers,summary:{
+    active:workers.filter(x=>String(x.status).toLowerCase()==='working').length,
+    idle:workers.filter(x=>String(x.status).toLowerCase()==='idle').length,
+    blocked:workers.filter(x=>['blocked','recovery_required'].includes(String(x.status).toLowerCase())).length,
+    paused:workers.filter(x=>String(x.status).toLowerCase()==='paused').length
+  }};
+  render(state);
+  $('backendKpi').textContent='ONLINE';
+  const partial=[];
+  if(dashboardResult.status==='fulfilled'){
+    $('coreState').textContent=dashboardResult.value.system_status;
+  }else{
+    $('coreState').textContent=health.runtime_state||'DEGRADED';
+    partial.push('dashboard');
+  }
+  if(workersResult.status!=='fulfilled')partial.push('workers');
+  if(partial.length){
+    $('healthDetail').textContent=`Backend ONLINE · kısmi panel hatası: ${partial.join(', ')}`;
+    toast('Panelin bazı bölümleri yenilenemedi; çekirdek bağlantısı açık.');
+  }
+}
 function commandRoute(goal){const text=goal.toLocaleLowerCase('tr-TR');if(/youtube|video|başlık|trend|içerik|senaryo|kanal/.test(text))return['YOUTUBE','Orchestrator → YouTube worker'];if(/finans|btc|bitcoin|kripto|borsa|hisse|strateji|backtest|paper/.test(text))return['FINANCE','Orchestrator → Finance worker'];if(/github|kod|test|hata|sistem|servis|api|kur|yükle|agent|ajan/.test(text))return['SYSTEM','Orchestrator → System worker'];return['GENERAL','Orchestrator → Planner']}
 function previewCommand(){const goal=$('goal').value.trim(),route=goal?commandRoute(goal):['Komut bekleniyor','Orchestrator hazır'];$('routeArea').textContent=route[0];$('routeWorker').textContent=route[1];$('routeState').textContent=goal?'ROUTE · '+route[0]:'YÖNLENDİRME HAZIR'}
 async function command(source='text'){const goal=$('goal').value.trim();if(!goal){$('goal').focus();return toast('Önce Jarvis için bir görev yaz.')}const route=commandRoute(goal);$('holoCore').classList.add('processing');$('holoStatus').textContent='ROUTING · '+route[0];$('routeState').textContent='GERÇEK PIPELINE';try{await api('/api/command',{goal,source});$('goal').value='';previewCommand();$('holoStatus').textContent='MISSION QUEUED';toast('Görev gerçek Jarvis pipeline’a gönderildi.');await refresh()}catch(e){$('holoStatus').textContent='COMMAND ERROR';$('routeState').textContent='HATA';toast(e.message)}finally{setTimeout(()=>$('holoCore').classList.remove('processing'),900)}}

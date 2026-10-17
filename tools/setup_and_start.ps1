@@ -54,7 +54,7 @@ function Test-ControlCenterHealth([string]$Token, [string]$ExpectedBuild) {
         $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
         $cookie = New-Object System.Net.Cookie('jarvis_session', $Token, '/', '127.0.0.1')
         $session.Cookies.Add($cookie)
-        $response = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/health" -WebSession $session `
+        $response = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/liveness" -WebSession $session `
             -Method Get -TimeoutSec 3 -ErrorAction Stop
         $runningBuild = [string]$response.process.build_identity
         return ($response.backend_alive -eq $true -and $runningBuild -eq $ExpectedBuild)

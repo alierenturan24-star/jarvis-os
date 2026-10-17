@@ -62,7 +62,9 @@ jobs:
             fi
             if [ -s workspace/control_center/session.token ]; then
               TOKEN="$(cat workspace/control_center/session.token)"
-              if curl -fsS -H "Cookie: jarvis_session=$TOKEN" http://127.0.0.1:18765/api/health > /tmp/jarvis.health.json; then
+              if curl --max-time 3 -fsS -H "Cookie: jarvis_session=$TOKEN" http://127.0.0.1:18765/api/liveness > /tmp/jarvis.live.json; then
+                cat /tmp/jarvis.live.json
+                curl --max-time 3 -fsS -H "Cookie: jarvis_session=$TOKEN" http://127.0.0.1:18765/api/health > /tmp/jarvis.health.json
                 cat /tmp/jarvis.health.json
                 exit 0
               fi
@@ -81,6 +83,8 @@ jobs:
             src/research/tests/test_manager_timeout.py::test_each_search_call_is_clamped_to_provider_timeout \
             src/research/tests/test_story_corroboration_regression.py \
             src/control_center/tests/test_instance_lock_recovery.py \
+            src/control_center/tests/test_control_center.py::test_liveness_is_fast_process_state_only \
+            src/control_center/tests/test_control_center.py::test_health_does_not_probe_provider_networks \
             src/mission/tests/test_recovery.py::test_recovered_research_requeues_cancelled_media_dependency \
             src/mission/tests/test_recovery.py::test_research_timeout_retry_keeps_full_original_budget \
             src/providers/tests/test_yt_dlp_media_provider.py \

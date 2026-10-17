@@ -269,3 +269,45 @@ def test_performance_keeps_backtest_oos_and_paper_separate(tmp_path):
     engine.backtest("BTC", FakeMarket().ohlcv("BTC", limit=240))
     result = engine.performance()
     assert set(("paper", "backtest", "out_of_sample", "strategy_regime")) <= result.keys()
+
+
+def test_liveness_is_fast_process_state_only(tmp_path):
+    runtime = FakeRuntime()
+    service = ControlCenterService(runtime, ControlCenterStore(tmp_path / "state.json"))
+
+    live = service.liveness()
+
+    assert live["backend_alive"] is True
+    assert live["runtime_state"] == runtime.SLEEPING
+    assert live["process"]["pid"] > 0
+    assert "build_identity" in live["process"]
+
+
+def test_health_does_not_probe_provider_networks(tmp_path, monkeypatch):
+    import src.control_center.service as service_module
+
+    class _NeverProbe:
+        def is_available(self):
+            raise AssertionError("health must not call provider is_available()")
+
+    class _Manager:
+        def names(self):
+            return ["gemini", "ollama"]
+
+        def get(self, _name):
+            return _NeverProbe()
+
+    runtime = FakeRuntime()
+    runtime.jarvis.ceo = type("_CEO", (), {"provider_manager": _Manager(), "mission_engine": None})()
+    service = ControlCenterService(runtime, ControlCenterStore(tmp_path / "state.json"))
+    monkeypatch.setattr(service_module, "find_ffmpeg", lambda: None)
+    monkeypatch.setattr(service_module, "find_ffprobe", lambda: None)
+    monkeypatch.setattr(service_module, "find_edge_tts", lambda: None)
+    monkeypatch.setattr(service_module, "ffmpeg_has_flite", lambda: False)
+    monkeypatch.setattr(service_module, "narration_capability_available", lambda: False)
+
+    health = service.health()
+
+    assert health["backend_alive"] is True
+    assert health["provider_registry"]["availability_probe"] == "on_demand"
+    assert health["provider_registry"]["availability"] == {}

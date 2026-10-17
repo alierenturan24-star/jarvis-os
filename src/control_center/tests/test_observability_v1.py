@@ -193,3 +193,46 @@ def test_non_delegated_coding_task_has_no_claude_code_fields(tmp_path):
 
     row = current.read_model.tasks()[0]
     assert "delegated_to" not in row
+
+
+def test_dashboard_stays_online_when_one_known_provider_is_available(tmp_path):
+    current = service(tmp_path)
+    current._provider_health = {"gemini": True, "groq": False}
+    current.runtime.last_error = None
+
+    dashboard = current.read_model.dashboard()
+
+    assert dashboard["system_status"] == "ONLINE"
+    assert dashboard["provider_health"]["available"] == 1
+    assert dashboard["provider_health"]["unavailable"] == 1
+
+
+def test_dashboard_degrades_only_when_all_known_providers_are_down(tmp_path):
+    current = service(tmp_path)
+    current._provider_health = {"gemini": False, "groq": False}
+    current.runtime.last_error = None
+
+    dashboard = current.read_model.dashboard()
+
+    assert dashboard["system_status"] == "DEGRADED"
+
+
+def test_dashboard_unknown_provider_status_does_not_trigger_network_probe_or_degrade(tmp_path):
+    current = service(tmp_path)
+
+    class _NeverProbe:
+        resource_type = "remote"
+
+        def is_available(self):
+            raise AssertionError("dashboard must not probe provider network")
+
+    manager = current.runtime.jarvis.ceo.provider_manager
+    manager._providers = {"gemini": _NeverProbe()}
+    current._provider_health = {}
+    current.runtime.last_error = None
+
+    dashboard = current.read_model.dashboard()
+
+    assert dashboard["system_status"] == "ONLINE"
+    assert dashboard["provider_health"]["known"] == 0
+    assert dashboard["provider_health"]["unknown"] == 1

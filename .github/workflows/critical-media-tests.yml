@@ -48,6 +48,31 @@ jobs:
       - name: Check Control Center frontend syntax
         run: node --check src/control_center/web/app.js
 
+      - name: Smoke start Control Center
+        run: |
+          rm -rf workspace/control_center
+          JARVIS_BUILD_ID=ci-smoke python control_center.py --host 127.0.0.1 --port 18765 --no-bootstrap-output --fresh-session > /tmp/jarvis.stdout 2> /tmp/jarvis.stderr &
+          PID=$!
+          trap 'kill "$PID" 2>/dev/null || true' EXIT
+          for i in $(seq 1 25); do
+            if ! kill -0 "$PID" 2>/dev/null; then
+              echo "Control Center exited before health became available"
+              cat /tmp/jarvis.stderr
+              exit 1
+            fi
+            if [ -s workspace/control_center/session.token ]; then
+              TOKEN="$(cat workspace/control_center/session.token)"
+              if curl -fsS -H "Cookie: jarvis_session=$TOKEN" http://127.0.0.1:18765/api/health > /tmp/jarvis.health.json; then
+                cat /tmp/jarvis.health.json
+                exit 0
+              fi
+            fi
+            sleep 1
+          done
+          echo "Control Center health timeout"
+          cat /tmp/jarvis.stderr
+          exit 1
+
       - name: Run critical regressions
         run: |
           pytest -q \
@@ -55,6 +80,7 @@ jobs:
             src/mission/tests/test_research_department_timeout.py::test_media_research_budget_covers_all_bounded_research_passes \
             src/research/tests/test_manager_timeout.py::test_each_search_call_is_clamped_to_provider_timeout \
             src/research/tests/test_story_corroboration_regression.py \
+            src/control_center/tests/test_instance_lock_recovery.py \
             src/mission/tests/test_recovery.py::test_recovered_research_requeues_cancelled_media_dependency \
             src/mission/tests/test_recovery.py::test_research_timeout_retry_keeps_full_original_budget \
             src/providers/tests/test_yt_dlp_media_provider.py \

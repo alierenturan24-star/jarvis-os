@@ -55,7 +55,7 @@ function renderOfflineSnapshot(error){$('coreState').textContent=$('coreKpi').te
 async function refresh(){
   let health;
   try{
-    health=await api('/api/health');
+    health=await api('/api/liveness');
   }catch(e){
     renderOfflineSnapshot(e);
     return;

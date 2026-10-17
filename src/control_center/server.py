@@ -4,6 +4,7 @@ import argparse
 import ipaddress
 import json
 import secrets
+import socket
 import os
 import re
 import subprocess
@@ -166,6 +167,8 @@ class ControlCenterInstanceLock:
     """Process lock scoped to one loopback host/port."""
 
     def __init__(self, host: str, port: int, folder: Path = INSTANCE_DIR) -> None:
+        self.host = host
+        self.port = int(port)
         self.path = folder / f"{host.replace(':', '_')}_{port}.pid"
         self.acquired = False
 
@@ -219,6 +222,13 @@ class ControlCenterInstanceLock:
         except OSError as error:
             return error.errno == errno.EPERM
 
+    def _port_open(self) -> bool:
+        try:
+            with socket.create_connection((self.host, self.port), timeout=0.25):
+                return True
+        except OSError:
+            return False
+
     def acquire(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         for _ in range(2):
@@ -226,11 +236,23 @@ class ControlCenterInstanceLock:
                 descriptor = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             except FileExistsError:
                 try:
-                    pid = int(json.loads(self.path.read_text(encoding="utf-8")).get("pid", 0))
+                    owner = json.loads(self.path.read_text(encoding="utf-8"))
+                    pid = int(owner.get("pid", 0))
+                    created_at = float(owner.get("created_at", 0.0) or 0.0)
                 except (OSError, ValueError, TypeError, json.JSONDecodeError):
-                    pid = 0
-                if self._alive(pid):
+                    pid, created_at = 0, 0.0
+
+                alive = self._alive(pid)
+                listening = self._port_open()
+                age = max(0.0, time.time() - created_at) if created_at else float("inf")
+
+                if alive and (listening or age < 15.0):
                     raise RuntimeError(f"Control Center already running (PID {pid}).")
+
+                # A stale lock can point at a PID that Windows has already
+                # recycled for an unrelated process. If nothing is listening
+                # on the lock's own port and the lock is old enough, it is
+                # safe to recover it instead of blocking every future launch.
                 self.path.unlink(missing_ok=True)
                 continue
             with os.fdopen(descriptor, "w", encoding="utf-8") as handle:

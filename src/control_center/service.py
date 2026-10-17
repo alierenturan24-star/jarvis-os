@@ -499,6 +499,24 @@ class ControlCenterService:
         self.store.append("notifications", item)
         return item
 
+    def liveness(self) -> dict[str, Any]:
+        runtime_started = getattr(self.runtime, "started_at", None)
+        runtime_started_at = (
+            runtime_started.astimezone().isoformat(timespec="seconds")
+            if hasattr(runtime_started, "astimezone") else None
+        )
+        return {
+            "backend_alive": True,
+            "checked_at": utc_now(),
+            "runtime_state": self.runtime.state,
+            "process": {
+                "pid": os.getpid(),
+                "instance_id": self._started_at,
+                "runtime_started_at": runtime_started_at,
+                "build_identity": self._build_identity,
+            },
+        }
+
     def health(self) -> dict[str, Any]:
         state = self.store.snapshot()
         completed = [item for item in state.get("missions", []) if item.get("status") == "COMPLETED"]
@@ -506,22 +524,14 @@ class ControlCenterService:
         youtube = state["engines"]["youtube"]
         manager = getattr(getattr(getattr(self.runtime, "jarvis", None), "ceo", None), "provider_manager", None)
         provider_names = manager.names() if manager is not None else []
-        available_remote_providers: list[str] = []
-        if manager is not None:
-            # Ollama's availability probe performs a local HTTP request. Health is
-            # polled frequently by the UI, so keep this readiness check entirely
-            # local and side-effect free. Ollama is reported only after the
-            # explicit provider probe has already populated _provider_health.
-            for name in provider_names:
-                if name == "ollama":
-                    if self._provider_health.get(name):
-                        available_remote_providers.append(name)
-                    continue
-                try:
-                    if manager.get(name).is_available():
-                        available_remote_providers.append(name)
-                except Exception:
-                    continue
+        # Health is a read-only snapshot, never a network probe. Provider
+        # availability is refreshed explicitly through the providers view/API
+        # and cached in _provider_health. This keeps /api/health and /api/status
+        # bounded and prevents startup liveness checks from timing out on a slow
+        # Gemini/Groq/AIML/Ollama availability request.
+        available_remote_providers = [
+            name for name in provider_names if self._provider_health.get(name) is True
+        ]
         accounts = self.accounts.redacted_accounts()
         connected_youtube_accounts = sum(
             item.get("connection_status") == "CONNECTED" for item in accounts
@@ -556,16 +566,9 @@ class ControlCenterService:
              "mode": self.workforce.vault.backend,
              "detail": "OAuth belirteçleri state/log/frontend içine yazılmaz."},
         ]
-        runtime_started = getattr(self.runtime, "started_at", None)
-        runtime_started_at = (
-            runtime_started.astimezone().isoformat(timespec="seconds")
-            if hasattr(runtime_started, "astimezone") else None
-        )
-        return {"backend_alive": True, "checked_at": utc_now(), "started_at": self._started_at,
-                "process": {"pid": os.getpid(), "instance_id": self._started_at,
-                            "runtime_started_at": runtime_started_at,
-                            "build_identity": self._build_identity},
-                "runtime_state": self.runtime.state, "finance": {"enabled": finance.get("enabled"),
+        live = self.liveness()
+        return {**live, "started_at": self._started_at,
+                "finance": {"enabled": finance.get("enabled"),
                 "mode": finance.get("mode"), "live_activation": False},
                 "youtube": {"enabled": youtube.get("enabled"), "queued": sum(
                     item.get("status") == "QUEUED" for item in youtube.get("queue", []))},

@@ -45,6 +45,9 @@ jobs:
             exit 1
           }
 
+      - name: Check Control Center frontend syntax
+        run: node --check src/control_center/web/app.js
+
       - name: Run critical regressions
         run: |
           pytest -q \

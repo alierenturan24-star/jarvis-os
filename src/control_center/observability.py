@@ -129,14 +129,21 @@ class ControlCenterReadModel:
     def providers(self) -> list[dict[str, Any]]:
         manager = self.service.runtime.jarvis.ceo.provider_manager
         entries = ProviderExecutionHistory().recent(500)
+        cached = dict(getattr(self.service, "_provider_health", {}) or {})
         rows = []
         for name in manager.names():
             matching = [entry for entry in entries if entry.get("provider") == name]
             durations = [float(entry["duration_seconds"]) for entry in matching if isinstance(entry.get("duration_seconds"), (int, float))]
             resource = next((entry.get("resource_type") for entry in matching if entry.get("resource_type")), None)
             provider = manager.get(name)
+            latest_success = next((bool(entry.get("success")) for entry in matching), None)
+            known = name in cached
+            available = bool(cached.get(name)) if known else bool(latest_success is True)
             rows.append({
-                "name": name, "available": bool(provider and provider.is_available()),
+                "name": name,
+                "available": available,
+                "availability_known": known or latest_success is not None,
+                "availability_source": "probe_cache" if known else "execution_history" if latest_success is not None else "unknown",
                 "success_rate": (round(100 * sum(bool(entry.get("success")) for entry in matching) / len(matching), 1)
                                  if matching else None),
                 "resource_type": resource or getattr(provider, "resource_type", None),
@@ -290,9 +297,20 @@ class ControlCenterReadModel:
     def dashboard(self) -> dict[str, Any]:
         tasks = self.tasks(); workers = self.workers(); approvals = self.approvals(); providers = self.providers()
         counts = Counter(row["status"] for row in tasks)
-        unavailable = sum(not row["available"] for row in providers)
+        known_providers = [row for row in providers if row.get("availability_known")]
+        unavailable = sum(not row["available"] for row in known_providers)
+        available = sum(bool(row["available"]) for row in known_providers)
         runtime_state = self.service.runtime.state
-        status = "OFFLINE" if runtime_state == "STOPPED" else "DEGRADED" if unavailable or self.service.runtime.last_error else "ONLINE"
+        # Core status reflects the runtime, not optional provider configuration.
+        # A single unavailable provider is normal because routing can fall back
+        # to another provider. Degrade only for a runtime error or when every
+        # provider with known status is unavailable.
+        all_known_providers_down = bool(known_providers) and available == 0
+        status = (
+            "OFFLINE" if runtime_state == "STOPPED"
+            else "DEGRADED" if self.service.runtime.last_error or all_known_providers_down
+            else "ONLINE"
+        )
         # Media providers (NVIDIA/LTX) are opt-in foundations, not core text
         # LLM routing -- their being unconfigured is an expected default
         # state and must NOT flip overall system_status to DEGRADED.
@@ -304,7 +322,13 @@ class ControlCenterReadModel:
                             "completed_tasks": counts["completed"], "failed_tasks": counts["failed"] + counts["blocked"],
                             "pending_approvals": sum(row.get("status") == "PENDING" for row in approvals),
                             "active_departments": len({row["department"] for row in workers if row["status"] == "working"})},
-                "provider_health": {"total": len(providers), "available": len(providers) - unavailable, "unavailable": unavailable},
+                "provider_health": {
+                    "total": len(providers),
+                    "known": len(known_providers),
+                    "available": available,
+                    "unavailable": unavailable,
+                    "unknown": len(providers) - len(known_providers),
+                },
                 "media_provider_health": {"total": len(media_providers), "available": media_available,
                                           "unavailable": len(media_providers) - media_available},
                 "recent_events": self.logs()[:10], "usage": {"records": len(ProviderExecutionHistory().recent(500))},

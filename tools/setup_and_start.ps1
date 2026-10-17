@@ -168,21 +168,33 @@ $token = if (Test-Path -LiteralPath $TokenPath -PathType Leaf) {
 if (-not (Test-ControlCenterHealth $token $ExpectedBuild)) {
     Write-Host '[5/5] JARVIS Control Center baslatiliyor...' -ForegroundColor Cyan
     Clear-StaleJarvisListener
-    Start-Process -FilePath $VenvPython -ArgumentList @(
+    $controlProcess = Start-Process -FilePath $VenvPython -ArgumentList @(
         "`"$ControlCenter`"", '--host', '127.0.0.1', '--port', $Port, '--no-bootstrap-output', '--fresh-session'
     ) -WorkingDirectory $ProjectRoot -RedirectStandardOutput $StdoutPath `
-      -RedirectStandardError $StderrPath -WindowStyle Hidden | Out-Null
+      -RedirectStandardError $StderrPath -WindowStyle Hidden -PassThru
 
     $healthy = $false
-    for ($attempt = 0; $attempt -lt 45; $attempt++) {
+    $startupSeconds = 75
+    for ($attempt = 0; $attempt -lt $startupSeconds; $attempt++) {
         Start-Sleep -Seconds 1
+        try { $controlProcess.Refresh() } catch {}
+        if ($controlProcess.HasExited) { break }
         if (Test-Path -LiteralPath $TokenPath -PathType Leaf) {
             $token = (Get-Content -LiteralPath $TokenPath -Raw).Trim()
             if (Test-ControlCenterHealth $token $ExpectedBuild) { $healthy = $true; break }
         }
     }
     if (-not $healthy) {
-        throw "Control Center 45 saniyede hazir olmadi. Log: $StderrPath"
+        Write-Host '' 
+        Write-Host '----- JARVIS STARTUP ERROR LOG -----' -ForegroundColor Red
+        if (Test-Path -LiteralPath $StderrPath -PathType Leaf) {
+            Get-Content -LiteralPath $StderrPath -Tail 80 | ForEach-Object { Write-Host $_ -ForegroundColor DarkRed }
+        } else {
+            Write-Host 'launcher.stderr.log olusturulamadi.' -ForegroundColor DarkRed
+        }
+        Write-Host '------------------------------------' -ForegroundColor Red
+        $exitDetail = if ($controlProcess.HasExited) { " Islem cikis kodu: $($controlProcess.ExitCode)." } else { '' }
+        throw "Control Center $startupSeconds saniyede hazir olmadi.$exitDetail Log: $StderrPath"
     }
 } else {
     Write-Host '[5/5] Control Center zaten calisiyor.' -ForegroundColor Green

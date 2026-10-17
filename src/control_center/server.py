@@ -287,10 +287,16 @@ class ControlCenterHandler(BaseHTTPRequestHandler):
 
     def _json(self, value, status=200) -> None:
         body = json.dumps(value, ensure_ascii=False).encode("utf-8")
-        self.send_response(status); self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body))); self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Content-Type-Options", "nosniff"); self.send_header("X-Frame-Options", "DENY")
-        self.end_headers(); self.wfile.write(body)
+        try:
+            self.send_response(status); self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body))); self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff"); self.send_header("X-Frame-Options", "DENY")
+            self.end_headers(); self.wfile.write(body)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            # A browser/PowerShell health probe may time out or close the socket
+            # while the server is still healthy. Client disconnects are not
+            # Control Center crashes and should not flood launcher.stderr.log.
+            return
 
     def _body(self) -> dict:
         length = int(self.headers.get("Content-Length", "0"))

@@ -65,6 +65,14 @@ jobs:
             Write-Error 'Active updater must not recursively copy the entire workspace.'
             exit 1
           }
+          if ($activeUpdater -match 'worktree\s+add' -or $activeUpdater -match 'jarvis-active-') {
+            Write-Error 'Active updater must delegate to the canonical in-place updater, not create another worktree.'
+            exit 1
+          }
+          if ($activeUpdater -notmatch 'update_and_start\.ps1') {
+            Write-Error 'Active updater must delegate to tools/update_and_start.ps1.'
+            exit 1
+          }
 
       - name: Check Control Center frontend syntax
         run: node --check src/control_center/web/app.js

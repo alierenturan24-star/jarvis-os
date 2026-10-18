@@ -52,6 +52,19 @@ jobs:
             $errors | ForEach-Object { Write-Error $_.Message }
             exit 1
           }
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'tools/update_active_install.ps1'), [ref]$null, [ref]$errors
+          )
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
+          $activeUpdater = Get-Content -LiteralPath 'tools/update_active_install.ps1' -Raw
+          if ($activeUpdater -match 'robocopy\.exe\s+\$CurrentWorkspace\s+\$NextWorkspace\s+/E') {
+            Write-Error 'Active updater must not recursively copy the entire workspace.'
+            exit 1
+          }
 
       - name: Check Control Center frontend syntax
         run: node --check src/control_center/web/app.js

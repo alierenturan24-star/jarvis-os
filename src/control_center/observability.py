@@ -137,13 +137,19 @@ class ControlCenterReadModel:
             resource = next((entry.get("resource_type") for entry in matching if entry.get("resource_type")), None)
             provider = manager.get(name)
             latest_success = next((bool(entry.get("success")) for entry in matching), None)
+            # Current availability must come only from an explicit bounded
+            # provider probe. Historical execution success/failure is useful
+            # telemetry, but it is NOT proof that a provider is reachable now.
+            # Mixing the two made dashboard health depend on old workspace
+            # history and caused different ONLINE/DEGRADED results per machine.
             known = name in cached
-            available = bool(cached.get(name)) if known else bool(latest_success is True)
+            available = bool(cached.get(name)) if known else False
             rows.append({
                 "name": name,
                 "available": available,
-                "availability_known": known or latest_success is not None,
-                "availability_source": "probe_cache" if known else "execution_history" if latest_success is not None else "unknown",
+                "availability_known": known,
+                "availability_source": "probe_cache" if known else "unknown",
+                "last_execution_success": latest_success,
                 "success_rate": (round(100 * sum(bool(entry.get("success")) for entry in matching) / len(matching), 1)
                                  if matching else None),
                 "resource_type": resource or getattr(provider, "resource_type", None),

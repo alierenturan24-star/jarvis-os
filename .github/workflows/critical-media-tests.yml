@@ -117,6 +117,8 @@ jobs:
             src/control_center/tests/test_observability_v1.py::test_dashboard_stays_online_when_one_known_provider_is_available \
             src/control_center/tests/test_observability_v1.py::test_dashboard_degrades_only_when_all_known_providers_are_down \
             src/control_center/tests/test_observability_v1.py::test_dashboard_unknown_provider_status_does_not_trigger_network_probe_or_degrade \
+            src/security/tests/test_action_policy_provider_independence.py::TestActionPolicyIsDecoupledFromProviderRouting::test_local_reversible_actions_run_without_confirmation \
+            src/security/tests/test_action_policy_provider_independence.py::TestActionPolicyIsDecoupledFromProviderRouting::test_external_side_effects_still_require_confirmation \
             src/mission/tests/test_recovery.py::test_recovered_research_requeues_cancelled_media_dependency \
             src/mission/tests/test_recovery.py::test_research_timeout_retry_keeps_full_original_budget \
             src/providers/tests/test_yt_dlp_media_provider.py \

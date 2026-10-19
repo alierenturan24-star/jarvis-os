@@ -111,6 +111,7 @@ jobs:
             src/mission/tests/test_research_department_timeout.py::test_media_research_budget_covers_all_bounded_research_passes \
             src/research/tests/test_manager_timeout.py::test_each_search_call_is_clamped_to_provider_timeout \
             src/research/tests/test_story_corroboration_regression.py \
+            src/research/tests/test_social_reference_discovery.py \
             src/control_center/tests/test_instance_lock_recovery.py \
             src/control_center/tests/test_control_center.py::test_liveness_is_fast_process_state_only \
             src/control_center/tests/test_control_center.py::test_health_does_not_probe_provider_networks \
@@ -119,6 +120,8 @@ jobs:
             src/control_center/tests/test_observability_v1.py::test_dashboard_unknown_provider_status_does_not_trigger_network_probe_or_degrade \
             src/security/tests/test_action_policy_provider_independence.py::TestActionPolicyIsDecoupledFromProviderRouting::test_local_reversible_actions_run_without_confirmation \
             src/security/tests/test_action_policy_provider_independence.py::TestActionPolicyIsDecoupledFromProviderRouting::test_external_side_effects_still_require_confirmation \
+            src/control_center/tests/test_youtube_queue_dispatch.py::test_quality_passed_video_auto_publishes_under_standing_channel_policy \
+            src/control_center/tests/test_youtube_queue_dispatch.py::test_explicit_no_publish_goal_overrides_standing_auto_publish \
             src/mission/tests/test_recovery.py::test_recovered_research_requeues_cancelled_media_dependency \
             src/mission/tests/test_recovery.py::test_research_timeout_retry_keeps_full_original_budget \
             src/providers/tests/test_yt_dlp_media_provider.py \

@@ -820,3 +820,41 @@ def test_research_timeout_retry_keeps_full_original_budget():
     assert observed_timeouts[0] == 600.0
     assert task.status == TaskStatus.COMPLETED
     assert task.timeout_seconds == 600.0
+
+
+def test_verified_structured_research_is_not_recovered_as_provider_failure():
+    now = datetime.now(timezone.utc).isoformat()
+    task = Task(
+        title="research", agent="research", handler=lambda t: "unused",
+        metadata={
+            "preferred_ai_provider": "gemini",
+            "report": {
+                "selected_topic": "Swiss rail update",
+                "location_or_market": "İsviçre",
+                "why_current": "2 bağımsız kaynak doğrulandı",
+                "supporting_evidence": [
+                    {"url": "https://www.srf.ch/news/schweiz/a", "published_at": now},
+                    {"url": "https://www.rts.ch/info/suisse/b", "published_at": now},
+                ],
+                "format_references": [],
+                "freshness_status": "CURRENT",
+                "freshness_window_days": 30,
+                "sufficient": True,
+                "reason": "",
+            },
+        },
+    )
+    task.status = TaskStatus.COMPLETED
+    task.result = TaskResult(
+        success=True,
+        output=(
+            "Araştırma sonucu bulunamadı. İnternet bağlantısını kontrol et.\n"
+            "--- OTOMATİK 30 GÜNLÜK YEDEK KAYNAK TARAMASI ---\n"
+            "Araştırma tamamlandı. SEÇİLEN KONU: Swiss rail update"
+        ),
+    )
+
+    plan = TaskPlan(goal="research then media")
+    plan.add_task(task)
+
+    assert plan_needs_recovery(plan) is False

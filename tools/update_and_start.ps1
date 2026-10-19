@@ -23,6 +23,7 @@ $CriticalTests = @(
     'src/security/tests/test_action_policy_provider_independence.py::TestActionPolicyIsDecoupledFromProviderRouting::test_external_side_effects_still_require_confirmation',
     'src/control_center/tests/test_youtube_queue_dispatch.py::test_quality_passed_video_auto_publishes_under_standing_channel_policy',
     'src/control_center/tests/test_youtube_queue_dispatch.py::test_explicit_no_publish_goal_overrides_standing_auto_publish',
+    'src/mission/tests/test_recovery.py::test_verified_structured_research_is_not_recovered_as_provider_failure',
     'src/mission/tests/test_recovery.py::test_recovered_research_requeues_cancelled_media_dependency',
     'src/mission/tests/test_recovery.py::test_research_timeout_retry_keeps_full_original_budget',
     'src/providers/tests/test_yt_dlp_media_provider.py',

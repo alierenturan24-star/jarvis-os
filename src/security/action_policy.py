@@ -46,16 +46,22 @@ class ActionPolicy:
         "paper_trade",
         "paper_order_cancel",
         "report_generation",
-    }
-
-    MEDIUM_RISK_ACTIONS = {
-        "publish_scheduled_video",
-        "upload_private_video",
+        # User-authorized autonomous local/reversible work. These actions
+        # stay on the user's machine/repository and can be inspected or
+        # reverted; they must not interrupt the workflow for approval.
         "create_project_file",
         "edit_project_file",
         "run_project_tests",
         "install_sandbox_package",
         "create_social_draft",
+        "git_commit",
+        "change_claude_skill",
+    }
+
+    MEDIUM_RISK_ACTIONS = {
+        # External side effects or real spend remain confirmation-gated.
+        "publish_scheduled_video",
+        "upload_private_video",
         # Sprint: paid media provider approval safety fix -- ANY remote
         # media generation call (image/video) whose MediaModelProfile.
         # cost_class == "paid" (NVIDIA/fal/LTX/AIML today, any future paid
@@ -67,10 +73,8 @@ class ActionPolicy:
 
     HIGH_RISK_ACTIONS = {
         "publish_public_video",
-        "git_commit",
         "git_push",
         "install_production_package",
-        "change_claude_skill",
         "live_trade",
         "live_order_cancel",
         "create_online_account",

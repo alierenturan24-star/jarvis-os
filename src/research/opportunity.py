@@ -116,6 +116,42 @@ def _parse_published_at(value: Any) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _embedded_published_at(text: str) -> datetime | None:
+    """Extract a search-result date when it appears only in the snippet."""
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+
+    relative = _parse_published_at(raw)
+    if relative is not None:
+        return relative
+
+    match = re.search(
+        r"\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
+        r"Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|"
+        r"Dec(?:ember)?)\s+\d{1,2},\s+20\d{2}\b",
+        raw,
+        re.IGNORECASE,
+    )
+    if match:
+        for fmt in ("%b %d, %Y", "%B %d, %Y"):
+            try:
+                return datetime.strptime(match.group(0), fmt).replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
+
+    match = re.search(r"\b(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})\b", raw)
+    if match:
+        try:
+            return datetime(
+                int(match.group(1)), int(match.group(2)), int(match.group(3)),
+                tzinfo=timezone.utc,
+            )
+        except ValueError:
+            return None
+    return None
+
+
 def _required_source_languages(topic: str) -> set[str]:
     lowered = "".join(
         char for char in unicodedata.normalize("NFKD", (topic or "").casefold())
@@ -239,6 +275,10 @@ def _current_evidence(
         published_at = _parse_published_at(
             item.get("published_at") or item.get("date") or item.get("published")
         )
+        if published_at is None:
+            published_at = _embedded_published_at(
+                f"{item.get('summary', '')} {item.get('snippet', '')} {item.get('description', '')}"
+            )
         if not url or published_at is None:
             continue
         age_seconds = (reference - published_at).total_seconds()

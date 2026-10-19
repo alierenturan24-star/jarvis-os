@@ -203,6 +203,17 @@ def _news_timelimit(topic: str) -> str:
     return "w"
 
 
+_SHORT_FORM_CUES = (
+    "short", "shorts", "kısa video", "kisa video", "9:16", "dikey video",
+    "tiktok", "reels", "instagram reel", "viral video",
+)
+
+
+def _wants_short_form_references(topic: str) -> bool:
+    lowered = (topic or "").casefold()
+    return any(cue in lowered for cue in _SHORT_FORM_CUES)
+
+
 class ResearchCollector:
 
     def __init__(self) -> None:
@@ -273,14 +284,15 @@ class ResearchCollector:
                     ))
             else:
                 searches.append({"search_channel": "NEWS", "query": topic, "news": True})
-        if "short" in (topic or "").casefold() and hasattr(self.web, "search_videos"):
+        if _wants_short_form_references(topic) and hasattr(self.web, "search_videos"):
             video_query = (
-                "Schweiz aktuelle Nachrichten Wissen Unterhaltung Shorts deutsch"
+                "Schweiz aktuelle Nachrichten Wissen Unterhaltung Shorts TikTok Reels deutsch"
                 if _is_swiss_topic(topic) else topic
             )
             searches.append({
-                "search_channel": "VIDEO_FORMAT_DE", "query": video_query, "video": True,
-                "source_language": "de", "reference_role": "format_only",
+                "search_channel": "SHORT_FORM_REFERENCES", "query": video_query, "video": True,
+                "source_language": "de" if _is_swiss_topic(topic) else "",
+                "reference_role": "format_only",
             })
         searches.append({"search_channel": "GENERAL_WEB", "query": topic})
         if _wants_tooling_sources(topic, preferences):
@@ -348,6 +360,7 @@ class ResearchCollector:
                     "duration": str(item.get("duration") or "").strip(),
                     "statistics": item.get("statistics") if isinstance(item.get("statistics"), dict) else {},
                     "provider": str(item.get("provider") or "").strip(),
+                    "platform": str(item.get("platform") or "").strip(),
                     **quality,
                     "source_quality_reason": reason,
                     "source_preference_match": preference_match,

@@ -49,6 +49,17 @@ STAGE_NAMES = {"UNDERSTANDING", "PLANNING", "RESEARCH", "GITHUB", "BROWSER", "EV
                "COMPLETED", "BLOCKED", "CANCELLED", "CODING", "AI_DISCOVERY"}
 
 
+_NO_AUTO_PUBLISH_CUES = (
+    "yayınlama", "yayinlama", "yükleme", "yukleme", "paylaşma", "paylasma",
+    "publish etme", "upload etme", "ben onaylamadan", "onayımı iste", "onayimi iste",
+)
+
+
+def _goal_forbids_auto_publish(goal: str) -> bool:
+    lowered = str(goal or "").casefold()
+    return any(cue in lowered for cue in _NO_AUTO_PUBLISH_CUES)
+
+
 def _source_build_identity() -> str:
     """Return the exact checkout identity without exposing repository details."""
     configured = os.getenv("JARVIS_BUILD_ID", "").strip()
@@ -1031,6 +1042,7 @@ class ControlCenterService:
             auto_publish = bool(
                 youtube_policy.get("auto_publish_quality_passed")
                 and not youtube_policy.get("publish_requires_approval", True)
+                and not _goal_forbids_auto_publish(record.get("goal", ""))
             )
             publication_metadata = {
                 "title": production.get("title") or production.get("topic") or "Untitled",

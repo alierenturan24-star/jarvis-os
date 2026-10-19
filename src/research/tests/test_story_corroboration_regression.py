@@ -132,3 +132,39 @@ def test_provider_free_fallback_does_not_reselect_when_every_candidate_is_exclud
         exclude_topics=["Sesso sicuro: la Confederazione parla ai giovani"],
     )
     assert summary.startswith("Model cevap üretmedi:")
+
+
+def test_same_story_accepts_dates_embedded_in_search_snippets():
+    opportunity = build_selected_opportunity(
+        topic="İsviçre için son 30 gün içinde aynı haberi doğrulayan en az iki bağımsız kaynakla güncel gündem",
+        location_or_market="İsviçre",
+        summary="SEÇİLEN KONU: Schweizer Volleyballerinnen qualifizieren sich erstmals für WM\nHedef pazar: İsviçre",
+        sources=[
+            {
+                "title": "Volleyball: Wie sich die Schweizerinnen für die WM qualifizierten",
+                "summary": "4 days ago · Die Schweizer Volleyballerinnen reisen 2027 erstmals an die WM.",
+                "url": "https://www.nzz.ch/sport/weitere-sportarten/volleyball-wm",
+                "published_at": "",
+                "source_language": "de",
+            },
+            {
+                "title": "Historischer Moment - Schweizer Volleyballerinnen qualifizieren sich erstmals für WM",
+                "summary": "Oct 5, 2026 · Die Schweizer Volleyballerinnen qualifizieren sich erstmals für eine Weltmeisterschaft.",
+                "url": "https://www.srf.ch/sport/mehr-sport/volleyball/wm",
+                "published_at": "",
+                "source_language": "de",
+            },
+            {
+                "title": "Schweizer Volleyballerinnen qualifizieren sich erstmals für WM",
+                "summary": "Oct 5, 2026 · Die Schweizer Volleyballerinnen werden 2027 ihre WM-Premiere feiern.",
+                "url": "https://www.blick.ch/sport/volleyball/wm",
+                "published_at": "",
+                "source_language": "de",
+            },
+        ],
+    )
+
+    assert opportunity.sufficient is True
+    assert opportunity.freshness_status == "CURRENT"
+    assert len(opportunity.supporting_evidence) >= 2
+    assert all(row["published_at"] for row in opportunity.supporting_evidence)

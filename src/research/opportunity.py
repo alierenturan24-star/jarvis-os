@@ -314,6 +314,9 @@ def build_selected_opportunity(
             "title": str(item.get("title", "")),
             "publisher": str(item.get("publisher", "")),
             "provider": str(item.get("provider", "")),
+            "platform": str(item.get("platform", "")),
+            "summary": _source_summary(item),
+            "published_at": str(item.get("published_at") or item.get("date") or ""),
             "duration": str(item.get("duration", "")),
             "statistics": item.get("statistics") if isinstance(item.get("statistics"), dict) else {},
         }

@@ -1021,24 +1021,116 @@ class ControlCenterService:
                                   last_result=review["decision"], progress=100.0)
         if review["passed"]:
             artifact_path = production["artifact"]["final_video_path"]
+            snapshot = self.store.snapshot()
             account = self.accounts.account_for_channel(worker["channel_id"])
             binding = {"artifact_id": artifact_id(artifact_path), "artifact_path": artifact_path,
                 "production_id": production["production_id"], "channel_id": worker["channel_id"],
                 "artifact_channel_id": production.get("channel_id", worker["channel_id"]),
                 "account_id": account.get("account_id") if account else "", "worker_id": worker_id}
+            youtube_policy = snapshot.get("engines", {}).get("youtube", {}).get("policy", {})
+            auto_publish = bool(
+                youtube_policy.get("auto_publish_quality_passed")
+                and not youtube_policy.get("publish_requires_approval", True)
+            )
+            publication_metadata = {
+                "title": production.get("title") or production.get("topic") or "Untitled",
+                "description": production.get("description", ""),
+                "content_type": "SHORT",
+                "language": channel.get("language"),
+                "privacy_status": str(youtube_policy.get("privacy_status") or "public"),
+            }
+
+            if auto_publish:
+                if not account:
+                    self.workforce.set_status(
+                        worker_id, "ACCOUNT_REAUTH_REQUIRED",
+                        current_task="YouTube account connection required for AUTO PUBLISH",
+                        last_completed_at=utc_now(),
+                        last_result="VIDEO READY — QUALITY APPROVED — ACCOUNT NOT CONNECTED",
+                        progress=100.0, needs_approval=False,
+                        learning_refs=[production["production_id"]],
+                    )
+                    self.notify(
+                        "VIDEO READY — ACCOUNT REQUIRED",
+                        f"{worker['name']}: kalite geçti; otomatik yayın için kanal hesabı bağlı değil",
+                        record["id"],
+                    )
+                    return
+
+                authorization = {
+                    "id": uuid.uuid4().hex,
+                    "type": "youtube_publish",
+                    "status": "APPROVED",
+                    "what": f"Auto publish {production['production_id']} to {worker['channel_id']}",
+                    "why": "Standing owner authorization: quality-gated autonomous publishing",
+                    "risk": "HIGH",
+                    "cost": None,
+                    "expected_result": "Credential-aware publication with remote verification",
+                    "alternatives": [],
+                    "details": {"auto_publish": True},
+                    "mission_id": record["id"],
+                    "worker_id": worker_id,
+                    "task_id": "",
+                    "action": "publish_public_video",
+                    "provider_candidates": [],
+                    "checkpoint_id": "",
+                    "binding": binding,
+                    "publication_metadata": publication_metadata,
+                    "created_at": utc_now(),
+                    "decided_at": utc_now(),
+                    "decision_reason": "standing owner authorization",
+                    "decision_source": "standing_user_policy",
+                }
+                self.store.append("approvals", authorization)
+                self.store.update(lambda s: s["channels"][worker["channel_id"]]["production_queue"].append({
+                    **binding, "approval_id": authorization["id"], "status": "APPROVED",
+                    "created_at": utc_now(), "auto_publish": True,
+                }))
+                self.workforce.set_status(
+                    worker_id, "WORKING", current_task="AUTO PUBLISH",
+                    last_result="VIDEO READY — QUALITY APPROVED", progress=96.0,
+                    needs_approval=False, learning_refs=[production["production_id"]],
+                )
+                try:
+                    published = self.publisher.publish(authorization["id"], execute=True)
+                    publication_status = published.get("publication_status", "REMOTE_VERIFYING")
+                    self.store.update(lambda s: next(
+                        x for x in s["channels"][worker["channel_id"]]["production_queue"]
+                        if x.get("approval_id") == authorization["id"]
+                    ).update(status=publication_status, published_at=published.get("published_at")))
+                    self.workforce.set_status(
+                        worker_id, "IDLE", current_task="", last_completed_at=utc_now(),
+                        last_result=publication_status, progress=100.0, needs_approval=False,
+                    )
+                    self.notify(
+                        "VIDEO AUTO PUBLISHED",
+                        f"{worker['name']}: {production['production_id']} · {publication_status}",
+                        record["id"],
+                    )
+                except Exception as error:
+                    self.workforce.set_status(
+                        worker_id, "RECOVERY_REQUIRED", current_task="AUTO PUBLISH recovery",
+                        last_error=f"{type(error).__name__}: {error}",
+                        last_result="AUTO PUBLISH FAILED", progress=96.0,
+                        needs_approval=False,
+                    )
+                    self.notify(
+                        "AUTO PUBLISH FAILED",
+                        f"{worker['name']}: {type(error).__name__}",
+                        record["id"],
+                    )
+                return
+
             approval = self.create_approval("youtube_publish", {"worker_id": worker_id,
                 "need": f"Publish {production['production_id']} to {worker['channel_id']}",
-                "why": "V2 requires independent human approval bound to this exact artifact",
+                "why": "Channel policy requires per-video approval",
                 "risk": "HIGH", "expected_result": "Separate credential-aware publication action",
-                "binding": binding, "publication_metadata": {"title": production.get("title") or production.get("topic") or "Untitled",
-                    "description": production.get("description", ""), "content_type": "SHORT",
-                    "language": channel.get("language"), "privacy_status": "private"}}, record["id"])
-            self.store.update(lambda s: (s["approvals"][-1].update(binding=binding,
-                publication_metadata={"title": production.get("title") or production.get("topic") or "Untitled",
-                    "description": production.get("description", ""), "content_type": "SHORT",
-                    "language": channel.get("language"), "privacy_status": "private"}),
-                s["channels"][worker["channel_id"]]["production_queue"].append({**binding,
-                    "approval_id": approval["id"], "status": "READY_FOR_APPROVAL", "created_at": utc_now()})))
+                "binding": binding, "publication_metadata": publication_metadata}, record["id"])
+            self.store.update(lambda s: (s["approvals"][-1].update(
+                binding=binding, publication_metadata=publication_metadata),
+                s["channels"][worker["channel_id"]]["production_queue"].append({
+                    **binding, "approval_id": approval["id"], "status": "READY_FOR_APPROVAL",
+                    "created_at": utc_now()})))
             self.workforce.set_status(worker_id, "WAITING_APPROVAL", current_task="human publish approval",
                 last_completed_at=utc_now(), last_result="VIDEO READY — QUALITY APPROVED", progress=100.0,
                 needs_approval=True, learning_refs=[production["production_id"]])

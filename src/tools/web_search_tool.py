@@ -161,14 +161,13 @@ class WebSearchTool(BaseTool):
         timeout_seconds: float = WEB_SEARCH_TIMEOUT_SECONDS,
         timelimit: str = "w",
     ) -> dict:
-        """Find public video references without downloading/reusing media.
+        """Find public short-form references without downloading/reusing media.
 
-        Results are metadata-only (title, URL, duration, publisher and any
-        engagement statistics the search backend exposes).  They exist solely
-        so downstream planning can learn abstract hook/pacing/story patterns;
-        no thumbnail, audio, transcript or video bytes are copied.
+        YouTube Shorts, TikTok and Instagram Reels are reference-only inputs:
+        title/URL/description/duration/engagement metadata may inform topic,
+        hook, pacing and packaging decisions, but media bytes/audio are never
+        copied by this research path.
         """
-
         query = str(query or "").strip()
         if not query:
             return {"success": False, "query": "", "results": [], "message": "Video arama metni boş."}
@@ -177,51 +176,83 @@ class WebSearchTool(BaseTool):
             requested_timeout = float(timeout_seconds)
             timeout = max(0.01, min(WEB_SEARCH_TIMEOUT_SECONDS, requested_timeout))
             client = DDGS(timeout=timeout)
-            raw_results = client.videos(
-                query, region="ch-de", safesearch="moderate", timelimit=timelimit,
-                duration="short", max_results=max_results,
-            )
             results = []
-            for item in raw_results or []:
-                url = str(item.get("content") or item.get("embed_url") or "").strip()
-                if not url:
-                    continue
+            seen = set()
+
+            def platform_for(url: str, provider: str = "") -> str:
+                lowered = (url + " " + provider).casefold()
+                if "tiktok.com" in lowered or "tiktok" in lowered:
+                    return "TikTok"
+                if "instagram.com/reel" in lowered or "instagram" in lowered:
+                    return "Instagram Reels"
+                if "youtube.com" in lowered or "youtu.be" in lowered or "youtube" in lowered:
+                    return "YouTube"
+                return provider or "Web video"
+
+            def append(item: dict, url: str, *, fallback_platform: str = "") -> None:
+                url = str(url or "").strip()
+                if not url or url in seen:
+                    return
+                seen.add(url)
+                provider = str(item.get("provider") or item.get("source") or fallback_platform or "").strip()
                 results.append({
                     "title": str(item.get("title") or "").strip(),
                     "url": url,
-                    "summary": str(item.get("description") or "").strip(),
-                    "published_at": str(item.get("published") or "").strip(),
-                    "publisher": str(item.get("publisher") or item.get("uploader") or "").strip(),
-                    "provider": str(item.get("provider") or "").strip(),
+                    "summary": str(item.get("description") or item.get("body") or item.get("snippet") or "").strip(),
+                    "published_at": str(item.get("published") or item.get("date") or "").strip(),
+                    "publisher": str(item.get("publisher") or item.get("uploader") or provider).strip(),
+                    "provider": provider,
+                    "platform": platform_for(url, provider),
                     "duration": str(item.get("duration") or "").strip(),
                     "statistics": item.get("statistics") if isinstance(item.get("statistics"), dict) else {},
                 })
 
-            # Some DDGS backends temporarily return no video payload.  A
-            # metadata-only YouTube Shorts text search is a safe fallback and
-            # still proves that a real public reference URL was found.
-            if not results:
-                fallback = client.text(
-                    f"site:youtube.com/shorts {query}", region="ch-de",
-                    safesearch="moderate", max_results=max_results,
+            try:
+                raw_results = client.videos(
+                    query, region="ch-de", safesearch="moderate", timelimit=timelimit,
+                    duration="short", max_results=max_results,
                 )
+                for item in raw_results or []:
+                    append(item, item.get("content") or item.get("embed_url") or item.get("url"))
+            except Exception:
+                pass
+
+            # Always supplement with explicit public short-form surfaces so
+            # a generic video backend cannot silently bias discovery toward a
+            # single platform. Metadata only; no download happens here.
+            surface_queries = (
+                ("YouTube", f"site:youtube.com/shorts {query}"),
+                ("TikTok", f"site:tiktok.com {query} video"),
+                ("Instagram Reels", f"site:instagram.com/reel {query}"),
+            )
+            target = max(max_results * 2, 6)
+            for platform, surface_query in surface_queries:
+                if len(results) >= target:
+                    break
+                try:
+                    fallback = client.text(
+                        surface_query, region="ch-de", safesearch="moderate",
+                        max_results=max(2, min(max_results, 4)),
+                    )
+                except Exception:
+                    continue
                 for item in fallback or []:
                     url = str(item.get("href") or item.get("url") or "").strip()
-                    if "youtube.com/shorts/" not in url.casefold():
-                        continue
-                    results.append({
-                        "title": str(item.get("title") or "").strip(),
-                        "url": url,
-                        "summary": str(item.get("body") or item.get("snippet") or "").strip(),
-                        "published_at": "", "publisher": "YouTube", "provider": "YouTube",
-                        "duration": "", "statistics": {},
-                    })
+                    lowered = url.casefold()
+                    valid = (
+                        (platform == "YouTube" and ("youtube.com/shorts/" in lowered or "youtu.be/" in lowered))
+                        or (platform == "TikTok" and "tiktok.com/" in lowered)
+                        or (platform == "Instagram Reels" and "instagram.com/reel" in lowered)
+                    )
+                    if valid:
+                        append(item, url, fallback_platform=platform)
 
+            results = results[:target]
             return {
                 "success": bool(results), "query": query, "results": results,
                 "message": (
-                    f"{len(results)} video format referansı bulundu."
-                    if results else "Video format referansı bulunamadı."
+                    f"{len(results)} kısa-video format referansı bulundu."
+                    if results else "Kısa-video format referansı bulunamadı."
                 ),
             }
         except Exception as error:

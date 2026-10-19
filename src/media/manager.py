@@ -220,14 +220,19 @@ class MediaManager:
             for ref in research_opportunity.get("format_references") or []:
                 format_rows.append(
                     "- " + str(ref.get("title") or "Başlıksız video")[:180]
-                    + f" | yayıncı: {ref.get('publisher') or ref.get('provider') or 'belirtilmedi'}"
+                    + f" | platform: {ref.get('platform') or ref.get('provider') or 'belirtilmedi'}"
+                    + f" | yayıncı: {ref.get('publisher') or 'belirtilmedi'}"
+                    + f" | tarih: {ref.get('published_at') or 'belirtilmedi'}"
                     + f" | süre: {ref.get('duration') or 'belirtilmedi'}"
                     + f" | etkileşim: {ref.get('statistics') or {}}"
+                    + f" | açıklama: {str(ref.get('summary') or '')[:320]}"
                     + f" | URL: {ref.get('url') or ''}"
                 )
             format_context = (
-                "\nFormat referansları (YALNIZ soyut hook/tempo/hikâye/başlık kalıbı için; "
-                "başlık, metin, kapak, ses ve görüntü kopyalanamaz):\n"
+                "\nSosyal format/trend referansları (YouTube/TikTok/Reels dahil; YALNIZ analiz için):\n"
+                "Konu seçimi, ilk 2 saniye hook'u, tempo, sahne yoğunluğu, başlık/kapak yaklaşımı ve "
+                "müzik enerjisi/tür/BPM gibi SOYUT özellikleri çıkar. Telifli video karesini, sesi, "
+                "şarkı kaydını, metni veya kapağı kopyalama.\n"
                 + "\n".join(format_rows[:3]) + "\n"
                 if format_rows else ""
             )
@@ -340,8 +345,10 @@ Kurallar:
   eski bir yılı güncelmiş gibi sunma.
 - Kesin yatırım tavsiyesi verme.
 - Var olmayan bir aracı kurulu/kullanılabilirmiş gibi anlatma.
-- Başka bir üreticinin videosunu, kapağını veya telifli müziğini kopyalama/yeniden yükleme.
-- Görsel planında YALNIZCA doğrulanabilir Public Domain, CC0 veya CC BY kaynakları kullan; CC BY-SA/NC/ND önerme.
+- YouTube/TikTok/Reels referanslarını performans ve yaratıcı yapı analizi için kullan; kaynak videoyu/sesi yeniden yükleme.
+- Trend müzik varsa şarkı adını/formatını araştırma referansı olarak kaydet; render için yalnız özgün müzik, açık lisanslı müzik veya hedef platformun o gönderi için açıkça kullanıma sunduğu ses kullan. Melodi/ses kaydını taklit etme.
+- Görsel planında öncelik: özgün üretilmiş medya > kullanıcının sahip olduğu medya > doğrulanabilir Public Domain/CC0/CC BY medya. Lisansı belirsiz sosyal video yalnız REFERANS olabilir, render hammaddesi olamaz.
+- Format referanslarını karşılaştır: konu uyumu, güncellik, hook gücü, kısa-forma uygunluk ve varsa etkileşim sinyallerine göre en güçlü yaklaşımı seç; tek bir videoyu birebir taklit etme.
 """
 
         if stage_sink is not None:

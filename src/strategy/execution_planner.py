@@ -191,6 +191,19 @@ def task_output_is_false_success(task) -> bool:
 
     output_text = str(task.result.output)
 
+    # A media-opportunity research task can have an early failed search pass
+    # followed by a successful bounded retry/corroboration pass. The human
+    # report intentionally preserves that diagnostic history, so scanning the
+    # whole text for "bulunamadı"/provider markers would falsely reopen the
+    # provider-recovery ladder and even request a paid provider after verified
+    # current evidence already exists. The structured research handoff is the
+    # authoritative final verdict for this task.
+    report = (task.metadata or {}).get("report") if hasattr(task, "metadata") else None
+    if task.agent == "research" and isinstance(report, dict) and report.get("sufficient") is True:
+        from src.research.opportunity import selected_opportunity_has_verified_current_evidence
+        if report.get("freshness_status") != "CURRENT" or selected_opportunity_has_verified_current_evidence(report):
+            return False
+
     if is_llm_failure(output_text):
         return True
 

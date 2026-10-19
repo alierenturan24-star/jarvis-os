@@ -354,7 +354,7 @@ def test_dispatch_reaches_approval_gate_with_zero_upload_before_decision(tmp_pat
         "review_id": "r1", "reviewer_worker_id": "eylem", "passed": True, "decision": "QUALITY APPROVED",
         "evidence": {}, "required_changes": [], "created_at": "2026-08-21T00:00:00Z"})
 
-    service.enqueue_youtube("Swiss Insider first video")
+    service.enqueue_youtube("Swiss Insider first video; ben onaylamadan YouTube'a yükleme/yayınlama")
     mission = service.run_next_youtube()
     wait(service)
 
@@ -1029,3 +1029,74 @@ def test_capability_gap_never_references_legacy_assets_in_decision(tmp_path):
     blob = json.dumps(gap_decision)
     assert "leni" not in blob.casefold()
     assert "silver-boat" not in blob.casefold() and "silver boat" not in blob.casefold()
+
+
+def test_quality_passed_video_auto_publishes_under_standing_channel_policy(tmp_path, monkeypatch):
+    service, runtime = new_service(tmp_path)
+    connect(service)
+    artifact = tmp_path / "auto-artifact.mp4"
+    artifact.write_bytes(b"synthetic-auto-publish-video")
+    production = {
+        "production_id": "p-auto",
+        "title": "Swiss Insider Auto",
+        "topic": "Swiss Insider Auto",
+        "description": "test",
+        "artifact": {"final_video_path": str(artifact), "thumbnail_path": str(artifact)},
+        "channel_id": "youtube-ch",
+    }
+    runtime.jarvis.last_mission = fake_mission(tasks=[fake_task("media", {"youtube_production": production})])
+    monkeypatch.setattr(WorkforceManager, "quality_review", lambda self, production, channel: {
+        "review_id": "r-auto", "reviewer_worker_id": "eylem", "passed": True,
+        "decision": "QUALITY APPROVED", "evidence": {}, "required_changes": [],
+        "created_at": "2026-10-20T00:00:00Z",
+    })
+    publish_calls = []
+    monkeypatch.setattr(service.publisher, "publish", lambda approval_id, execute=False: (
+        publish_calls.append((approval_id, execute))
+        or {"publication_status": "PUBLISHED_VERIFIED", "published_at": "2026-10-20T00:00:01Z"}
+    ))
+
+    service.enqueue_youtube("Swiss Insider için güncel konu bul, özgün kısa video üret ve paylaş")
+    service.run_next_youtube()
+    wait(service)
+
+    assert publish_calls and publish_calls[0][1] is True
+    approval = next(a for a in service.store.snapshot()["approvals"] if a["type"] == "youtube_publish")
+    assert approval["status"] == "APPROVED"
+    assert approval["decision_source"] == "standing_user_policy"
+    assert approval["publication_metadata"]["privacy_status"] == "public"
+    worker = service.workforce.worker("sinem")
+    assert worker["needs_approval"] is False
+    assert worker["last_result"] == "PUBLISHED_VERIFIED"
+
+
+def test_explicit_no_publish_goal_overrides_standing_auto_publish(tmp_path, monkeypatch):
+    service, runtime = new_service(tmp_path)
+    connect(service)
+    artifact = tmp_path / "manual-artifact.mp4"
+    artifact.write_bytes(b"synthetic-manual-approval-video")
+    production = {
+        "production_id": "p-manual",
+        "title": "Swiss Insider Manual",
+        "topic": "Swiss Insider Manual",
+        "artifact": {"final_video_path": str(artifact), "thumbnail_path": str(artifact)},
+        "channel_id": "youtube-ch",
+    }
+    runtime.jarvis.last_mission = fake_mission(tasks=[fake_task("media", {"youtube_production": production})])
+    monkeypatch.setattr(WorkforceManager, "quality_review", lambda self, production, channel: {
+        "review_id": "r-manual", "reviewer_worker_id": "eylem", "passed": True,
+        "decision": "QUALITY APPROVED", "evidence": {}, "required_changes": [],
+        "created_at": "2026-10-20T00:00:00Z",
+    })
+    monkeypatch.setattr(
+        service.publisher, "publish",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("explicit no-publish goal must not publish")),
+    )
+
+    service.enqueue_youtube("Videoyu hazırla ama yayınlama; son onayımı iste")
+    service.run_next_youtube()
+    wait(service)
+
+    approval = next(a for a in service.store.snapshot()["approvals"] if a["type"] == "youtube_publish")
+    assert approval["status"] == "PENDING"
+    assert service.workforce.worker("sinem")["status"] == "WAITING_APPROVAL"

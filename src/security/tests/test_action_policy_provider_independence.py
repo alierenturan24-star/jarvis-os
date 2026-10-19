@@ -44,3 +44,34 @@ class TestActionPolicyIsDecoupledFromProviderRouting:
         public_members = {name for name, _ in inspect.getmembers(CostOptimizer) if not name.startswith("_")}
         assert "evaluate" not in public_members
         assert "approve" not in public_members
+
+
+    def test_local_reversible_actions_run_without_confirmation(self):
+        autonomous = (
+            "create_project_file",
+            "edit_project_file",
+            "run_project_tests",
+            "install_sandbox_package",
+            "create_social_draft",
+            "git_commit",
+            "change_claude_skill",
+        )
+        for action in autonomous:
+            decision = ActionPolicy().evaluate(action, standing_permission=False)
+            assert decision.allowed is True, action
+            assert decision.requires_confirmation is False, action
+            assert decision.risk == RiskLevel.LOW, action
+
+    def test_external_side_effects_still_require_confirmation(self):
+        for action in (
+            "publish_scheduled_video",
+            "upload_private_video",
+            "paid_media_generation",
+            "publish_public_video",
+            "git_push",
+            "install_production_package",
+            "live_trade",
+        ):
+            decision = ActionPolicy().evaluate(action, standing_permission=False)
+            assert decision.allowed is True, action
+            assert decision.requires_confirmation is True, action

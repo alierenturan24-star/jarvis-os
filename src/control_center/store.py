@@ -13,9 +13,15 @@ from typing import Any, Callable
 
 
 DEFAULT_STATE: dict[str, Any] = {
-    "schema_version": 6,
+    "schema_version": 7,
     "engines": {
-        "youtube": {"enabled": False, "queue": [], "policy": {"research": True, "production": True, "publish_requires_approval": True}},
+        "youtube": {"enabled": False, "queue": [], "policy": {
+            "research": True,
+            "production": True,
+            "publish_requires_approval": False,
+            "auto_publish_quality_passed": True,
+            "privacy_status": "public",
+        }},
         "finance": {"enabled": True, "mode": "RESEARCH", "watchlist": ["BTCUSDT", "ETHUSDT", "SOLUSDT"], "live_activation": False,
                     "policy": {"research": True, "backtest": True, "paper": True, "real_orders": False,
                                "live_requires_human_approval": True},
@@ -128,13 +134,27 @@ class ControlCenterStore:
                 else: merged[key] = item
             merged["engines"]["finance"].setdefault("policy", deepcopy(DEFAULT_STATE["engines"]["finance"]["policy"]))
             merged["engines"]["finance"].setdefault("risk_policy", deepcopy(DEFAULT_STATE["engines"]["finance"]["risk_policy"]))
+            youtube_policy = merged["engines"]["youtube"].setdefault(
+                "policy", deepcopy(DEFAULT_STATE["engines"]["youtube"]["policy"])
+            )
+            for key, default in DEFAULT_STATE["engines"]["youtube"]["policy"].items():
+                youtube_policy.setdefault(key, default)
             if original_version < 6:
                 # Schema 6 makes the safe finance lab available by default;
                 # live execution remains impossible and explicitly disabled.
-                merged["schema_version"] = 6
                 merged["engines"]["finance"].update(enabled=True, live_activation=False)
                 if not merged["engines"]["finance"].get("watchlist"):
                     merged["engines"]["finance"]["watchlist"] = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+            if original_version < 7:
+                # The owner explicitly chose autonomous quality-gated publishing:
+                # no per-video approval prompt. External account binding, artifact
+                # integrity and daily publication budgets still gate execution.
+                youtube_policy.update(
+                    publish_requires_approval=False,
+                    auto_publish_quality_passed=True,
+                    privacy_status="public",
+                )
+            merged["schema_version"] = 7
             merged["paper"].setdefault("initial_cash", 10000.0); merged["paper"].setdefault("performance", {})
             merged.setdefault("finance_cycles", []); merged.setdefault("finance_decisions", [])
             research = merged.setdefault("autonomous_research", {})

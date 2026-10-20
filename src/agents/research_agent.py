@@ -15,11 +15,12 @@ _WINDOW_FALLBACK_CUES = (
     "son 30 güne genişlet", "30 güne genişlet", "30 günlük yedek", "30 gün yedek",
 )
 
-# A current media-research handoff can perform at most three bounded
-# ResearchManager.research() passes: primary window, optional 30-day/alternate
-# pass, then one same-story corroboration pass for the selected headline.
+# A current media-research handoff can perform a bounded candidate search:
+# primary window + optional 30-day/alternate pass + up to four exact
+# same-story corroboration attempts. This prevents one weak candidate from
+# blocking the whole mission while keeping runtime finite.
 # Exported so the department outer timeout is derived from the real call graph.
-MEDIA_RESEARCH_MAX_PASSES = 3
+MEDIA_RESEARCH_MAX_PASSES = 6
 
 
 class ResearchAgent(BaseAgent):
@@ -214,47 +215,69 @@ class ResearchAgent(BaseAgent):
                 if retry_opportunity.sufficient:
                     opportunity = retry_opportunity
                 elif retry_opportunity.selected_topic:
-                    # The broad trend scan may find several unrelated current
-                    # headlines.  When the selected one lacks two SAME-STORY
-                    # sources, run one bounded headline-specific corroboration
-                    # pass instead of either fabricating completion or asking
-                    # the user to retry manually.
-                    selected = retry_opportunity.selected_topic
+                    # A broad current-news scan can contain several viable
+                    # headlines. Do not let the first one become a single
+                    # point of failure: try a small, deterministic candidate
+                    # set and keep the first story that reaches the existing
+                    # two-independent-source gate.
+                    candidate_titles: list[str] = []
+                    for title in (
+                        retry_opportunity.selected_topic,
+                        *[
+                            str(item.get("title") or "").strip()
+                            for item in (retry_record or {}).get("sources", []) or []
+                            if item.get("reference_role") != "format_only"
+                            and item.get("rejected") is not True
+                            and str(item.get("published_at") or item.get("date") or item.get("published") or "").strip()
+                        ],
+                    ):
+                        normalized = title.strip()
+                        if normalized and normalized not in candidate_titles:
+                            candidate_titles.append(normalized)
+                        if len(candidate_titles) >= 4:
+                            break
+
                     verification_window = 30 if allow_window_fallback else 7
-                    verification_query = (
-                        f'"{selected}" güncel son {verification_window} gün '
-                        "aynı olayı doğrulayan bağımsız haber kaynakları "
-                        f"yayın tarihi {market_context}"
-                    )
-                    verification_result = self.manager.research(
-                        topic=verification_query,
-                        force_refresh=True,
-                        preferred_provider=preferred_provider,
-                        exclude_topics=[],
-                    )
-                    verification_record = self.manager.knowledge.find_research(verification_query)
-                    combined_sources: list[dict] = []
-                    seen_urls: set[str] = set()
-                    for source_record in (retry_record, verification_record):
-                        for item in (source_record or {}).get("sources", []) or []:
-                            url = str(item.get("canonical_url") or item.get("url") or "").strip()
-                            if not url or url in seen_urls:
-                                continue
-                            seen_urls.add(url)
-                            combined_sources.append(item)
-                    corroborated = build_selected_opportunity(
-                        topic=retry_query if allow_window_fallback else query,
-                        location_or_market=market_context,
-                        summary=f"SEÇİLEN KONU: {selected}\nHedef pazar: {market_context}",
-                        sources=combined_sources,
-                        created_at=str((verification_record or {}).get("created_at", "")),
-                        exclude_topics=excluded_topics,
-                    )
-                    result += (
-                        "\n\n--- OTOMATİK AYNI-HABER KAYNAK DOĞRULAMASI ---\n"
-                        + verification_result
-                    )
-                    opportunity = corroborated
+                    best_attempt = retry_opportunity
+                    for attempt_index, selected in enumerate(candidate_titles, start=1):
+                        verification_query = (
+                            f'"{selected}" güncel son {verification_window} gün '
+                            "aynı olayı doğrulayan bağımsız haber kaynakları "
+                            f"yayın tarihi {market_context}"
+                        )
+                        verification_result = self.manager.research(
+                            topic=verification_query,
+                            force_refresh=True,
+                            preferred_provider=preferred_provider,
+                            exclude_topics=[],
+                        )
+                        verification_record = self.manager.knowledge.find_research(verification_query)
+                        combined_sources: list[dict] = []
+                        seen_urls: set[str] = set()
+                        for source_record in (retry_record, verification_record):
+                            for item in (source_record or {}).get("sources", []) or []:
+                                url = str(item.get("canonical_url") or item.get("url") or "").strip()
+                                if not url or url in seen_urls:
+                                    continue
+                                seen_urls.add(url)
+                                combined_sources.append(item)
+                        corroborated = build_selected_opportunity(
+                            topic=retry_query if allow_window_fallback else query,
+                            location_or_market=market_context,
+                            summary=f"SEÇİLEN KONU: {selected}\nHedef pazar: {market_context}",
+                            sources=combined_sources,
+                            created_at=str((verification_record or {}).get("created_at", "")),
+                            exclude_topics=excluded_topics,
+                        )
+                        result += (
+                            f"\n\n--- OTOMATİK AYNI-HABER KAYNAK DOĞRULAMASI "
+                            f"{attempt_index}/{len(candidate_titles)} ---\n"
+                            + verification_result
+                        )
+                        best_attempt = corroborated
+                        if corroborated.sufficient:
+                            break
+                    opportunity = best_attempt
             task.metadata["report"] = opportunity.as_dict()
 
         return result

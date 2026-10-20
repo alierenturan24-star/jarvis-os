@@ -81,3 +81,25 @@ class TestRepoResearchTaskIsPreserved:
         assert "github" in departments
         for name in ("evaluation", "sandbox", "integration"):
             assert name in departments, f"{name} narrowing tarafından yanlışlıkla çıkarıldı"
+
+
+def test_tiktok_reels_used_as_research_references_do_not_dispatch_social_media():
+    orchestrator = DepartmentOrchestrator()
+    departments = orchestrator.select_departments(
+        "İsviçre için güncel konu araştır. YouTube Shorts, TikTok ve Instagram Reels "
+        "videolarını yalnız format referansı olarak incele. Türkçe 9:16 kısa video üret. "
+        "Bu ilk testte YAYINLAMA."
+    )
+
+    assert "research" in departments
+    assert "media" in departments
+    assert "social_media" not in departments
+
+
+def test_explicit_social_publish_action_still_dispatches_social_media():
+    orchestrator = DepartmentOrchestrator()
+    departments = orchestrator.select_departments(
+        "Hazırlanan videoyu TikTok'a paylaş ve YouTube'a yayınla."
+    )
+
+    assert "social_media" in departments

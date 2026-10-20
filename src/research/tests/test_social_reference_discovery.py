@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from src.research.collector import ResearchCollector, _wants_short_form_references
 from src.research.opportunity import build_selected_opportunity
 from src.tools.web_search_tool import WebSearchTool
+from src.utils.llm_utils import source_fallback
 
 
 def test_turkish_short_video_wording_triggers_social_reference_discovery():
@@ -200,3 +201,19 @@ def test_generic_web_social_video_result_is_demoted_to_format_only():
     assert social["reference_role"] == "format_only"
     facts = [row for row in rows if row["reference_role"] != "format_only"]
     assert all("youtube.com/shorts/" not in row["url"] for row in facts)
+
+
+def test_source_fallback_never_selects_format_only_social_video_as_news():
+    result = source_fallback(
+        "İsviçre için son 7 gün güncel haber",
+        [{
+            "title": "Viral Swiss Short",
+            "url": "https://www.youtube.com/shorts/example",
+            "summary": "viral format reference",
+            "reference_role": "format_only",
+            "published_at": "2026-10-20T10:00:00+00:00",
+        }],
+    )
+
+    assert "SEÇİLEN KONU:" not in result
+    assert "format/trend referansları" in result

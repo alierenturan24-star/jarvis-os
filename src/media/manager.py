@@ -13,6 +13,10 @@ from src.research.manager import topic_wants_current_information
 from src.utils.language_policy import TURKISH_OUTPUT_POLICY
 from src.utils.llm_utils import is_llm_failure
 
+_FREE_PLANNING_PROVIDERS = frozenset({
+    "ollama", "gemini", "groq", "openrouter", "claude_code", "codex",
+})
+
 # Sprint 39: JARVIS'in bu ortamda GERÇEKTEN sahip olduğu üretim araçlarının
 # dürüst envanteri (bkz. Sprint 39 CAPABILITY AUDIT) -- LLM'e bağlam olarak
 # verilir (uydurma/var olmayan bir araç önermesin diye) VE çıktıya
@@ -269,6 +273,13 @@ class MediaManager:
             cue in full_request.casefold() for cue in ("türkçe", "turkce", "türkçe anlatım", "türkçe ses")
         )
         production_language = "tr-TR" if requested_turkish else self.channel_language
+        lowered_request = full_request.casefold()
+        free_only = any(cue in lowered_request for cue in (
+            "ücretli servis kullanma", "ucretli servis kullanma",
+            "ücretli kullanma", "ucretli kullanma",
+            "para harcama", "no paid", "paid service kullanma",
+        ))
+        allowed_planning_providers = _FREE_PLANNING_PROVIDERS if free_only else None
 
         request_block = (
             f"Kullanıcının tam isteği: {full_request}\n"
@@ -369,6 +380,7 @@ Kurallar:
         # ÜCRETSİZ kazanır, yeni bir fallback mantığı İCAT EDİLMEDİ.
         route_result = self.router.manager.route_and_generate(
             prompt=prompt, task_type="planning", preferred_provider=provider_name,
+            allowed_providers=allowed_planning_providers,
         )
         plan_text = route_result.output
 
@@ -380,6 +392,7 @@ Kurallar:
                     "yeniden yaz. Yalnızca düzeltilmiş planı döndür.\n\n" + plan_text
                 ),
                 task_type="planning", preferred_provider=route_result.provider_used,
+                allowed_providers=allowed_planning_providers,
             )
             if correction.success and not is_llm_failure(correction.output):
                 plan_text = correction.output

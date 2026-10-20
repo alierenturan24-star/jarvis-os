@@ -230,6 +230,7 @@ class ProviderManager:
         system: str | None = None,
         model_name: str | None = None,
         preferred_provider: str | None = None,
+        allowed_providers: set[str] | frozenset[str] | None = None,
     ) -> RouteResult:
         """Görev türüne göre provider seçer ve çalıştırır. Seçilen provider
         başarısız olursa kullanılabilir profil alternatiflerini birer kez
@@ -266,6 +267,9 @@ class ProviderManager:
             chosen, reason = self.choose_provider_for_task(task_type)
 
         candidates = self._route_candidates(task_type, chosen)
+        if allowed_providers is not None:
+            allowed = {self.normalize(name) for name in allowed_providers}
+            candidates = [name for name in candidates if self.normalize(name) in allowed]
         started = time.monotonic()
         output = "Kullanılabilir yapay zekâ sağlayıcısı bulunamadı."
         provider_used = chosen

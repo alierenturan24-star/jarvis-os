@@ -487,3 +487,40 @@ class TestResearchOpportunityGrounding:
         manager.plan(topic="Bitcoin neden düştü", produce_artifact=True)
 
         assert captured.get("research_grounded") is False
+
+
+def test_no_paid_service_request_restricts_media_planning_provider_chain(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    seen_allowed = []
+
+    def fake_route(self, prompt, task_type, **kwargs):
+        seen_allowed.append(kwargs.get("allowed_providers"))
+        return _route_result(_complete_plan_text(), provider="ollama")
+
+    monkeypatch.setattr(ProviderManager, "route_and_generate", fake_route)
+    opportunity = {
+        "selected_topic": "Swiss current story",
+        "location_or_market": "İsviçre",
+        "why_current": "iki güncel kaynak doğruladı",
+        "supporting_evidence": [
+            {"url": "https://www.srf.ch/news/schweiz/a", "title": "Swiss current story"},
+            {"url": "https://www.rts.ch/info/suisse/b", "title": "Swiss current story confirmed"},
+        ],
+        "format_references": [],
+        "freshness_status": "CURRENT",
+        "sufficient": True,
+    }
+
+    MediaManager().plan(
+        topic=opportunity["selected_topic"],
+        request_text="Türkçe kısa video hazırla. Ücretli servis kullanma. Bu ilk testte YAYINLAMA.",
+        research_opportunity=opportunity,
+    )
+
+    assert seen_allowed
+    allowed = seen_allowed[0]
+    assert "ollama" in allowed
+    assert "gemini" in allowed
+    assert "aiml" not in allowed
+    assert "openai" not in allowed
+    assert "anthropic" not in allowed

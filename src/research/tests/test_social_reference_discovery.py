@@ -158,3 +158,45 @@ def test_search_videos_supplements_multiple_short_form_platforms(monkeypatch):
     assert result["success"] is True
     platforms = {row["platform"] for row in result["results"]}
     assert {"YouTube", "TikTok", "Instagram Reels"} <= platforms
+
+
+def test_generic_web_social_video_result_is_demoted_to_format_only():
+    now = datetime.now(timezone.utc).isoformat()
+
+    class _Web:
+        def search_news(self, query, max_results=3, timeout_seconds=15.0, timelimit="w"):
+            return {
+                "success": True,
+                "results": [{
+                    "title": "Current Swiss story",
+                    "url": "https://www.srf.ch/news/schweiz/current-story",
+                    "summary": "Current Swiss factual story.",
+                    "published_at": now,
+                    "publisher": "SRF",
+                }],
+            }
+
+        def search_videos(self, query, max_results=3, timeout_seconds=15.0):
+            return {"success": False, "results": []}
+
+        def search(self, query, max_results=3, timeout_seconds=15.0):
+            return {
+                "success": True,
+                "results": [{
+                    "title": "Old viral short",
+                    "url": "https://www.youtube.com/shorts/old-format",
+                    "summary": "Jan 2, 2026 · viral short reference",
+                }],
+            }
+
+    collector = ResearchCollector()
+    collector.web = _Web()
+    rows = collector.collect(
+        "İsviçre için son 7 gün güncel konu bul ve 9:16 kısa video hazırla",
+        max_results_per_source=3,
+    )
+
+    social = next(row for row in rows if "youtube.com/shorts/" in row["url"])
+    assert social["reference_role"] == "format_only"
+    facts = [row for row in rows if row["reference_role"] != "format_only"]
+    assert all("youtube.com/shorts/" not in row["url"] for row in facts)

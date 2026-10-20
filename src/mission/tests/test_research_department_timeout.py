@@ -130,6 +130,6 @@ def test_media_research_budget_covers_all_bounded_research_passes():
         Settings.RESEARCH_PROVIDER_TIMEOUT_SECONDS * MAX_SEARCH_STEPS
         + DEPARTMENT_TASK_TIMEOUT_SECONDS
     )
-    assert MEDIA_RESEARCH_MAX_PASSES == 3
+    assert MEDIA_RESEARCH_MAX_PASSES == 6
     assert RESEARCH_DEPARTMENT_TASK_TIMEOUT_SECONDS >= MEDIA_RESEARCH_MAX_PASSES * single_pass
     assert RESEARCH_DEPARTMENT_TASK_TIMEOUT_SECONDS < 1200.0

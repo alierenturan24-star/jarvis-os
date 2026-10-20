@@ -416,8 +416,12 @@ class GeneralProductionBuilder:
                 root, script, channel_language, voice,
             )
             if not audio_ok:
-                return PackageBuildResult(False, error="CAPABILITY_GAP: real narration generation unavailable",
-                                          production_id=production_id)
+                return PackageBuildResult(
+                    False,
+                    error=f"CAPABILITY_GAP: real narration generation unavailable ({narration_provider})",
+                    production_id=production_id,
+                    missing_capabilities=("narration_generation",),
+                )
             self._checkpoint(checkpoint, production_id, "AUDIO", "completed")
 
             narration_seconds = None

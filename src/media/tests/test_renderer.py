@@ -95,3 +95,28 @@ def test_renderer_mixes_original_music_and_embeds_subtitles(tmp_path, monkeypatc
     video_seconds = float(next(row["duration"] for row in streams if row["codec_type"] == "video"))
     audio_seconds = float(next(row["duration"] for row in streams if row["codec_type"] == "audio"))
     assert abs(video_seconds - audio_seconds) < 0.12
+
+
+def test_write_narration_audio_uses_windows_sapi_com_before_flite(tmp_path, monkeypatch):
+    import src.media.renderer as renderer
+
+    monkeypatch.setattr(renderer, "find_edge_tts", lambda: None)
+    monkeypatch.setattr(renderer, "_write_sapi_wav", lambda *a, **k: False)
+
+    def fake_com(path, narration):
+        path.write_bytes(b"RIFF" + b"x" * 2048)
+        return True
+
+    monkeypatch.setattr(renderer, "_write_sapi_com_wav", fake_com)
+    monkeypatch.setattr(
+        renderer, "_write_flite_wav",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("flite should not run after SAPI COM succeeds")),
+    )
+
+    path, provider, ok = renderer.write_narration_audio(
+        tmp_path, "Merhaba dünya", "tr-TR", "tr-TR-EmelNeural",
+    )
+
+    assert ok is True
+    assert path.is_file()
+    assert provider == "Windows SAPI COM local fallback"

@@ -316,6 +316,18 @@ _PURE_GENERATION_SIGNALS = (
 )
 _YOUTUBE_INVESTIGATIVE_DEPARTMENTS = ("research", "github", "browser")
 _AUDIENCE_RESEARCH_CUES = ("çocuk", "hedef kitle", "audience", "ülke", "almanya", "türkiye")
+
+_SOCIAL_EXECUTION_PATTERN = re.compile(
+    r"\b(?:tiktok|instagram|reels?|youtube|sosyal\s+medya)\b.{0,80}"
+    r"\b(?:paylaş|paylas|yayınla|yayinla|yükle|yukle|post\s+et|gönder|gonder)\b"
+    r"|\b(?:paylaş|paylas|yayınla|yayinla|yükle|yukle|post\s+et|gönder|gonder)\b.{0,80}"
+    r"\b(?:tiktok|instagram|reels?|youtube|sosyal\s+medya)\b",
+    re.IGNORECASE,
+)
+
+
+def _wants_social_media_execution(text: str) -> bool:
+    return bool(_SOCIAL_EXECUTION_PATTERN.search(text or ""))
 _FINANCE_STRATEGY_LAB_CUES = (
     "strategy lab", "backtest", "out-of-sample", "oos", "paper",
     "qualified stratej", "strateji aday",
@@ -677,6 +689,12 @@ class DepartmentOrchestrator:
             for name in _required_goal_departments(lowered):
                 if name not in bundle:
                     bundle.append(name)
+
+        # A platform name used as a research/reference source must not
+        # dispatch the unwired social_media execution department. Only an
+        # explicit positive post/upload/publish action keeps it selected.
+        if "social_media" in bundle and not _wants_social_media_execution(text):
+            bundle = [name for name in bundle if name != "social_media"]
 
         # Learning is a required persisted outcome for Finance autonomy
         # goals even when the user says English "learning" or Turkish

@@ -100,7 +100,12 @@ def source_fallback(
                 return False
         return True
 
-    candidates = dated or factual or selected
+    candidates = dated or factual
+    if not candidates:
+        return (
+            "Kaynaklardan güvenilir bir haber konusu seçilemedi: yalnız format/trend referansları "
+            "bulundu; bunlar faktüel haber kanıtı sayılmadı."
+        )
     unseen = [item for item in candidates if not_previously_attempted(item)]
     if excluded and not unseen:
         return "Model cevap üretmedi: dışlama listesi dışında yeni bir konu bulunamadı."

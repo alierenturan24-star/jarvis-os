@@ -224,3 +224,24 @@ class TestRegistryFallbackCandidates:
         assert codex.calls == 1
         assert claude_code.calls == 1
         assert gemini.calls == 0
+
+
+def test_allowed_provider_filter_prevents_paid_fallback(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    manager = ProviderManager()
+    aiml = _FakeProvider(available=True, response="paid answer")
+    ollama = _FakeProvider(available=True, response="local answer")
+    manager._providers = {"aiml": aiml, "ollama": ollama}
+
+    result = manager.route_and_generate(
+        "prompt",
+        task_type="planning",
+        preferred_provider="aiml",
+        allowed_providers={"ollama"},
+    )
+
+    assert result.success is True
+    assert result.provider_used == "ollama"
+    assert result.attempted_providers == ("ollama",)
+    assert aiml.calls == 0
+    assert ollama.calls == 1

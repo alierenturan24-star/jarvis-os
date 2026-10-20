@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from src.agents.research_agent import ResearchAgent
 from src.planner.task import Task
 from src.providers.provider_manager import ProviderManager, RouteResult
@@ -77,3 +79,111 @@ class TestResearchAgentLocalCodeRouting:
 
         assert research_calls  # ResearchManager.research GERÇEKTEN çağrıldı
         assert result == "ok (test)"
+
+
+def test_media_research_tries_next_headline_when_first_candidate_has_one_source(monkeypatch):
+    now = datetime.now(timezone.utc).isoformat()
+
+    class _Knowledge:
+        def __init__(self):
+            self.records = {}
+
+        def find_research(self, topic):
+            return self.records.get(topic)
+
+    class _Manager:
+        def __init__(self):
+            self.knowledge = _Knowledge()
+            self.calls = []
+
+        def research(self, topic, **kwargs):
+            self.calls.append(topic)
+            if "ALTERNATIVE_SOURCE_PASS" in topic:
+                self.knowledge.records[topic] = {
+                    "summary": "SEÇİLEN KONU: Swiss football result",
+                    "created_at": now,
+                    "sources": [
+                        {
+                            "title": "Swiss football result",
+                            "summary": "Switzerland won a football match.",
+                            "url": "https://www.rts.ch/sport/football/a",
+                            "published_at": now,
+                            "source_language": "fr",
+                        },
+                        {
+                            "title": "Swiss AI talent exodus accelerates",
+                            "summary": "Swiss AI researchers are being recruited by global technology companies.",
+                            "url": "https://www.nzz.ch/technology/ai-talent-b",
+                            "published_at": now,
+                            "source_language": "de",
+                        },
+                    ],
+                }
+                return self.knowledge.records[topic]["summary"]
+
+            if '"Swiss football result"' in topic:
+                self.knowledge.records[topic] = {
+                    "summary": "SEÇİLEN KONU: Swiss football result",
+                    "created_at": now,
+                    "sources": [{
+                        "title": "Swiss football result",
+                        "summary": "Switzerland won a football match.",
+                        "url": "https://www.rts.ch/sport/football/a",
+                        "published_at": now,
+                    }],
+                }
+                return self.knowledge.records[topic]["summary"]
+
+            if '"Swiss AI talent exodus accelerates"' in topic:
+                self.knowledge.records[topic] = {
+                    "summary": "SEÇİLEN KONU: Swiss AI talent exodus accelerates",
+                    "created_at": now,
+                    "sources": [
+                        {
+                            "title": "Swiss AI talent exodus accelerates",
+                            "summary": "Swiss AI researchers are being recruited by global technology companies.",
+                            "url": "https://www.nzz.ch/technology/ai-talent-b",
+                            "published_at": now,
+                        },
+                        {
+                            "title": "Big Tech recruits Swiss AI talent",
+                            "summary": "Global technology companies are recruiting leading Swiss AI researchers.",
+                            "url": "https://www.swissinfo.ch/eng/science/ai-talent-b",
+                            "published_at": now,
+                        },
+                    ],
+                }
+                return self.knowledge.records[topic]["summary"]
+
+            self.knowledge.records[topic] = {
+                "summary": "Kaynaklardan güvenilir bir özet oluşturulamadı.",
+                "created_at": now,
+                "sources": [],
+            }
+            return self.knowledge.records[topic]["summary"]
+
+    agent = ResearchAgent()
+    agent.manager = _Manager()
+    monkeypatch.setattr(ResearchAgent, "_recent_video_topics", staticmethod(lambda limit=8: []))
+    task = Task(
+        agent="research",
+        action="dispatch",
+        target=(
+            "İsviçre için son 7 gün içinde güvenilir aynı haberi doğrulayan en az iki bağımsız "
+            "kaynakla güncel gündem araştır"
+        ),
+        metadata={
+            "market_context": "İsviçre",
+            "allow_30_day_fallback": True,
+            "preferred_ai_provider": "gemini",
+        },
+    )
+
+    agent.execute(task)
+
+    report = task.metadata["report"]
+    assert report["sufficient"] is True
+    assert report["selected_topic"] == "Swiss AI talent exodus accelerates"
+    assert len(report["supporting_evidence"]) >= 2
+    assert any('"Swiss football result"' in call for call in agent.manager.calls)
+    assert any('"Swiss AI talent exodus accelerates"' in call for call in agent.manager.calls)

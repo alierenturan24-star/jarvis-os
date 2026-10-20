@@ -214,6 +214,16 @@ def _wants_short_form_references(topic: str) -> bool:
     return any(cue in lowered for cue in _SHORT_FORM_CUES)
 
 
+def _is_social_video_url(url: str) -> bool:
+    lowered = str(url or "").casefold()
+    return (
+        "youtube.com/shorts/" in lowered
+        or "youtu.be/" in lowered
+        or "tiktok.com/" in lowered
+        or "instagram.com/reel" in lowered
+    )
+
+
 class ResearchCollector:
 
     def __init__(self) -> None:
@@ -346,6 +356,14 @@ class ResearchCollector:
                 reason = quality["source_quality_reason"]
                 if preferences and not preference_match and not quality["rejected"]:
                     reason = "SOURCE_PREFERENCE_NOT_SATISFIED"
+                reference_role = str(search.get("reference_role") or item.get("reference_role") or "factual")
+                # Generic web search can surface the same YouTube/TikTok/Reels
+                # pages even outside the dedicated video query. They are
+                # creative-format references, never factual/current-news
+                # evidence for selecting the story.
+                if not search.get("news") and _is_social_video_url(url):
+                    reference_role = "format_only"
+
                 collected.append({
                     "search_channel": search["search_channel"],
                     "title": str(item.get("title", "")).strip(),
@@ -356,7 +374,7 @@ class ResearchCollector:
                     ).strip(),
                     "publisher": str(item.get("publisher") or item.get("source") or "").strip(),
                     "source_language": str(search.get("source_language") or item.get("source_language") or "").strip(),
-                    "reference_role": str(search.get("reference_role") or item.get("reference_role") or "factual"),
+                    "reference_role": reference_role,
                     "duration": str(item.get("duration") or "").strip(),
                     "statistics": item.get("statistics") if isinstance(item.get("statistics"), dict) else {},
                     "provider": str(item.get("provider") or "").strip(),

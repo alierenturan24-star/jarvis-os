@@ -430,6 +430,7 @@ Kurallar:
                     + "\n\nYANLIŞ PLAN:\n" + plan_text
                 ),
                 task_type="planning", preferred_provider=route_result.provider_used,
+                allowed_providers=allowed_planning_providers,
             )
             if correction.success and not is_llm_failure(correction.output):
                 plan_text = correction.output

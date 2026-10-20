@@ -467,6 +467,42 @@ def _write_sapi_wav(path: Path, narration: str, language: str = "") -> bool:
         return False
 
 
+def _write_sapi_com_wav(path: Path, narration: str) -> bool:
+    """Windows COM SAPI fallback when .NET System.Speech is unavailable.
+
+    This uses the built-in SAPI.SpVoice/SpFileStream COM objects and requires
+    no network service, API key or extra Python package.
+    """
+    powershell = shutil.which("powershell.exe") or shutil.which("powershell")
+    if not powershell or not narration.strip():
+        return False
+    escaped_path = str(path.resolve()).replace("'", "''")
+    escaped_text = " ".join(narration.split())[:4000].replace("'", "''")
+    script = (
+        "$ErrorActionPreference='Stop'; "
+        "$voice=New-Object -ComObject SAPI.SpVoice; "
+        "$stream=New-Object -ComObject SAPI.SpFileStream; "
+        "$format=New-Object -ComObject SAPI.SpAudioFormat; "
+        "$format.Type=22; $stream.Format=$format; "
+        f"$stream.Open('{escaped_path}',3,$false); "
+        "$voice.AudioOutputStream=$stream; "
+        f"[void]$voice.Speak('{escaped_text}'); "
+        "$stream.Close()"
+    )
+    encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+    try:
+        completed = subprocess.run(
+            [powershell, "-NoProfile", "-NonInteractive", "-STA", "-EncodedCommand", encoded],
+            capture_output=True, timeout=90, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    try:
+        return completed.returncode == 0 and path.is_file() and path.stat().st_size > 1024
+    except OSError:
+        return False
+
+
 def _write_flite_wav(path: Path, narration: str) -> bool:
     """Last-resort, fully local narration used only when Edge/SAPI fail."""
     ffmpeg = find_ffmpeg()
@@ -509,6 +545,8 @@ def write_narration_audio(root: Path, narration: str, language: str, voice: str)
     path = root / "narration.wav"
     if _write_sapi_wav(path, narration, language):
         return path, f"Windows System.Speech ({language or 'installed voice'})", True
+    if _write_sapi_com_wav(path, narration):
+        return path, "Windows SAPI COM local fallback", True
     if _write_flite_wav(path, narration):
         return path, "FFmpeg flite local fallback", True
-    return path, "unavailable", False
+    return path, "unavailable (edge-tts -> System.Speech -> SAPI COM -> flite)", False

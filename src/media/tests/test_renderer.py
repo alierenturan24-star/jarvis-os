@@ -38,7 +38,7 @@ def test_motion_spec_requires_authored_pose_sequence():
     assert _motion_spec_for_scene(manifest, "other.png") is None
 
 
-def test_renderer_mixes_original_music_and_embeds_subtitles(tmp_path, monkeypatch):
+def test_renderer_mixes_original_music_and_burns_in_subtitles(tmp_path, monkeypatch):
     ffmpeg = find_ffmpeg()
     if not ffmpeg:
         pytest.skip("ffmpeg unavailable")
@@ -72,7 +72,10 @@ def test_renderer_mixes_original_music_and_embeds_subtitles(tmp_path, monkeypatc
         "placeholder": False, "fallback": False, "goal": "Swiss test",
         "scene_files": scene_names, "audio_file": audio.name, "music_file": music.name,
         "subtitle_file": subtitles.name, "channel_language": "de-CH", "narration_seconds": 2,
-        "scene_plan": [{"duration_seconds": 0.5} for _ in scene_names],
+        "scene_plan": [
+            {"duration_seconds": 0.5, "caption_text": f"Caption {index + 1}", "narration_segment": f"Line {index + 1}"}
+            for index, _name in enumerate(scene_names)
+        ],
         "story_beats": ["HOOK", "SETUP", "CLIMAX", "RESOLUTION"],
     }), encoding="utf-8")
     monkeypatch.setattr("src.media.renderer._find_production_package", lambda topic: manifest)
@@ -86,7 +89,9 @@ def test_renderer_mixes_original_music_and_embeds_subtitles(tmp_path, monkeypatc
     ], capture_output=True, text=True, check=True, timeout=30)
     assert "video" in probe.stdout
     assert "audio" in probe.stdout
-    assert "subtitle" in probe.stdout
+    assert "subtitle" not in probe.stdout
+    quality = json.loads(Path(result.quality_manifest_path).read_text(encoding="utf-8"))
+    assert quality["burned_in_subtitles"] is True
     durations = subprocess.run([
         shutil.which("ffprobe") or "ffprobe", "-v", "error", "-show_entries",
         "stream=codec_type,duration", "-of", "json", result.artifact_path,

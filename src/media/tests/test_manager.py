@@ -566,7 +566,33 @@ def test_historical_passed_artifact_is_revalidated_before_resume(tmp_path, monke
         lambda self, **kwargs: PackageBuildResult(False, error="stop after proving rebuild path"),
     )
 
-    result = manager.plan(topic="Swiss current story", produce_artifact=True)
+    opportunity = {
+        "selected_topic": "Swiss current story",
+        "location_or_market": "İsviçre",
+        "why_current": "iki güncel bağımsız kaynak doğruladı",
+        "supporting_evidence": [
+            {
+                "url": "https://www.srf.ch/news/schweiz/current-story",
+                "title": "Swiss current story",
+                "published_at": "2026-10-21T20:00:00+00:00",
+            },
+            {
+                "url": "https://www.rts.ch/info/suisse/current-story",
+                "title": "Swiss current story confirmed",
+                "published_at": "2026-10-21T20:00:00+00:00",
+            },
+        ],
+        "format_references": [],
+        "freshness_status": "CURRENT",
+        "sufficient": True,
+        "reason": "",
+    }
+    result = manager.plan(
+        topic="Swiss current story",
+        produce_artifact=True,
+        research_opportunity=opportunity,
+        request_text="İsviçre için güncel haber; Türkçe kısa video hazırla",
+    )
 
     assert quality_calls
     assert route_calls

@@ -20,7 +20,7 @@ _WINDOW_FALLBACK_CUES = (
 # same-story corroboration attempts. This prevents one weak candidate from
 # blocking the whole mission while keeping runtime finite.
 # Exported so the department outer timeout is derived from the real call graph.
-MEDIA_RESEARCH_MAX_PASSES = 6
+MEDIA_RESEARCH_MAX_PASSES = 8
 
 
 class ResearchAgent(BaseAgent):
@@ -37,10 +37,15 @@ class ResearchAgent(BaseAgent):
 
     @staticmethod
     def _recent_video_topics(limit: int = 8) -> list[str]:
-        """Return recent produced *and attempted* topics to prevent loops."""
+        """Return only topics that reached a real production record.
+
+        Failed research/render attempts are deliberately NOT treated as
+        published/produced history. Otherwise one bad run permanently poisons
+        the next mission by marking every researched candidate as "already
+        used" even though no video artifact ever existed.
+        """
         try:
             from src.control_center.store import ControlCenterStore
-            from src.knowledge.knowledge_base import KnowledgeBase
 
             state = ControlCenterStore().snapshot()
             memories = [state.get("youtube_learning", {})]
@@ -57,18 +62,6 @@ class ResearchAgent(BaseAgent):
                         topics.append(topic)
                     if len(topics) >= limit:
                         return topics
-            # A failed render never reaches youtube_learning.productions, but
-            # its selected research topic is still durable.  Include those
-            # attempts too so the next one-click run does not select the same
-            # story forever just because Wikimedia/provider delivery failed.
-            for record in KnowledgeBase().recent_research(limit=limit * 2):
-                summary = str(record.get("summary") or "")
-                match = re.search(r"^SEÇİLEN KONU:\s*(.+)$", summary, re.IGNORECASE | re.MULTILINE)
-                topic = match.group(1).strip() if match else ""
-                if topic and topic not in topics:
-                    topics.append(topic)
-                if len(topics) >= limit:
-                    return topics
             return topics
         except (OSError, ValueError, TypeError):
             return []
@@ -234,7 +227,7 @@ class ResearchAgent(BaseAgent):
                         normalized = title.strip()
                         if normalized and normalized not in candidate_titles:
                             candidate_titles.append(normalized)
-                        if len(candidate_titles) >= 4:
+                        if len(candidate_titles) >= 6:
                             break
 
                     verification_window = 30 if allow_window_fallback else 7
@@ -250,6 +243,7 @@ class ResearchAgent(BaseAgent):
                             force_refresh=True,
                             preferred_provider=preferred_provider,
                             exclude_topics=[],
+                            provider_free_summary=True,
                         )
                         verification_record = self.manager.knowledge.find_research(verification_query)
                         combined_sources: list[dict] = []

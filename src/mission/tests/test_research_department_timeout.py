@@ -142,8 +142,8 @@ def test_media_research_budget_covers_all_bounded_research_passes():
         MEDIA_RESEARCH_BROAD_PASSES * broad_pass
         + MEDIA_RESEARCH_CORROBORATION_PASSES * corroboration_pass
     )
-    assert MEDIA_RESEARCH_MAX_PASSES == 8
+    assert MEDIA_RESEARCH_MAX_PASSES == 10
     assert MEDIA_RESEARCH_BROAD_PASSES == 2
-    assert MEDIA_RESEARCH_CORROBORATION_PASSES == 6
+    assert MEDIA_RESEARCH_CORROBORATION_PASSES == 8
     assert RESEARCH_DEPARTMENT_TASK_TIMEOUT_SECONDS > required
     assert RESEARCH_DEPARTMENT_TASK_TIMEOUT_SECONDS < 1200.0

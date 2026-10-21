@@ -187,3 +187,27 @@ def test_media_research_tries_next_headline_when_first_candidate_has_one_source(
     assert len(report["supporting_evidence"]) >= 2
     assert any('"Swiss football result"' in call for call in agent.manager.calls)
     assert any('"Swiss AI talent exodus accelerates"' in call for call in agent.manager.calls)
+
+
+def test_recent_video_topics_ignore_failed_research_only_history(monkeypatch):
+    monkeypatch.setattr(
+        "src.control_center.store.ControlCenterStore.snapshot",
+        lambda self: {
+            "youtube_learning": {
+                "productions": [
+                    {"topic": "Actually produced Swiss video"},
+                ]
+            },
+            "channels": {},
+        },
+    )
+    monkeypatch.setattr(
+        "src.knowledge.knowledge_base.KnowledgeBase.recent_research",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("failed research history must not participate in repeat blocking")
+        ),
+    )
+
+    topics = ResearchAgent._recent_video_topics()
+
+    assert topics == ["Actually produced Swiss video"]

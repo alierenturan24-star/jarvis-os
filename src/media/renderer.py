@@ -74,7 +74,7 @@ def _caption_filter(job_dir: Path, index: int, scene_plan: list[dict]) -> str:
     )
     text_path = _ffmpeg_filter_path(caption_file)
     return (
-        "drawbox=x=55:y=h-500:w=w-110:h=350:color=black@0.58:t=fill,"
+        "drawbox=x=55:y=ih-500:w=iw-110:h=350:color=black@0.58:t=fill,"
         f"drawtext={font_part}textfile='{text_path}':fontcolor=white:fontsize=62:"
         "line_spacing=16:x=(w-text_w)/2:y=h-435:borderw=4:bordercolor=black"
     )

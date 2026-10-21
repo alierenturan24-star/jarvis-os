@@ -14,6 +14,8 @@ $CriticalTests = @(
     'src/research/tests/test_story_corroboration_regression.py',
     'src/research/tests/test_social_reference_discovery.py',
     'src/agents/tests/test_research_agent.py::test_media_research_tries_next_headline_when_first_candidate_has_one_source',
+    'src/agents/tests/test_research_agent.py::test_recent_video_topics_ignore_failed_research_only_history',
+    'src/research/tests/test_manager_timeout.py::test_provider_free_summary_collects_and_persists_without_llm',
     'src/mission/tests/test_department_orchestrator_intent_narrowing.py::test_tiktok_reels_used_as_research_references_do_not_dispatch_social_media',
     'src/mission/tests/test_department_orchestrator_intent_narrowing.py::test_explicit_social_publish_action_still_dispatches_social_media',
     'src/providers/tests/test_provider_manager_routing.py::test_allowed_provider_filter_prevents_paid_fallback',

@@ -16,11 +16,14 @@ _WINDOW_FALLBACK_CUES = (
 )
 
 # A current media-research handoff can perform a bounded candidate search:
-# primary window + optional 30-day/alternate pass + up to four exact
-# same-story corroboration attempts. This prevents one weak candidate from
-# blocking the whole mission while keeping runtime finite.
-# Exported so the department outer timeout is derived from the real call graph.
-MEDIA_RESEARCH_MAX_PASSES = 8
+# two broad passes (primary + optional 30-day fallback) plus up to six exact
+# same-story corroboration passes. Exact corroboration is provider-free and
+# uses only the three search channels produced by ResearchCollector for a
+# concrete headline, so timeout accounting can be weighted honestly.
+MEDIA_RESEARCH_BROAD_PASSES = 2
+MEDIA_RESEARCH_CORROBORATION_PASSES = 6
+MEDIA_RESEARCH_CORROBORATION_SEARCH_STEPS = 3
+MEDIA_RESEARCH_MAX_PASSES = MEDIA_RESEARCH_BROAD_PASSES + MEDIA_RESEARCH_CORROBORATION_PASSES
 
 
 class ResearchAgent(BaseAgent):

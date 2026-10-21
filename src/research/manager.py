@@ -7,6 +7,7 @@ from src.knowledge.knowledge_base import KnowledgeBase
 from src.research.collector import MAX_SEARCH_STEPS, ResearchCollector
 from src.research.report_builder import ReportBuilder
 from src.research.summarizer import Summarizer
+from src.utils.llm_utils import source_fallback
 from src.utils.llm_utils import is_llm_failure
 
 # Mission repair (real Swiss-Insider-Shorts follow-up evidence, item 5): a
@@ -72,6 +73,7 @@ class ResearchManager:
         self, topic: str, force_refresh: bool = False,
         preferred_provider: str | None = None, evidence_only: bool = False,
         exclude_topics: list[str] | None = None,
+        provider_free_summary: bool = False,
     ) -> str:
         topic = topic.strip()
         if not topic:
@@ -123,7 +125,12 @@ class ResearchManager:
         }
         if exclude_topics:
             summarize_kwargs["exclude_topics"] = exclude_topics
-        summary = self.summarizer.summarize(**summarize_kwargs)
+        if provider_free_summary:
+            summary = source_fallback(
+                topic, results, limit=10, exclude_topics=exclude_topics,
+            )
+        else:
+            summary = self.summarizer.summarize(**summarize_kwargs)
         if is_llm_failure(summary):
             return "Araştırma kaynakları toplandı ancak güvenilir bir sentez üretilemedi; bilgi kalıcı hafızaya yazılmadı."
         report_path = self.report_builder.save(topic=topic, summary=summary, results=results)

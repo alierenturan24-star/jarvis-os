@@ -65,6 +65,20 @@ def _base_evidence(**overrides) -> dict:
         "story_concept": "A seed grows through patience and kindness.",
         "research_grounded": True, "research_status": "grounded",
         "duration_seconds": 4,
+        "narration_provider": "edge-tts tr-TR-EmelNeural",
+        "subtitle_file": "subtitles.srt",
+        "burned_in_subtitles": True,
+        "music": {"provider": "ffmpeg_local_layered_pulse_v2", "license": "original"},
+        "scene_provenance": [
+            {
+                "scene_id": f"scene-{i:02d}",
+                "provider": "wikimedia_commons",
+                "generation_type": "licensed_stock_video_retrieval" if i <= 2 else "licensed_stock_retrieval",
+                "output_path": f"scene-{i:02d}.mp4" if i <= 2 else f"scene-{i:02d}.png",
+                "success": True,
+            }
+            for i in range(1, 7)
+        ],
     }
     base.update(overrides)
     return base
@@ -291,3 +305,63 @@ def test_body_motion_check_marks_per_scene_substage_before_each_probe(monkeypatc
         pass
 
     assert sink.get("last_stage") == "quality_body_motion_scene_1_of_2"
+
+
+def test_multiple_local_news_cards_fail_visual_source_quality(tmp_path):
+    video = tmp_path / "cheap-cards.mp4"
+    _render_multi_scene(video, width=108, height=192, seg_seconds=1)
+    provenance = [
+        {
+            "scene_id": f"scene-{i:02d}",
+            "provider": "local_ffmpeg_motion_graphics" if i <= 3 else "wikimedia_commons",
+            "generation_type": "local_original_motion_graphic" if i <= 3 else "licensed_stock_retrieval",
+            "output_path": f"scene-{i:02d}.png",
+            "success": True,
+        }
+        for i in range(1, 7)
+    ]
+    _write_sidecar(video, _base_evidence(scene_provenance=provenance))
+
+    check = validate_media_goal_artifact(video, "Adventure story A")
+
+    assert check.gates["visual_source_quality"]["passed"] is False
+    assert check.gates["visual_source_quality"]["local_card_count"] == 3
+    assert check.passed is False
+
+
+def test_robotic_windows_voice_fails_narration_quality(tmp_path):
+    video = tmp_path / "robot-voice.mp4"
+    _render_multi_scene(video, width=108, height=192, seg_seconds=1)
+    _write_sidecar(video, _base_evidence(
+        narration_provider="Windows System.Speech (tr-TR)",
+    ))
+
+    check = validate_media_goal_artifact(video, "Adventure story A")
+
+    assert check.gates["narration_quality"]["passed"] is False
+    assert "robotic" in " ".join(check.gates["narration_quality"]["reasons"])
+    assert check.passed is False
+
+
+def test_soft_subtitles_without_burn_in_fail_publication_quality(tmp_path):
+    video = tmp_path / "soft-subs.mp4"
+    _render_multi_scene(video, width=108, height=192, seg_seconds=1)
+    _write_sidecar(video, _base_evidence(burned_in_subtitles=False))
+
+    check = validate_media_goal_artifact(video, "Adventure story A")
+
+    assert check.gates["subtitle_rendering"]["passed"] is False
+    assert check.passed is False
+
+
+def test_legacy_two_tone_music_fails_publication_quality(tmp_path):
+    video = tmp_path / "toy-music.mp4"
+    _render_multi_scene(video, width=108, height=192, seg_seconds=1)
+    _write_sidecar(video, _base_evidence(
+        music={"provider": "ffmpeg_local_procedural", "license": "original"},
+    ))
+
+    check = validate_media_goal_artifact(video, "Adventure story A")
+
+    assert check.gates["music_quality"]["passed"] is False
+    assert check.passed is False

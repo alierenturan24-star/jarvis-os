@@ -106,6 +106,7 @@ def test_write_narration_audio_uses_windows_sapi_com_before_flite(tmp_path, monk
     import src.media.renderer as renderer
 
     monkeypatch.setattr(renderer, "find_edge_tts", lambda: None)
+    monkeypatch.setattr(renderer.sys, "executable", str(tmp_path / "missing-python"))
     monkeypatch.setattr(renderer, "_write_sapi_wav", lambda *a, **k: False)
 
     def fake_com(path, narration):

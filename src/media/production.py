@@ -514,8 +514,8 @@ class GeneralProductionBuilder:
                 "source_generation_fingerprint": source_hash,
                 "tested_variation": f"goal-driven script ({len(scenes)} scenes) over authored '{prefix}' visual asset",
                 "music_file": music.name if music else "",
-                "music": ({"provider": "ffmpeg_local_procedural", "license": "original",
-                           "copyright_safe": True} if music else None),
+                "music": ({"provider": "ffmpeg_local_layered_pulse_v2", "license": "original",
+                           "copyright_safe": True, "style": "minimal_news_pulse"} if music else None),
                 "subtitle_file": subtitles.name,
                 "publish_used": False,
             }
@@ -738,8 +738,8 @@ class GeneralProductionBuilder:
             "tested_variation": f"goal-driven script ({len(scene_files)} scenes) via dynamic provider "
                                  f"({'+'.join(used_providers) or 'unknown'})",
             "music_file": music.name if music else "",
-            "music": ({"provider": "ffmpeg_local_procedural", "license": "original",
-                       "copyright_safe": True} if music else None),
+            "music": ({"provider": "ffmpeg_local_layered_pulse_v2", "license": "original",
+                       "copyright_safe": True, "style": "minimal_news_pulse"} if music else None),
             "subtitle_file": subtitles.name,
             "publish_used": False,
             "scene_provenance": provenance,
@@ -1148,18 +1148,27 @@ class GeneralProductionBuilder:
 
     @staticmethod
     def _create_original_music_bed(root: Path, duration_seconds: float) -> Path | None:
-        """Generate a quiet original pulse bed locally (no copyrighted song)."""
+        """Generate a restrained layered news/Shorts pulse locally.
+
+        This is intentionally original and copyright-safe, but no longer the
+        previous two-tone test signal. Low pad layers plus a filtered-noise
+        rhythmic texture create an actual bed under narration.
+        """
         target = root / "music-original.wav"
         duration = max(5.0, float(duration_seconds or 0))
         command = [
             find_ffmpeg(), "-y", "-hide_banner", "-loglevel", "error",
             "-f", "lavfi", "-i", f"sine=frequency=110:sample_rate=44100:duration={duration:.3f}",
+            "-f", "lavfi", "-i", f"sine=frequency=164.81:sample_rate=44100:duration={duration:.3f}",
             "-f", "lavfi", "-i", f"sine=frequency=220:sample_rate=44100:duration={duration:.3f}",
+            "-f", "lavfi", "-i", f"anoisesrc=color=pink:sample_rate=44100:duration={duration:.3f}",
             "-filter_complex",
-            f"[0:a]volume=0.035,tremolo=f=2.2:d=0.72[a0];"
-            f"[1:a]volume=0.014,tremolo=f=4.4:d=0.55[a1];"
-            f"[a0][a1]amix=inputs=2:normalize=0,afade=t=in:st=0:d=0.8,"
-            f"afade=t=out:st={max(0.0, duration - 1.2):.3f}:d=1.2[out]",
+            f"[0:a]volume=0.025,tremolo=f=2.0:d=0.62,lowpass=f=420[a0];"
+            f"[1:a]volume=0.012,tremolo=f=1.0:d=0.48,lowpass=f=700[a1];"
+            f"[2:a]volume=0.008,tremolo=f=4.0:d=0.70,lowpass=f=1000[a2];"
+            f"[3:a]highpass=f=4800,lowpass=f=10500,volume=0.0045,tremolo=f=8.0:d=0.86[h];"
+            f"[a0][a1][a2][h]amix=inputs=4:normalize=0,"
+            f"afade=t=in:st=0:d=0.7,afade=t=out:st={max(0.0, duration - 1.0):.3f}:d=1.0[out]",
             "-map", "[out]", "-c:a", "pcm_s16le", str(target),
         ]
         completed = subprocess.run(command, capture_output=True, text=True, timeout=45, check=False)

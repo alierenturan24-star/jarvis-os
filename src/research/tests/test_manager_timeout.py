@@ -79,3 +79,51 @@ def test_each_search_call_is_clamped_to_provider_timeout():
     assert observed
     assert max(observed) <= Settings.RESEARCH_PROVIDER_TIMEOUT_SECONDS + 0.001
     assert all(value > 0 for value in observed)
+
+
+def test_provider_free_summary_collects_and_persists_without_llm(monkeypatch, tmp_path):
+    now = "2026-10-21T20:00:00+00:00"
+
+    def fake_collect(self, topic, max_results_per_source=3, deadline=None, source_preferences=None):
+        return [
+            {
+                "url": "https://www.srf.ch/news/schweiz/story-a",
+                "title": "Swiss story",
+                "summary": "Swiss story happened today.",
+                "published_at": now,
+                "reference_role": "factual",
+                "rejected": False,
+                "source_preference_match": True,
+            },
+            {
+                "url": "https://www.rts.ch/info/suisse/story-a",
+                "title": "Swiss story confirmed",
+                "summary": "The same Swiss story was independently reported.",
+                "published_at": now,
+                "reference_role": "factual",
+                "rejected": False,
+                "source_preference_match": True,
+            },
+        ]
+
+    monkeypatch.setattr(ResearchCollector, "collect", fake_collect)
+    monkeypatch.setattr(
+        Summarizer,
+        "summarize",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("provider-free corroboration must not call an LLM")),
+    )
+    monkeypatch.chdir(tmp_path)
+
+    manager = ResearchManager()
+    result = manager.research(
+        '"Swiss story" güncel son 30 gün aynı olayı doğrulayan bağımsız haber kaynakları',
+        force_refresh=True,
+        provider_free_summary=True,
+    )
+
+    assert "SEÇİLEN KONU:" in result
+    record = manager.knowledge.find_research(
+        '"Swiss story" güncel son 30 gün aynı olayı doğrulayan bağımsız haber kaynakları'
+    )
+    assert record is not None
+    assert len(record.get("sources") or []) == 2

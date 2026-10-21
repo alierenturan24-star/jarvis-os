@@ -325,7 +325,8 @@ SENARYO
 ({duration_seconds} saniyelik doğal konuşma dilinde anlatım metni.)
 
 SAHNELER
-(Metni 4-6 sahneye böl. Her satır: "Sahne N (~X sn): Anlatım: ... | Görsel: ... | Ekran yazısı: ...")
+(Metni 4-6 sahneye böl. Her satır: "Sahne N (~X sn): Anlatım: ... | Görsel: ... | Ekran yazısı: ..."
+Anlatım ve ekran yazısı çıktı dilinde kalsın; Görsel alanını Commons/CC aramasında işe yarayacak kısa, somut İNGİLİZCE arama terimleriyle yaz. Örn: "gray wolf walking in Swiss Alps snow, sheep herd alpine pasture". Uzun şiirsel cümle yazma.)
 
 SESLENDİRME PLANI
 (Yukarıdaki ortam durumuna göre GERÇEKÇİ bir öneri yap -- var olmayan bir aracı varmış gibi gösterme.)

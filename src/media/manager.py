@@ -170,10 +170,22 @@ class MediaManager:
                           and row.get("quality", {}).get("production_readiness") is True
                           and Path(row.get("artifact", {}).get("final_video_path", "")).is_file()), None)
             if prior:
-                self.last_artifact_path = prior["artifact"]["final_video_path"]
-                self.last_production_record = prior
-                return ("Önceden tamamlanmış aynı production retry sırasında yeniden render edilmedi; "
-                        f"validated artifact resume edildi.\nGERÇEK VIDEO ARTIFACT\n{self.last_artifact_path}")
+                prior_path = Path(prior["artifact"]["final_video_path"])
+                # Never trust a historical "passed" bit after quality policy
+                # changes. Re-run the CURRENT artifact gate so an old cheap
+                # render (soft subtitles, robotic TTS, text cards, etc.) is
+                # automatically retired instead of being resumed forever.
+                current_check = validate_media_goal_artifact(prior_path, topic)
+                if current_check.passed:
+                    self.last_artifact_path = str(prior_path)
+                    self.last_production_record = prior
+                    return ("Önceden tamamlanmış aynı production retry sırasında yeniden render edilmedi; "
+                            f"validated artifact resume edildi.\nGERÇEK VIDEO ARTIFACT\n{self.last_artifact_path}")
+                if stage_sink is not None:
+                    stage_sink["stale_artifact_rejected"] = {
+                        "artifact_path": str(prior_path),
+                        "critical_failures": list(current_check.critical_failures),
+                    }
 
         print(f"[Media] '{topic}' için {duration_seconds} sn'lik içerik planı hazırlanıyor...")
 

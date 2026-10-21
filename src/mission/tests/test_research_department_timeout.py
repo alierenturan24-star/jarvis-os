@@ -124,12 +124,26 @@ class TestD_UnrelatedDepartmentsRetainExistingTimeoutBehavior:
 
 
 def test_media_research_budget_covers_all_bounded_research_passes():
-    from src.agents.research_agent import MEDIA_RESEARCH_MAX_PASSES
+    from src.agents.research_agent import (
+        MEDIA_RESEARCH_MAX_PASSES,
+        MEDIA_RESEARCH_BROAD_PASSES,
+        MEDIA_RESEARCH_CORROBORATION_PASSES,
+        MEDIA_RESEARCH_CORROBORATION_SEARCH_STEPS,
+    )
 
-    single_pass = (
+    broad_pass = (
         Settings.RESEARCH_PROVIDER_TIMEOUT_SECONDS * MAX_SEARCH_STEPS
         + DEPARTMENT_TASK_TIMEOUT_SECONDS
     )
-    assert MEDIA_RESEARCH_MAX_PASSES == 6
-    assert RESEARCH_DEPARTMENT_TASK_TIMEOUT_SECONDS >= MEDIA_RESEARCH_MAX_PASSES * single_pass
+    corroboration_pass = (
+        Settings.RESEARCH_PROVIDER_TIMEOUT_SECONDS * MEDIA_RESEARCH_CORROBORATION_SEARCH_STEPS
+    )
+    required = (
+        MEDIA_RESEARCH_BROAD_PASSES * broad_pass
+        + MEDIA_RESEARCH_CORROBORATION_PASSES * corroboration_pass
+    )
+    assert MEDIA_RESEARCH_MAX_PASSES == 8
+    assert MEDIA_RESEARCH_BROAD_PASSES == 2
+    assert MEDIA_RESEARCH_CORROBORATION_PASSES == 6
+    assert RESEARCH_DEPARTMENT_TASK_TIMEOUT_SECONDS > required
     assert RESEARCH_DEPARTMENT_TASK_TIMEOUT_SECONDS < 1200.0

@@ -577,17 +577,29 @@ def _write_flite_wav(path: Path, narration: str) -> bool:
 def write_narration_audio(root: Path, narration: str, language: str, voice: str) -> tuple[Path, str, bool]:
     """Create real narration with bounded free/local fallbacks."""
     edge_tts = find_edge_tts()
+    path = root / "narration.mp3"
+    edge_commands = []
     if edge_tts:
-        path = root / "narration.mp3"
+        edge_commands.append([edge_tts, "--voice", voice, "--text", narration, "--write-media", str(path)])
+    # The package is installed in the project venv even when the console
+    # entry point itself is missing/broken. A direct module invocation is
+    # therefore a second, independent neural-TTS route before falling back
+    # to robotic Windows voices.
+    edge_commands.append([
+        sys.executable, "-m", "edge_tts", "--voice", voice,
+        "--text", narration, "--write-media", str(path),
+    ])
+    for command in edge_commands:
         try:
+            if path.exists():
+                path.unlink()
             completed = subprocess.run(
-                [edge_tts, "--voice", voice, "--text", narration, "--write-media", str(path)],
-                capture_output=True, text=True, timeout=120, check=False,
+                command, capture_output=True, text=True, timeout=120, check=False,
             )
             if completed.returncode == 0 and path.is_file() and path.stat().st_size > 1024:
                 return path, f"edge-tts {voice}", True
         except (OSError, subprocess.TimeoutExpired):
-            pass
+            continue
 
     path = root / "narration.wav"
     if _write_sapi_wav(path, narration, language):

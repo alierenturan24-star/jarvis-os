@@ -433,6 +433,92 @@ def check_media_plan_quality(plan_text: str) -> MediaQualityCheck:
     )
 
 
+def _check_visual_source_quality(evidence: dict) -> dict:
+    provenance = [row for row in (evidence.get("scene_provenance") or []) if isinstance(row, dict)]
+    scene_count = int(evidence.get("scene_count", 0) or len(provenance) or 0)
+    local_cards = 0
+    real_motion = 0
+    external_visuals = 0
+    providers: set[str] = set()
+
+    for row in provenance:
+        provider = str(row.get("provider") or "").strip()
+        generation_type = str(row.get("generation_type") or "").casefold()
+        output_path = str(row.get("output_path") or "")
+        success = row.get("success") is True
+        if provider:
+            providers.add(provider)
+        if not success:
+            continue
+        if provider == "local_ffmpeg_motion_graphics" or generation_type == "local_original_motion_graphic":
+            local_cards += 1
+        else:
+            external_visuals += 1
+        if output_path.casefold().endswith(".mp4") or "video" in generation_type:
+            real_motion += 1
+
+    reasons: list[str] = []
+    if scene_count >= 4:
+        if local_cards > 1:
+            reasons.append(
+                f"too many local text-card fallback scenes ({local_cards}); Shorts may use at most 1"
+            )
+        minimum_external = max(3, scene_count - 1)
+        if external_visuals < minimum_external:
+            reasons.append(
+                f"insufficient real licensed/generated visual sources ({external_visuals}/{scene_count}; "
+                f"{minimum_external} required)"
+            )
+        if real_motion < 2:
+            reasons.append(
+                f"insufficient genuinely moving source clips ({real_motion}); at least 2 required"
+            )
+    elif scene_count:
+        reasons.append("insufficient scene count for visual-source quality")
+
+    return {
+        "passed": not reasons,
+        "scene_count": scene_count,
+        "local_card_count": local_cards,
+        "external_visual_count": external_visuals,
+        "real_motion_scene_count": real_motion,
+        "providers": sorted(providers),
+        "reasons": reasons,
+    }
+
+
+def _check_narration_quality(evidence: dict) -> dict:
+    provider = str(evidence.get("narration_provider") or "").strip()
+    lowered = provider.casefold()
+    low_quality_markers = ("system.speech", "sapi", "flite", "unavailable")
+    reasons: list[str] = []
+    if not provider:
+        reasons.append("narration provider is missing")
+    elif any(marker in lowered for marker in low_quality_markers):
+        reasons.append(
+            f"robotic fallback narration is not publication-grade: {provider}"
+        )
+    return {"passed": not reasons, "provider": provider, "reasons": reasons}
+
+
+def _check_subtitle_rendering(evidence: dict) -> dict:
+    subtitle_file = str(evidence.get("subtitle_file") or "").strip()
+    burned_in = evidence.get("burned_in_subtitles") is True
+    reasons: list[str] = []
+    if subtitle_file and not burned_in:
+        reasons.append("Shorts subtitles exist but are not burned into the visible video frames")
+    return {"passed": not reasons, "burned_in": burned_in, "reasons": reasons}
+
+
+def _check_music_quality(evidence: dict) -> dict:
+    music = evidence.get("music") if isinstance(evidence.get("music"), dict) else {}
+    provider = str(music.get("provider") or "").strip()
+    reasons: list[str] = []
+    if provider == "ffmpeg_local_procedural":
+        reasons.append("legacy two-tone procedural audio bed is not publication-grade music")
+    return {"passed": not reasons, "provider": provider, "reasons": reasons}
+
+
 def validate_media_goal_artifact(
     path: str | Path, goal: str = "", *, stage_sink: dict | None = None,
 ) -> MediaArtifactQuality:
@@ -510,6 +596,22 @@ def validate_media_goal_artifact(
     research = _check_research_grounding(evidence)
     gates["research_grounding"] = research
     issues.extend(r for r in research["reasons"] if r not in issues)
+
+    visual_sources = _check_visual_source_quality(evidence)
+    gates["visual_source_quality"] = visual_sources
+    issues.extend(r for r in visual_sources["reasons"] if r not in issues)
+
+    narration_quality = _check_narration_quality(evidence)
+    gates["narration_quality"] = narration_quality
+    issues.extend(r for r in narration_quality["reasons"] if r not in issues)
+
+    subtitle_rendering = _check_subtitle_rendering(evidence)
+    gates["subtitle_rendering"] = subtitle_rendering
+    issues.extend(r for r in subtitle_rendering["reasons"] if r not in issues)
+
+    music_quality = _check_music_quality(evidence)
+    gates["music_quality"] = music_quality
+    issues.extend(r for r in music_quality["reasons"] if r not in issues)
 
     detected_cuts = 0
     max_audio_db: float | None = None

@@ -524,3 +524,50 @@ def test_no_paid_service_request_restricts_media_planning_provider_chain(tmp_pat
     assert "aiml" not in allowed
     assert "openai" not in allowed
     assert "anthropic" not in allowed
+
+
+def test_historical_passed_artifact_is_revalidated_before_resume(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    artifact = tmp_path / "old-bad.mp4"
+    artifact.write_bytes(b"old artifact")
+
+    manager = MediaManager()
+    monkeypatch.setattr(
+        manager.learning.store,
+        "snapshot",
+        lambda: {
+            "youtube_learning": {
+                "productions": [{
+                    "original_goal": "Swiss current story",
+                    "artifact": {"final_video_path": str(artifact)},
+                    "quality": {"production_readiness": True},
+                }]
+            }
+        },
+    )
+
+    quality_calls = []
+    monkeypatch.setattr(
+        "src.media.manager.validate_media_goal_artifact",
+        lambda path, goal, **kw: quality_calls.append((str(path), goal))
+        or _quality(False, ("visual_source_quality",)),
+    )
+
+    route_calls = []
+    monkeypatch.setattr(
+        ProviderManager,
+        "route_and_generate",
+        lambda self, prompt, task_type, **kw: route_calls.append(prompt)
+        or _route_result(_complete_plan_text()),
+    )
+    monkeypatch.setattr(
+        GeneralProductionBuilder,
+        "build",
+        lambda self, **kwargs: PackageBuildResult(False, error="stop after proving rebuild path"),
+    )
+
+    result = manager.plan(topic="Swiss current story", produce_artifact=True)
+
+    assert quality_calls
+    assert route_calls
+    assert "validated artifact resume edildi" not in result

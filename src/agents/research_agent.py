@@ -21,7 +21,7 @@ _WINDOW_FALLBACK_CUES = (
 # uses only the three search channels produced by ResearchCollector for a
 # concrete headline, so timeout accounting can be weighted honestly.
 MEDIA_RESEARCH_BROAD_PASSES = 2
-MEDIA_RESEARCH_CORROBORATION_PASSES = 6
+MEDIA_RESEARCH_CORROBORATION_PASSES = 8
 MEDIA_RESEARCH_CORROBORATION_SEARCH_STEPS = 3
 MEDIA_RESEARCH_MAX_PASSES = MEDIA_RESEARCH_BROAD_PASSES + MEDIA_RESEARCH_CORROBORATION_PASSES
 
@@ -230,7 +230,7 @@ class ResearchAgent(BaseAgent):
                         normalized = title.strip()
                         if normalized and normalized not in candidate_titles:
                             candidate_titles.append(normalized)
-                        if len(candidate_titles) >= 6:
+                        if len(candidate_titles) >= 8:
                             break
 
                     verification_window = 30 if allow_window_fallback else 7

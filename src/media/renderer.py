@@ -43,6 +43,43 @@ def _motion_spec_for_scene(manifest: dict, scene_name: str) -> dict | None:
     return None
 
 
+def _ffmpeg_filter_path(path: Path) -> str:
+    return path.resolve().as_posix().replace(":", r"\:").replace("'", r"\'")
+
+
+def _caption_filter(job_dir: Path, index: int, scene_plan: list[dict]) -> str:
+    if index >= len(scene_plan):
+        return ""
+    item = scene_plan[index] if isinstance(scene_plan[index], dict) else {}
+    raw = str(item.get("caption_text") or item.get("narration_segment") or "").strip()
+    if not raw:
+        return ""
+    words = raw.split()
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        proposed = f"{current} {word}".strip()
+        if current and len(proposed) > 30:
+            lines.append(current)
+            current = word
+        else:
+            current = proposed
+    if current:
+        lines.append(current)
+    caption_file = job_dir / f"caption-{index + 1:02d}.txt"
+    caption_file.write_text("\n".join(lines[:3]), encoding="utf-8")
+    font = Path("C:/Windows/Fonts/arialbd.ttf")
+    font_part = (
+        f"fontfile='{_ffmpeg_filter_path(font)}':" if font.is_file() else ""
+    )
+    text_path = _ffmpeg_filter_path(caption_file)
+    return (
+        "drawbox=x=55:y=h-500:w=w-110:h=350:color=black@0.58:t=fill,"
+        f"drawtext={font_part}textfile='{text_path}':fontcolor=white:fontsize=62:"
+        "line_spacing=16:x=(w-text_w)/2:y=h-435:borderw=4:bordercolor=black"
+    )
+
+
 def find_ffmpeg() -> str | None:
     """Return an existing encoder without downloading or installing anything."""
     system = shutil.which("ffmpeg")
@@ -205,6 +242,7 @@ class LocalVideoRenderer:
                 stage_sink["last_stage"] = f"render_ffmpeg_scene_{index + 1}_of_{len(scenes)}"
             segment_seconds = segment_durations[index]
             segment = job_dir / f"production-scene-{index + 1:02d}.mp4"
+            caption_filter = _caption_filter(job_dir, index, scene_plan)
             motion = _motion_spec_for_scene(manifest, scene.name)
             if motion:
                 poses = [root / name for name in motion["pose_files"]]
@@ -221,8 +259,12 @@ class LocalVideoRenderer:
                 sequence.write_text("".join(lines), encoding="utf-8")
                 command = [
                     ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(sequence),
-                    "-vf", f"scale={VERTICAL_WIDTH}:{VERTICAL_HEIGHT}:force_original_aspect_ratio=increase,"
-                           f"crop={VERTICAL_WIDTH}:{VERTICAL_HEIGHT},fps=25,format=yuv420p",
+                    "-vf", (
+                        f"scale={VERTICAL_WIDTH}:{VERTICAL_HEIGHT}:force_original_aspect_ratio=increase,"
+                        f"crop={VERTICAL_WIDTH}:{VERTICAL_HEIGHT},fps=25"
+                        + (f",{caption_filter}" if caption_filter else "")
+                        + ",format=yuv420p"
+                    ),
                     "-t", f"{segment_seconds:.3f}", "-an", "-c:v", "libx264", "-preset", "veryfast", str(segment),
                 ]
                 rendered_motion.append({
@@ -244,8 +286,12 @@ class LocalVideoRenderer:
                 # applies the single narration track over every segment.
                 command = [
                     ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-i", str(scene),
-                    "-vf", f"scale={VERTICAL_WIDTH}:{VERTICAL_HEIGHT}:force_original_aspect_ratio=increase,"
-                           f"crop={VERTICAL_WIDTH}:{VERTICAL_HEIGHT},fps=25,format=yuv420p",
+                    "-vf", (
+                        f"scale={VERTICAL_WIDTH}:{VERTICAL_HEIGHT}:force_original_aspect_ratio=increase,"
+                        f"crop={VERTICAL_WIDTH}:{VERTICAL_HEIGHT},fps=25"
+                        + (f",{caption_filter}" if caption_filter else "")
+                        + ",format=yuv420p"
+                    ),
                     "-t", f"{segment_seconds:.3f}", "-an", "-c:v", "libx264", "-preset", "veryfast", str(segment),
                 ]
             else:
@@ -254,8 +300,12 @@ class LocalVideoRenderer:
                 pre_w, pre_h = VERTICAL_WIDTH + 120, VERTICAL_HEIGHT + 68
                 command = [
                     ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-loop", "1", "-i", str(scene),
-                    "-vf", f"scale={pre_w}:{pre_h}:force_original_aspect_ratio=increase,crop={pre_w}:{pre_h},"
-                           f"zoompan=z='{zoom}':d={frames}:s={VERTICAL_WIDTH}x{VERTICAL_HEIGHT}:fps=25,format=yuv420p",
+                    "-vf", (
+                        f"scale={pre_w}:{pre_h}:force_original_aspect_ratio=increase,crop={pre_w}:{pre_h},"
+                        f"zoompan=z='{zoom}':d={frames}:s={VERTICAL_WIDTH}x{VERTICAL_HEIGHT}:fps=25"
+                        + (f",{caption_filter}" if caption_filter else "")
+                        + ",format=yuv420p"
+                    ),
                     "-t", f"{segment_seconds:.3f}", "-an", "-c:v", "libx264", "-preset", "veryfast", str(segment),
                 ]
             completed = subprocess.run(command, capture_output=True, text=True, timeout=120, check=False)
@@ -275,10 +325,9 @@ class LocalVideoRenderer:
         if music.is_file() and music.stat().st_size > 1024:
             music_index = 2
             command.extend(("-i", str(music.resolve())))
-        subtitle_index = None
-        if subtitles.is_file() and subtitles.stat().st_size > 10:
-            subtitle_index = 3 if music_index is not None else 2
-            command.extend(("-i", str(subtitles.resolve())))
+        burned_in_subtitles = bool(
+            subtitles.is_file() and subtitles.stat().st_size > 10 and scene_plan
+        )
 
         command.extend(("-map", "0:v:0"))
         if music_index is not None:
@@ -300,9 +349,6 @@ class LocalVideoRenderer:
             ))
         else:
             command.extend(("-map", "1:a:0", "-af", "alimiter=limit=0.95"))
-        if subtitle_index is not None:
-            command.extend(("-map", f"{subtitle_index}:s:0", "-c:s", "mov_text",
-                            "-metadata:s:s:0", f"language={str(manifest.get('channel_language', 'de'))[:2]}"))
         command.extend((
             "-t", str(max(total_duration, 1)), "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
             "-movflags", "+faststart", output_path.name,
@@ -328,6 +374,7 @@ class LocalVideoRenderer:
             "script_coverage": len(manifest.get("story_beats", [])) == len(scenes),
             "production_ready": True,
             "rendered_character_motion": rendered_motion,
+            "burned_in_subtitles": burned_in_subtitles,
             # Sprint: real-production quality-gate audit -- lets
             # validate_media_goal_artifact() locate the original narration
             # source file (audio_file is just a filename) to cross-check its

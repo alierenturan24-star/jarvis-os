@@ -16,6 +16,7 @@ $LogRoot = Join-Path $ProjectRoot 'workspace\control_center\logs'
 $StdoutPath = Join-Path $LogRoot 'launcher.stdout.log'
 $StderrPath = Join-Path $LogRoot 'launcher.stderr.log'
 $TokenPath = Join-Path $ProjectRoot 'workspace\control_center\session.token'
+$InstanceLockPath = Join-Path $ProjectRoot ("workspace\control_center\127.0.0.1_{0}.pid" -f $Port)
 
 function Resolve-JarvisPython {
     $launchers = @()
@@ -61,6 +62,16 @@ function Test-ControlCenterHealth([string]$Token, [string]$ExpectedBuild) {
     } catch { return $false }
 }
 
+function Get-ControlCenterLiveness([string]$Token) {
+    if (-not $Token -or $Token.Length -lt 32) { return $null }
+    try {
+        $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
+        $cookie = New-Object System.Net.Cookie('jarvis_session', $Token, '/', '127.0.0.1')
+        $session.Cookies.Add($cookie)
+        return Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/liveness" -WebSession $session -Method Get -TimeoutSec 3 -ErrorAction Stop
+    } catch { return $null }
+}
+
 function Open-JarvisPanel([string]$Url) {
     $browserCandidates = @(
         (Join-Path $env:LOCALAPPDATA 'Google\Chrome\Application\chrome.exe'),
@@ -86,19 +97,45 @@ function Open-JarvisPanel([string]$Url) {
 
 
 function Clear-StaleJarvisListener {
+    $candidateIds = New-Object System.Collections.Generic.HashSet[int]
+
     $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
     foreach ($listener in $listeners) {
-        $ownerId = [int]$listener.OwningProcess
+        [void]$candidateIds.Add([int]$listener.OwningProcess)
+    }
+
+    if (Test-Path -LiteralPath $InstanceLockPath -PathType Leaf) {
+        try {
+            $lockOwner = Get-Content -LiteralPath $InstanceLockPath -Raw | ConvertFrom-Json
+            if ($lockOwner.pid) { [void]$candidateIds.Add([int]$lockOwner.pid) }
+        } catch {}
+    }
+
+    foreach ($ownerId in @($candidateIds)) {
         if ($ownerId -le 0 -or $ownerId -eq $PID) { continue }
         $process = Get-CimInstance Win32_Process -Filter "ProcessId = $ownerId" -ErrorAction SilentlyContinue
         $commandLine = if ($process) { [string]$process.CommandLine } else { '' }
-        if ($commandLine -match '(?i)control_center\.py') {
-            Write-Host "      Eski JARVIS islemi kapatiliyor (PID $ownerId)..." -ForegroundColor Yellow
+        if ($commandLine -match '(?i)control_center\.py' -and
+            $commandLine -match ('(?i)--port\s+["'']?{0}\b' -f $Port)) {
+            Write-Host "      Eski/takilmis JARVIS islemi kapatiliyor (PID $ownerId)..." -ForegroundColor Yellow
             Stop-Process -Id $ownerId -Force -ErrorAction SilentlyContinue
         }
     }
 
-    Start-Sleep -Milliseconds 500
+    Start-Sleep -Milliseconds 700
+
+    if (Test-Path -LiteralPath $InstanceLockPath -PathType Leaf) {
+        try {
+            $lockOwner = Get-Content -LiteralPath $InstanceLockPath -Raw | ConvertFrom-Json
+            $lockPid = [int]$lockOwner.pid
+            if ($lockPid -le 0 -or -not (Get-Process -Id $lockPid -ErrorAction SilentlyContinue)) {
+                Remove-Item -LiteralPath $InstanceLockPath -Force -ErrorAction SilentlyContinue
+            }
+        } catch {
+            Remove-Item -LiteralPath $InstanceLockPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     $remaining = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
     if ($remaining.Count -gt 0) {
         $owners = ($remaining | Select-Object -ExpandProperty OwningProcess -Unique) -join ', '
@@ -174,23 +211,71 @@ if (-not (Test-ControlCenterHealth $token $ExpectedBuild)) {
       -RedirectStandardError $StderrPath -WindowStyle Hidden -PassThru
 
     $healthy = $false
-    $startupSeconds = 75
+    $backendBound = $false
+    $startupError = ''
+    $startupStage = ''
+    $startupSeconds = 90
     for ($attempt = 0; $attempt -lt $startupSeconds; $attempt++) {
         Start-Sleep -Seconds 1
         try { $controlProcess.Refresh() } catch {}
         if ($controlProcess.HasExited) { break }
         if (Test-Path -LiteralPath $TokenPath -PathType Leaf) {
             $token = (Get-Content -LiteralPath $TokenPath -Raw).Trim()
-            if (Test-ControlCenterHealth $token $ExpectedBuild) { $healthy = $true; break }
+            $live = Get-ControlCenterLiveness $token
+            if ($live) {
+                $runningBuild = [string]$live.process.build_identity
+                if ($live.backend_alive -eq $true -and $runningBuild -eq $ExpectedBuild) {
+                    $backendBound = $true
+                    $startupStage = [string]$live.startup_stage
+                    $startupError = [string]$live.startup_error
+                    if ($startupError) { break }
+                    if ($live.startup_ready -eq $true -or $live.runtime_state -ne 'BOOTING') {
+                        $healthy = $true
+                        break
+                    }
+                    if (($attempt + 1) % 15 -eq 0) {
+                        $stageText = if ($startupStage) { $startupStage } else { 'BOOTING' }
+                        Write-Host ("      Control Center ayakta; servis hazirlaniyor: {0}" -f $stageText) -ForegroundColor DarkYellow
+                    }
+                }
+            }
         }
     }
+
+    if (-not $healthy -and $backendBound -and -not $startupError -and -not $controlProcess.HasExited) {
+        $stageText = if ($startupStage) { $startupStage } else { 'BOOTING' }
+        Write-Host ("      Control Center ayakta; agir servis hazirligi arka planda devam ediyor ({0})." -f $stageText) -ForegroundColor Yellow
+        $healthy = $true
+    }
+
     if (-not $healthy) {
-        Write-Host '' 
+        if (-not $controlProcess.HasExited) {
+            Write-Host "      Basarisiz baslatma sureci temizleniyor (PID $($controlProcess.Id))..." -ForegroundColor Yellow
+            Stop-Process -Id $controlProcess.Id -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Milliseconds 500
+        }
+        if (Test-Path -LiteralPath $InstanceLockPath -PathType Leaf) {
+            try {
+                $lockOwner = Get-Content -LiteralPath $InstanceLockPath -Raw | ConvertFrom-Json
+                if ([int]$lockOwner.pid -eq [int]$controlProcess.Id) {
+                    Remove-Item -LiteralPath $InstanceLockPath -Force -ErrorAction SilentlyContinue
+                }
+            } catch {}
+        }
+
+        Write-Host ''
         Write-Host '----- JARVIS STARTUP ERROR LOG -----' -ForegroundColor Red
+        if ($startupError) {
+            Write-Host ("Startup error: {0}" -f $startupError) -ForegroundColor DarkRed
+        }
         if (Test-Path -LiteralPath $StderrPath -PathType Leaf) {
             Get-Content -LiteralPath $StderrPath -Tail 80 | ForEach-Object { Write-Host $_ -ForegroundColor DarkRed }
         } else {
             Write-Host 'launcher.stderr.log olusturulamadi.' -ForegroundColor DarkRed
+        }
+        if (Test-Path -LiteralPath $StdoutPath -PathType Leaf) {
+            Write-Host '----- STDOUT SON SATIRLAR -----' -ForegroundColor DarkYellow
+            Get-Content -LiteralPath $StdoutPath -Tail 40 | ForEach-Object { Write-Host $_ -ForegroundColor DarkYellow }
         }
         Write-Host '------------------------------------' -ForegroundColor Red
         $exitDetail = if ($controlProcess.HasExited) { " Islem cikis kodu: $($controlProcess.ExitCode)." } else { '' }

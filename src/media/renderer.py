@@ -574,8 +574,15 @@ def _write_flite_wav(path: Path, narration: str) -> bool:
         return False
 
 
-def write_narration_audio(root: Path, narration: str, language: str, voice: str) -> tuple[Path, str, bool]:
-    """Create real narration with bounded free/local fallbacks."""
+def write_narration_audio(
+    root: Path, narration: str, language: str, voice: str, *, require_neural: bool = False,
+) -> tuple[Path, str, bool]:
+    """Create real narration with bounded free/local fallbacks.
+
+    When require_neural is True, robotic Windows/flite fallbacks are not
+    accepted. This is used by the quality-repair loop after narration_quality
+    rejects a first-pass fallback voice.
+    """
     edge_tts = find_edge_tts()
     path = root / "narration.mp3"
     edge_commands = []
@@ -600,6 +607,33 @@ def write_narration_audio(root: Path, narration: str, language: str, voice: str)
                 return path, f"edge-tts {voice}", True
         except (OSError, subprocess.TimeoutExpired):
             continue
+
+    # Third independent neural route: invoke the Python API directly and read
+    # narration from a UTF-8 file. This avoids Windows command-line quoting/
+    # length issues that can make both console entry points fail while the
+    # installed edge_tts package itself is healthy.
+    edge_text = root / "narration-edge.txt"
+    edge_text.write_text(narration, encoding="utf-8")
+    edge_script = (
+        "import asyncio,sys,edge_tts;"
+        "text=open(sys.argv[1],encoding=\"utf-8\").read();"
+        "voice=sys.argv[2];out=sys.argv[3];"
+        "asyncio.run(edge_tts.Communicate(text,voice).save(out))"
+    )
+    try:
+        if path.exists():
+            path.unlink()
+        completed = subprocess.run(
+            [sys.executable, "-c", edge_script, str(edge_text), voice, str(path)],
+            capture_output=True, text=True, timeout=120, check=False,
+        )
+        if completed.returncode == 0 and path.is_file() and path.stat().st_size > 1024:
+            return path, f"edge-tts-api {voice}", True
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+    if require_neural:
+        return path, f"neural unavailable (edge-tts cli/module/api; voice={voice})", False
 
     path = root / "narration.wav"
     if _write_sapi_wav(path, narration, language):

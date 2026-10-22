@@ -37,7 +37,10 @@ ENVIRONMENT_CAPABILITY_NOTE = (
 # research_grounding/narrative_coherence/visual_relevance/technical_render_validity
 # are deliberately excluded: those require going back to the opportunity/script
 # stage (a different topic/research input), which an automatic retry cannot do.
-_REPAIRABLE_GATES = {"audio_completeness", "av_timing", "repetition", "shorts_structure"}
+_REPAIRABLE_GATES = {
+    "audio_completeness", "av_timing", "repetition", "shorts_structure",
+    "visual_source_quality", "narration_quality",
+}
 # Public (not module-private) name: round 4 repair -- department_orchestrator
 # needs the REAL repair-attempt count to size media's outer department
 # timeout budget from this module's own bounded worst-case, the same
@@ -275,7 +278,8 @@ class MediaManager:
             "Bu ortamda GERÇEKTEN kurulu olan: yerel Ollama, workspace-local "
             "FFmpeg/ffprobe, anahtarsız ve lisans kanıtlı Wikimedia Commons görsel/video araması, "
             "yalnız açık CC BY/Public Domain metadata'sı varsa çalışan yt-dlp video keşif/indirme hattı, "
-            "yerel özgün kapak/altyazı/müzik kompozisyonu ve Windows System.Speech TTS. "
+            "yerel özgün kapak/altyazı/müzik kompozisyonu ve Edge-TTS neural ses. "
+            "Windows System.Speech/SAPI/flite yalnız taslak fallback'tir ve yayın kalite kapısını geçmez. "
             "Onay yokken ücretli görsel sağlayıcısı kullanılmaz; yayınlama capability'si kullanılmaz."
             if find_ffmpeg()
             else "FFmpeg/video encoder bulunamadı; gerçek MP4 üretimi BLOCKED."
@@ -510,6 +514,11 @@ Kurallar:
                     if prior is not None else None
                 )
 
+            repair_state = {
+                "prefer_video_sources": False,
+                "require_neural_narration": False,
+            }
+
             def _build_production():
                 if stage_sink is not None:
                     stage_sink["last_stage"] = "production_build"
@@ -522,6 +531,8 @@ Kurallar:
                     channel_language=production_language,
                     research_grounded=research_grounded,
                     research_evidence_ref=research_evidence_ref,
+                    prefer_video_sources=bool(repair_state["prefer_video_sources"]),
+                    require_neural_narration=bool(repair_state["require_neural_narration"]),
                     stage_sink=stage_sink,
                     standing_permission=standing_permission,
                     free_only=free_only,
@@ -564,6 +575,7 @@ Kurallar:
             artifact_block = self._produce_with_bounded_repair(
                 topic, plan_text, duration_seconds, _build_production,
                 stage_sink=stage_sink, quality_goal=quality_goal,
+                repair_state=repair_state,
             )
 
         production_note = (
@@ -582,11 +594,12 @@ Kurallar:
     def _produce_with_bounded_repair(
         self, topic: str, plan_text: str, duration_seconds: int, rebuild, *,
         stage_sink: dict | None = None, quality_goal: str | None = None,
+        repair_state: dict | None = None,
     ) -> str:
         """Render, self-check against the real quality gates, and bounded-retry
         the *repairable* failures (Sprint: real-production quality-gate audit,
         Phase 8 -- "repair loop"). A repairable gate failure (audio/timing/
-        motion-repetition/Shorts-format) triggers a full regenerate-and-rerender
+        motion-repetition/Shorts-format/visual-source/narration-quality) triggers a targeted regenerate-and-rerender
         (there is no isolated per-stage regeneration API yet, so the retry unit
         is coarse: a whole new build+render, not a single patched scene) up to
         ``MAX_REPAIR_ATTEMPTS`` times. A non-repairable failure (research
@@ -680,7 +693,20 @@ Kurallar:
                 return block
 
             attempts += 1
-            repair_log.append(f"attempt {attempts}: regenerated due to {', '.join(repairable)}")
+            if repair_state is not None:
+                if "visual_source_quality" in repairable:
+                    repair_state["prefer_video_sources"] = True
+                if "narration_quality" in repairable:
+                    repair_state["require_neural_narration"] = True
+                if stage_sink is not None:
+                    stage_sink["quality_repair_state"] = dict(repair_state)
+            repair_log.append(
+                f"attempt {attempts}: regenerated due to {', '.join(repairable)}"
+                + (
+                    f" | repair_state={repair_state}"
+                    if repair_state is not None else ""
+                )
+            )
             rebuilt = rebuild()
             if not rebuilt.success:
                 self.last_artifact_path = ""

@@ -337,6 +337,55 @@ class TestBoundedRepairLoop:
         assert "REPAIR LOG" in result
         assert "attempt 1: regenerated due to audio_completeness" in result
 
+    def test_visual_and_narration_quality_failure_enables_targeted_repair_modes(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            ProviderManager, "route_and_generate",
+            lambda self, prompt, task_type, **kw: _route_result(_complete_plan_text()),
+        )
+        monkeypatch.setattr("src.media.manager.find_goal_production_package", lambda topic: None)
+        build_kwargs = []
+
+        def fake_build(self, **kwargs):
+            build_kwargs.append(dict(kwargs))
+            return PackageBuildResult(True, "x.json", production_id=f"p{len(build_kwargs)}")
+
+        monkeypatch.setattr(GeneralProductionBuilder, "build", fake_build)
+        render_calls = []
+        monkeypatch.setattr(
+            LocalVideoRenderer, "render",
+            lambda self, topic, narration, duration_seconds, **kw: (
+                render_calls.append(1),
+                RenderResult(
+                    True, str(tmp_path / f"artifact-{len(render_calls)}.mp4"),
+                    audio_used=True, production_ready=True,
+                ),
+            )[1],
+        )
+        checks = [
+            _quality(False, ("visual_source_quality", "narration_quality")),
+            _quality(True),
+        ]
+        monkeypatch.setattr(
+            "src.media.manager.validate_media_goal_artifact",
+            lambda path, goal, **kw: checks.pop(0),
+        )
+
+        result = MediaManager().plan(
+            topic="Swiss youth protest",
+            produce_artifact=True,
+            request_text="Türkçe kısa video hazırla. Ücretli servis kullanma.",
+        )
+
+        assert len(build_kwargs) == 2
+        assert build_kwargs[0]["prefer_video_sources"] is False
+        assert build_kwargs[0]["require_neural_narration"] is False
+        assert build_kwargs[1]["prefer_video_sources"] is True
+        assert build_kwargs[1]["require_neural_narration"] is True
+        assert "GERÇEK VIDEO ARTIFACT" in result
+        assert "visual_source_quality" in result
+        assert "narration_quality" in result
+
     def test_repair_exhaustion_ends_truthfully_without_publication(self, tmp_path, monkeypatch):
         manager, build_calls = self._manager(tmp_path, monkeypatch)
         render_calls: list[int] = []

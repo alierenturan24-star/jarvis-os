@@ -11,6 +11,7 @@ import subprocess
 import threading
 import time
 import errno
+from datetime import datetime, timezone
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -153,10 +154,100 @@ def load_or_create_token(path: Path = TOKEN_PATH, *, rotate: bool = False) -> st
     return token
 
 
+class DeferredControlCenterService:
+    """Expose liveness immediately while the heavyweight Control Center service boots.
+
+    Windows launch failures showed the child process could stay alive for more than
+    the launcher's readiness window before the HTTP socket was ever bound.  Binding
+    first and constructing ControlCenterService on a daemon thread makes startup
+    observable and prevents a slow persisted state/runtime initialization from being
+    misreported as a dead backend.
+    """
+
+    def __init__(self, factory=ControlCenterService) -> None:
+        self._factory = factory
+        self._service = None
+        self._error = ""
+        self._stage = "service_initialization"
+        self._started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        self._thread: threading.Thread | None = None
+
+    @property
+    def startup_ready(self) -> bool:
+        return self._service is not None
+
+    @property
+    def startup_error(self) -> str:
+        return self._error
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+
+        def initialize() -> None:
+            try:
+                self._stage = "constructing_control_center_service"
+                self._service = self._factory()
+                self._stage = "ready"
+            except BaseException as error:
+                self._error = f"{type(error).__name__}: {error}"
+                self._stage = "startup_error"
+
+        self._thread = threading.Thread(
+            target=initialize, daemon=True, name="jarvis-control-center-bootstrap"
+        )
+        self._thread.start()
+
+    def liveness(self) -> dict:
+        if self._service is not None:
+            live = dict(self._service.liveness())
+            live["startup_ready"] = True
+            live["startup_stage"] = "ready"
+            return live
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        return {
+            "backend_alive": True,
+            "checked_at": now,
+            "runtime_state": "STARTUP_ERROR" if self._error else "BOOTING",
+            "process": {
+                "pid": os.getpid(),
+                "instance_id": self._started_at,
+                "runtime_started_at": self._started_at,
+                "build_identity": os.getenv("JARVIS_BUILD_ID", "unknown"),
+            },
+            "startup_ready": False,
+            "startup_stage": self._stage,
+            "startup_error": self._error or None,
+        }
+
+    def health(self) -> dict:
+        if self._service is not None:
+            health = dict(self._service.health())
+            health["startup_ready"] = True
+            health["startup_stage"] = "ready"
+            return health
+        return self.liveness()
+
+    def scheduler_tick(self):
+        if self._service is not None:
+            return self._service.scheduler_tick()
+        return None
+
+    def __getattr__(self, name: str):
+        service = self._service
+        if service is not None:
+            return getattr(service, name)
+        if self._error:
+            raise RuntimeError(f"Control Center startup failed: {self._error}")
+        raise RuntimeError(
+            f"Control Center is still starting ({self._stage}); retry shortly."
+        )
+
+
 class ControlCenterServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = False
-    def __init__(self, address: tuple[str, int], service: ControlCenterService, token: str,
+    def __init__(self, address: tuple[str, int], service, token: str,
                  trusted_tailscale_hosts: frozenset[str] | None = None) -> None:
         super().__init__(address, ControlCenterHandler)
         self.service, self.token = service, token
@@ -502,11 +593,16 @@ def run(host: str = "127.0.0.1", port: int = 8765, token: str | None = None,
     token = token or load_or_create_token(rotate=fresh_session)
     tailscale_host = detect_tailscale_serve_host(port)
     trusted_hosts = frozenset({tailscale_host}) if tailscale_host else frozenset()
+    bootstrap_service = DeferredControlCenterService()
     try:
-        server = ControlCenterServer((host, port), ControlCenterService(), token, trusted_hosts)
+        # Bind the loopback socket BEFORE heavyweight service construction.
+        # /api/liveness is therefore immediately available with BOOTING state.
+        server = ControlCenterServer((host, port), bootstrap_service, token, trusted_hosts)
     except BaseException:
         instance_lock.release()
         raise
+    bootstrap_service.start()
+
     def scheduler_loop() -> None:
         while True:
             try: server.service.scheduler_tick()

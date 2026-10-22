@@ -126,3 +126,33 @@ def test_write_narration_audio_uses_windows_sapi_com_before_flite(tmp_path, monk
     assert ok is True
     assert path.is_file()
     assert provider == "Windows SAPI COM local fallback"
+
+
+def test_neural_only_narration_never_falls_back_to_robotic_windows_voice(tmp_path, monkeypatch):
+    import src.media.renderer as renderer
+
+    class _Failed:
+        returncode = 1
+
+    monkeypatch.setattr(renderer, "find_edge_tts", lambda: None)
+    monkeypatch.setattr(renderer.subprocess, "run", lambda *a, **k: _Failed())
+    monkeypatch.setattr(
+        renderer, "_write_sapi_wav",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("SAPI must not run in neural-only mode")),
+    )
+    monkeypatch.setattr(
+        renderer, "_write_sapi_com_wav",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("SAPI COM must not run in neural-only mode")),
+    )
+    monkeypatch.setattr(
+        renderer, "_write_flite_wav",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("flite must not run in neural-only mode")),
+    )
+
+    path, provider, ok = renderer.write_narration_audio(
+        tmp_path, "Merhaba dünya", "tr-TR", "tr-TR-EmelNeural", require_neural=True,
+    )
+
+    assert ok is False
+    assert path.name == "narration.mp3"
+    assert "neural unavailable" in provider

@@ -58,7 +58,8 @@ function Test-ControlCenterHealth([string]$Token, [string]$ExpectedBuild) {
         $response = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/liveness" -WebSession $session `
             -Method Get -TimeoutSec 3 -ErrorAction Stop
         $runningBuild = [string]$response.process.build_identity
-        return ($response.backend_alive -eq $true -and $runningBuild -eq $ExpectedBuild)
+        $startupReady = if ($null -eq $response.startup_ready) { $true } else { [bool]$response.startup_ready }
+        return ($response.backend_alive -eq $true -and $runningBuild -eq $ExpectedBuild -and $startupReady)
     } catch { return $false }
 }
 

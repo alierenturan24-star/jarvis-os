@@ -336,6 +336,8 @@ class GeneralProductionBuilder:
               research_evidence_ref: dict | None = None,
               allow_legacy_authored_series: bool = False,
               enable_scene_motion: bool = False,
+              prefer_video_sources: bool = False,
+              require_neural_narration: bool = False,
               stage_sink: dict | None = None,
               standing_permission: bool = False,
               free_only: bool = False) -> PackageBuildResult:
@@ -371,7 +373,8 @@ class GeneralProductionBuilder:
                 channel_market=channel_market, channel_language=channel_language,
                 research_grounded=research_grounded, research_evidence_ref=research_evidence_ref,
                 required=required, available=available, missing=missing,
-                enable_scene_motion=enable_scene_motion, stage_sink=stage_sink,
+                enable_scene_motion=enable_scene_motion, prefer_video_sources=prefer_video_sources,
+                require_neural_narration=require_neural_narration, stage_sink=stage_sink,
                 standing_permission=standing_permission, free_only=free_only)
 
         previous = list(memory.get("productions", []))
@@ -413,7 +416,7 @@ class GeneralProductionBuilder:
             if stage_sink is not None:
                 stage_sink["last_stage"] = "audio_narration"
             audio, narration_provider, audio_ok = write_narration_audio(
-                root, script, channel_language, voice,
+                root, script, channel_language, voice, require_neural=require_neural_narration,
             )
             if not audio_ok:
                 return PackageBuildResult(
@@ -537,6 +540,8 @@ class GeneralProductionBuilder:
                                      required: tuple[str, ...], available: tuple[str, ...],
                                      missing: tuple[str, ...],
                                      enable_scene_motion: bool = False,
+                                     prefer_video_sources: bool = False,
+                                     require_neural_narration: bool = False,
                                      stage_sink: dict | None = None,
                                      standing_permission: bool = False,
                                      free_only: bool = False) -> PackageBuildResult:
@@ -571,6 +576,11 @@ class GeneralProductionBuilder:
         scene_files: list[Path] = []
         provenance: list[dict] = []
         local_scene_fallback_used = False
+        if stage_sink is not None:
+            stage_sink["production_repair_mode"] = {
+                "prefer_video_sources": bool(prefer_video_sources),
+                "require_neural_narration": bool(require_neural_narration),
+            }
         for index, scene in enumerate(parsed.scenes, 1):
             if stage_sink is not None:
                 capability_label = "image_to_video" if enable_scene_motion else "text_to_image"
@@ -589,6 +599,7 @@ class GeneralProductionBuilder:
             if free_only:
                 image_path, entry = self._licensed_commons_clip(
                     scene, index, root, stage_sink=stage_sink,
+                    aggressive=prefer_video_sources,
                 )
                 if image_path is None:
                     image_path, entry = self._licensed_yt_dlp_clip(
@@ -639,7 +650,7 @@ class GeneralProductionBuilder:
         if stage_sink is not None:
             stage_sink["last_stage"] = "audio_narration"
         audio, narration_provider, audio_ok = write_narration_audio(
-            root, script, channel_language, voice,
+            root, script, channel_language, voice, require_neural=require_neural_narration,
         )
         if not audio_ok:
             return PackageBuildResult(False, error="CAPABILITY_GAP: real narration generation unavailable",
@@ -687,6 +698,10 @@ class GeneralProductionBuilder:
             "video_type": "generated_short",
             "production_backend": f"dynamic_provider:{'+'.join(used_providers) or 'unknown'}",
             "budget_mode": "FREE_ONLY" if free_only else "APPROVAL_GATED_PAID_ALLOWED",
+            "repair_mode": {
+                "prefer_video_sources": bool(prefer_video_sources),
+                "require_neural_narration": bool(require_neural_narration),
+            },
             "image_provider": "+".join(sorted({f"{row['provider']}/{row['model']}" for row in provenance if row.get("success")})),
             "narration_provider": narration_provider, "narration_language": channel_language,
             "narration_seconds": narration_seconds,
@@ -876,8 +891,10 @@ class GeneralProductionBuilder:
         )
 
     @staticmethod
-    def _licensed_commons_clip(scene: ScenePlan, index: int, root: Path,
-                               *, stage_sink: dict | None = None) -> tuple[Path | None, SceneProvenance | None]:
+    def _licensed_commons_clip(
+        scene: ScenePlan, index: int, root: Path, *, stage_sink: dict | None = None,
+        aggressive: bool = False,
+    ) -> tuple[Path | None, SceneProvenance | None]:
         from src.providers.wikimedia_media_provider import WikimediaMediaProvider
 
         if stage_sink is not None:
@@ -890,11 +907,25 @@ class GeneralProductionBuilder:
             "yakın", "çekim", "görüntü", "sahne", "kullan", "uygun",
         }
         content_words = [word for word in words if len(word) >= 4 and word.casefold() not in stop]
-        queries = list(dict.fromkeys(filter(None, (
+        base_queries = [
             description,
             " ".join(content_words[:7]),
             " ".join(content_words[-5:]),
-        ))))[:3]
+        ]
+        if aggressive:
+            base_queries.extend([
+                " ".join(content_words[:5]),
+                " ".join(content_words[:3]),
+                " ".join(content_words[-3:]),
+            ])
+            focused = [w for w in content_words if w.casefold() in {
+                "swiss", "switzerland", "ticino", "bellinzona", "lugano",
+                "student", "students", "protest", "youth", "crowd", "university",
+                "government", "city", "campus",
+            }]
+            if focused:
+                base_queries.append(" ".join(focused[:5]))
+        queries = list(dict.fromkeys(filter(None, base_queries)))[:6 if aggressive else 3]
         provider = WikimediaMediaProvider()
         result = None
         for attempt, query in enumerate(queries, 1):

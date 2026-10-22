@@ -576,6 +576,7 @@ class GeneralProductionBuilder:
         scene_files: list[Path] = []
         provenance: list[dict] = []
         local_scene_fallback_used = False
+        local_card_count = 0
         if stage_sink is not None:
             stage_sink["production_repair_mode"] = {
                 "prefer_video_sources": bool(prefer_video_sources),
@@ -604,6 +605,7 @@ class GeneralProductionBuilder:
                 if image_path is None:
                     image_path, entry = self._licensed_yt_dlp_clip(
                         scene, index, root, stage_sink=stage_sink,
+                        aggressive=prefer_video_sources,
                     )
             if image_path is None:
                 image_path, entry = self._generate_scene_image(
@@ -615,11 +617,12 @@ class GeneralProductionBuilder:
             # the renderer adds zoom/pan, narration, subtitles and original
             # music.  This is not borrowed media and therefore needs no
             # external license/provider call.
-            if free_only and image_path is None:
+            if free_only and image_path is None and (not prefer_video_sources or local_card_count < 1):
                 local_path, local_entry = self._build_local_news_card(scene, index, root)
                 if local_path is not None:
                     image_path, entry = local_path, local_entry
                     local_scene_fallback_used = True
+                    local_card_count += 1
             assert entry is not None
             provenance.append(entry.as_dict())
             if image_path is None:
@@ -710,6 +713,7 @@ class GeneralProductionBuilder:
             # while exposing their use explicitly for audit/UI.
             "fallback": False, "placeholder": False,
             "local_original_scenes_used": local_scene_fallback_used,
+            "local_original_scene_count": local_card_count,
             "resolution": "1080x1920", "fps": 25,
             "story_concept": f"{parsed.title}: {parsed.hook}"[:280],
             "hook": parsed.hook, "script": script, "ending": parsed.ending,
@@ -837,8 +841,10 @@ class GeneralProductionBuilder:
         return (target if success else None), entry
 
     @staticmethod
-    def _licensed_yt_dlp_clip(scene: ScenePlan, index: int, root: Path,
-                              *, stage_sink: dict | None = None) -> tuple[Path | None, SceneProvenance | None]:
+    def _licensed_yt_dlp_clip(
+        scene: ScenePlan, index: int, root: Path, *, stage_sink: dict | None = None,
+        aggressive: bool = False,
+    ) -> tuple[Path | None, SceneProvenance | None]:
         """Best-effort CC BY/Public Domain video retrieval through yt-dlp.
 
         Never uses account cookies and never accepts missing/standard/ambiguous
@@ -852,10 +858,31 @@ class GeneralProductionBuilder:
             stage_sink["last_stage"] = f"licensed_yt_dlp_scene_{index}"
         provider = LicensedYtDlpVideoProvider()
         source_root = root / f"scene-{index:02d}-yt-dlp"
-        result = provider.find_and_download(scene.visual_description, source_root)
-        if not result.success or not result.path:
+        description = str(scene.visual_description or "").strip()
+        words = [w for w in re.findall(r"[\wÀ-ÿ'-]+", description, flags=re.UNICODE) if len(w) >= 4]
+        queries = [description]
+        if aggressive:
+            queries.extend([
+                " ".join(words[:6]),
+                " ".join(words[:4]),
+                " ".join(words[-4:]),
+            ])
+        queries = list(dict.fromkeys(q for q in queries if q))[:4 if aggressive else 1]
+        result = None
+        last_error = ""
+        for attempt, query in enumerate(queries, 1):
             if stage_sink is not None:
-                stage_sink[f"licensed_yt_dlp_scene_{index}_error"] = result.error[:500]
+                stage_sink["last_stage"] = (
+                    f"licensed_yt_dlp_scene_{index}_search_{attempt}_of_{len(queries)}"
+                )
+            candidate = provider.find_and_download(query, source_root / f"attempt-{attempt}")
+            result = candidate
+            if candidate.success and candidate.path:
+                break
+            last_error = candidate.error
+        if result is None or not result.success or not result.path:
+            if stage_sink is not None:
+                stage_sink[f"licensed_yt_dlp_scene_{index}_error"] = last_error[:500]
             return None, None
 
         source = Path(result.path)

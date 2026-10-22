@@ -29,6 +29,7 @@ $CriticalTests = @(
     'src/media/tests/test_quality_gates.py::test_soft_subtitles_without_burn_in_fail_publication_quality',
     'src/media/tests/test_quality_gates.py::test_legacy_two_tone_music_fails_publication_quality',
     'src/control_center/tests/test_instance_lock_recovery.py',
+    'src/control_center/tests/test_deferred_startup.py',
     'src/control_center/tests/test_control_center.py::test_liveness_is_fast_process_state_only',
     'src/control_center/tests/test_control_center.py::test_health_does_not_probe_provider_networks',
     'src/control_center/tests/test_observability_v1.py::test_dashboard_stays_online_when_one_known_provider_is_available',

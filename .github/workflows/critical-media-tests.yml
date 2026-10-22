@@ -124,6 +124,8 @@ jobs:
             src/providers/tests/test_provider_manager_routing.py::test_allowed_provider_filter_prevents_paid_fallback \
             src/media/tests/test_manager.py::test_no_paid_service_request_restricts_media_planning_provider_chain \
             src/media/tests/test_manager.py::test_historical_passed_artifact_is_revalidated_before_resume \
+            src/media/tests/test_manager.py::TestBoundedRepairLoop::test_visual_and_narration_quality_failure_enables_targeted_repair_modes \
+            src/media/tests/test_renderer.py::test_neural_only_narration_never_falls_back_to_robotic_windows_voice \
             src/media/tests/test_renderer.py::test_write_narration_audio_uses_windows_sapi_com_before_flite \
             src/media/tests/test_renderer.py::test_renderer_mixes_original_music_and_burns_in_subtitles \
             src/media/tests/test_quality_gates.py::test_coherent_research_grounded_production_passes_all_gates \

@@ -168,3 +168,41 @@ def test_same_story_accepts_dates_embedded_in_search_snippets():
     assert opportunity.freshness_status == "CURRENT"
     assert len(opportunity.supporting_evidence) >= 2
     assert all(row["published_at"] for row in opportunity.supporting_evidence)
+
+
+def test_same_story_matching_happens_before_domain_dedupe_for_broad_corpus():
+    now = _now()
+    opportunity = build_selected_opportunity(
+        topic="İsviçre için son 30 gün içinde aynı haberi doğrulayan en az iki bağımsız kaynakla güncel gündem",
+        location_or_market="İsviçre",
+        summary="SEÇİLEN KONU: Philipp Kurashev signe à Lausanne\nHedef pazar: İsviçre",
+        sources=[
+            {
+                "title": "Thoune battu 1-0 à domicile par l'Hajduk Split",
+                "summary": "Unrelated football story from the same RTS domain.",
+                "url": "https://www.rts.ch/sport/football/2026/article/thoune-hajduk.html",
+                "published_at": now,
+                "source_language": "fr",
+            },
+            {
+                "title": "Philipp Kurashev signe à Lausanne",
+                "summary": "Lausanne engage l'attaquant suisse Philipp Kurashev.",
+                "url": "https://www.rts.ch/sport/hockey/2026/article/kurashev-lausanne.html",
+                "published_at": now,
+                "source_language": "fr",
+            },
+            {
+                "title": "Philipp Kurashev a signé à Lausanne: les explications",
+                "summary": "6 days ago · Blick confirme la signature de Philipp Kurashev à Lausanne.",
+                "url": "https://www.blick.ch/fr/sport/hockey/kurashev-lausanne.html",
+                "published_at": "",
+                "source_language": "fr",
+            },
+        ],
+    )
+
+    assert opportunity.sufficient is True
+    assert len(opportunity.supporting_evidence) == 2
+    hosts = {row["source_identity"] for row in opportunity.supporting_evidence}
+    assert any("rts.ch" in host for host in hosts)
+    assert any("blick.ch" in host for host in hosts)

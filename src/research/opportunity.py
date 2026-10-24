@@ -262,7 +262,7 @@ def _topic_repeats(selected_topic: str, excluded_topics: list[str] | tuple[str, 
 
 def _current_evidence(
     sources: list[dict] | tuple[dict, ...], *, topic: str, location_or_market: str,
-    now: datetime | None = None,
+    now: datetime | None = None, dedupe_hosts: bool = True,
 ) -> tuple[tuple[dict, ...], int]:
     reference = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     window_days = _freshness_window_days(topic)
@@ -285,7 +285,9 @@ def _current_evidence(
         if age_seconds < -86400 or age_seconds > window_days * 86400:
             continue
         host = (urlparse(url).hostname or "").casefold().rstrip(".")
-        if not host or host in seen_hosts or not _trusted_for_requested_market(host, location_or_market):
+        if not host or not _trusted_for_requested_market(host, location_or_market):
+            continue
+        if dedupe_hosts and host in seen_hosts:
             continue
         seen_hosts.add(host)
         evidence.append({
@@ -298,6 +300,25 @@ def _current_evidence(
             "summary": _source_summary(item),
         })
     return tuple(evidence), window_days
+
+
+def _dedupe_independent_hosts(evidence: tuple[dict, ...]) -> tuple[dict, ...]:
+    """Keep one corroborating row per publisher domain, after story matching.
+
+    Same-story verification can start from a broad research corpus containing
+    several unrelated stories from the same outlet. Deduping domains BEFORE
+    semantic story matching can discard the relevant row merely because an
+    unrelated earlier row from that outlet appeared first.
+    """
+    matched: list[dict] = []
+    seen_hosts: set[str] = set()
+    for item in evidence:
+        host = (urlparse(str(item.get("url") or "")).hostname or "").casefold().rstrip(".")
+        if not host or host in seen_hosts:
+            continue
+        seen_hosts.add(host)
+        matched.append(item)
+    return tuple(matched)
 
 
 @dataclass(frozen=True)
@@ -437,45 +458,51 @@ def build_selected_opportunity(
         )
 
     if wants_current:
+        explicit_same_story = bool(_EXPLICIT_SAME_STORY_SOURCE_PATTERN.search(topic))
+        # For an exact story gate, retain multiple rows from the same domain
+        # until AFTER story matching. A broad corpus can contain an unrelated
+        # RTS/SRF row before the relevant story from that same publisher.
         dated_evidence, window_days = _current_evidence(
             sources, topic=topic, location_or_market=location_or_market,
+            dedupe_hosts=not explicit_same_story,
         )
+        minimum_sources = max(_MIN_CURRENT_SOURCES, len(_required_source_languages(topic)))
+
+        if explicit_same_story:
+            dated_evidence = _dedupe_independent_hosts(
+                _same_story_evidence(excerpt, dated_evidence)
+            )
+
         required_languages = _required_source_languages(topic)
         found_languages = {str(item.get("source_language") or "") for item in dated_evidence}
         missing_languages = sorted(required_languages - found_languages)
-        minimum_sources = max(_MIN_CURRENT_SOURCES, len(required_languages))
+
         if len(dated_evidence) < minimum_sources or missing_languages:
             language_reason = (
                 f" Eksik kaynak dili: {', '.join(missing_languages)}."
                 if missing_languages else ""
             )
-            return SelectedOpportunity(
-                selected_topic=excerpt, location_or_market=location_or_market,
-                why_current="güncellik tarihli kaynaklarla doğrulanamadı",
-                supporting_evidence=dated_evidence,
-                format_references=format_references,
-                freshness_status="INSUFFICIENT_EVIDENCE", sufficient=False,
-                reason=(
+            if explicit_same_story:
+                why_current = "aynı haber iki bağımsız kaynakla doğrulanamadı"
+                reason = (
+                    f"seçilen haberi doğrudan doğrulayan en az {minimum_sources} bağımsız kaynak "
+                    f"bulunamadı; alakasız güncel başlıklar aynı haberin kanıtı sayılmadı.{language_reason}"
+                )
+            else:
+                why_current = "güncellik tarihli kaynaklarla doğrulanamadı"
+                reason = (
                     f"son {window_days} gün içinde yayınlanmış en az {minimum_sources} bağımsız, "
                     "tarihli ve istenen pazara ait güvenilir kaynak doğrulanamadı; "
                     f"ücretli medya üretimi başlatılmadı.{language_reason}"
-                ),
-            )
-        if _EXPLICIT_SAME_STORY_SOURCE_PATTERN.search(topic):
-            same_story = _same_story_evidence(excerpt, dated_evidence)
-            if len(same_story) < minimum_sources:
-                return SelectedOpportunity(
-                    selected_topic=excerpt, location_or_market=location_or_market,
-                    why_current="aynı haber iki bağımsız kaynakla doğrulanamadı",
-                    supporting_evidence=same_story,
-                    format_references=format_references,
-                    freshness_status="INSUFFICIENT_EVIDENCE", sufficient=False,
-                    reason=(
-                        f"seçilen haberi doğrudan doğrulayan en az {minimum_sources} bağımsız kaynak "
-                        "bulunamadı; alakasız güncel başlıklar aynı haberin kanıtı sayılmadı"
-                    ),
                 )
-            dated_evidence = same_story
+            return SelectedOpportunity(
+                selected_topic=excerpt, location_or_market=location_or_market,
+                why_current=why_current,
+                supporting_evidence=dated_evidence,
+                format_references=format_references,
+                freshness_status="INSUFFICIENT_EVIDENCE", sufficient=False,
+                reason=reason,
+            )
         evidence = dated_evidence
 
     freshness = "CURRENT" if wants_current else "UNVERIFIED"

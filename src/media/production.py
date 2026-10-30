@@ -5,6 +5,8 @@ import json
 import re
 import shutil
 import subprocess
+
+from src.utils.windows_process import run_quietly
 import time
 import uuid
 from dataclasses import dataclass
@@ -431,7 +433,7 @@ class GeneralProductionBuilder:
             ffprobe = find_ffprobe()
             if ffprobe:
                 try:
-                    probe = subprocess.run(
+                    probe = run_quietly(
                         [ffprobe, "-v", "error", "-show_entries", "format=duration",
                          "-of", "default=nw=1:nk=1", str(audio)],
                         capture_output=True, text=True, timeout=15, check=False,
@@ -665,7 +667,7 @@ class GeneralProductionBuilder:
         ffprobe = find_ffprobe()
         if ffprobe:
             try:
-                probe = subprocess.run(
+                probe = run_quietly(
                     [ffprobe, "-v", "error", "-show_entries", "format=duration",
                      "-of", "default=nw=1:nk=1", str(audio)],
                     capture_output=True, text=True, timeout=15, check=False,
@@ -820,7 +822,7 @@ class GeneralProductionBuilder:
             "-vf", video_filter, "-frames:v", "1", target.as_posix(),
         ]
         try:
-            completed = subprocess.run(command, capture_output=True, text=True, timeout=45, check=False)
+            completed = run_quietly(command, capture_output=True, text=True, timeout=45, check=False)
         except (OSError, subprocess.TimeoutExpired) as error:
             completed = None
             reason = str(error)
@@ -899,7 +901,7 @@ class GeneralProductionBuilder:
             "-c:v", "libx264", "-preset", "veryfast", str(output),
         ]
         try:
-            completed = subprocess.run(command, capture_output=True, text=True, timeout=90, check=False)
+            completed = run_quietly(command, capture_output=True, text=True, timeout=90, check=False)
         except (OSError, subprocess.TimeoutExpired):
             return None, None
         if completed.returncode != 0 or not output.is_file() or output.stat().st_size <= 10_000:
@@ -980,7 +982,7 @@ class GeneralProductionBuilder:
             "-c:v", "libx264", "-preset", "veryfast", str(output),
         ]
         try:
-            completed = subprocess.run(command, capture_output=True, text=True, timeout=60, check=False)
+            completed = run_quietly(command, capture_output=True, text=True, timeout=60, check=False)
         except (OSError, subprocess.TimeoutExpired):
             return None, None
         if completed.returncode != 0 or not output.is_file() or output.stat().st_size <= 10_000:
@@ -1158,7 +1160,7 @@ class GeneralProductionBuilder:
         frame = root / "thumbnail-source-frame.png"
         command = [find_ffmpeg(), "-y", "-hide_banner", "-loglevel", "error",
                    "-i", str(last), "-frames:v", "1", str(frame)]
-        subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
+        run_quietly(command, capture_output=True, text=True, timeout=30, check=False)
         return frame if frame.is_file() else last
 
     @staticmethod
@@ -1199,7 +1201,7 @@ class GeneralProductionBuilder:
         )
         command = [find_ffmpeg(), "-y", "-hide_banner", "-loglevel", "error", "-i", str(source),
                    "-vf", video_filter, "-frames:v", "1", str(target)]
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=45, check=False)
+        completed = run_quietly(command, capture_output=True, text=True, timeout=45, check=False)
         if completed.returncode != 0 or not target.is_file() or target.stat().st_size <= 10_000:
             shutil.copy2(source, target)
         return target
@@ -1229,7 +1231,7 @@ class GeneralProductionBuilder:
             f"afade=t=in:st=0:d=0.7,afade=t=out:st={max(0.0, duration - 1.0):.3f}:d=1.0[out]",
             "-map", "[out]", "-c:a", "pcm_s16le", str(target),
         ]
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=45, check=False)
+        completed = run_quietly(command, capture_output=True, text=True, timeout=45, check=False)
         return target if completed.returncode == 0 and target.is_file() and target.stat().st_size > 1024 else None
 
     @staticmethod
@@ -1281,7 +1283,7 @@ class GeneralProductionBuilder:
                        f"[1:v]crop={body_w}:{body_h}:{body_x}:{body_y}[body];"
                        f"[0:v][body]overlay={body_x}:{body_y}",
                        "-frames:v", "1", str(target)]
-            result = subprocess.run(command, capture_output=True, text=True, timeout=45, check=False)
+            result = run_quietly(command, capture_output=True, text=True, timeout=45, check=False)
             if result.returncode != 0 or not target.is_file() or target.stat().st_size <= 10_000:
                 raise OSError(f"localized motion generation failed: {result.stderr[-300:]}")
             final.append(target)
@@ -1290,7 +1292,7 @@ class GeneralProductionBuilder:
     @staticmethod
     def _dimensions(source: Path) -> tuple[int, int]:
         ffprobe = shutil.which("ffprobe") or str(Path("tools/ffmpeg/bin/ffprobe.exe").resolve())
-        result = subprocess.run([ffprobe, "-v", "error", "-select_streams", "v:0",
+        result = run_quietly([ffprobe, "-v", "error", "-select_streams", "v:0",
             "-show_entries", "stream=width,height", "-of", "json", str(source)],
             capture_output=True, text=True, timeout=15, check=False)
         stream = json.loads(result.stdout)["streams"][0]
@@ -1300,7 +1302,7 @@ class GeneralProductionBuilder:
     def _crop(source: Path, target: Path, x: int, y: int, width: int, height: int) -> Path:
         command = [find_ffmpeg(), "-y", "-hide_banner", "-loglevel", "error", "-i", str(source),
                    "-vf", f"crop={width}:{height}:{x}:{y}", "-frames:v", "1", str(target)]
-        result = subprocess.run(command, capture_output=True, text=True, timeout=45, check=False)
+        result = run_quietly(command, capture_output=True, text=True, timeout=45, check=False)
         if result.returncode != 0 or not target.is_file() or target.stat().st_size <= 10_000:
             raise OSError(f"scene generation failed: {result.stderr[-300:]}")
         return target

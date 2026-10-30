@@ -8,6 +8,8 @@ import socket
 import os
 import re
 import subprocess
+
+from src.utils.windows_process import run_quietly
 import threading
 import time
 import errno
@@ -84,7 +86,7 @@ def trusted_request_origin(headers, trusted_tailscale_hosts: frozenset[str] | No
 
 def _tailscale_json(*arguments: str) -> dict:
     try:
-        completed = subprocess.run(
+        completed = run_quietly(
             ["tailscale", *arguments], capture_output=True, text=True,
             encoding="utf-8", timeout=5, check=True,
         )
@@ -535,6 +537,7 @@ class ControlCenterHandler(BaseHTTPRequestHandler):
                 if action == "enable": return self._json(self.server.service.autonomous_research.set_enabled(topic_id, True))
                 if action == "disable": return self._json(self.server.service.autonomous_research.set_enabled(topic_id, False))
                 if action == "run": return self._json(self.server.service.autonomous_research.run_topic(topic_id), 202)
+            if path == "/api/control/run-pending": return self._json(self.server.service.run_queued_on_launch(), 202)
             if path == "/api/control/start": self.server.service.start(); return self._json({"ok": True})
             if path == "/api/control/pause": self.server.service.pause(); return self._json({"ok": True})
             if path == "/api/control/stop": self.server.service.stop(False); return self._json({"ok": True})

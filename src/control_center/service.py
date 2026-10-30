@@ -640,6 +640,10 @@ class ControlCenterService:
         queue = state["engines"]["youtube"]["queue"]
         if any(item.get("status") == "QUEUED" for item in queue):
             mission = self.run_next_youtube(draft_only=True)
+            # A second click must not trigger an additional default video after
+            # the explicitly queued item has already been dispatched.
+            today = datetime.now(ZoneInfo("Europe/Berlin")).date().isoformat()
+            self.store.update(lambda s: s.setdefault("settings", {}).update(last_auto_video_day=today))
             self.activity("PLANNING", "Masaustu baslaticisi: bekleyen video uretimi basladi; otomatik yayin yok.")
             return {"started": True, "mission_id": mission["id"], "worker_id": mission["worker_id"]}
 

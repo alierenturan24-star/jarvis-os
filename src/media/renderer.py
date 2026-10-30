@@ -6,6 +6,8 @@ import math
 import re
 import shutil
 import subprocess
+
+from src.utils.windows_process import run_quietly
 import sys
 import unicodedata
 from dataclasses import dataclass
@@ -123,7 +125,7 @@ def ffmpeg_has_flite() -> bool:
     if not ffmpeg:
         return False
     try:
-        completed = subprocess.run(
+        completed = run_quietly(
             [ffmpeg, "-hide_banner", "-filters"], capture_output=True, text=True,
             timeout=8, check=False,
         )
@@ -308,7 +310,7 @@ class LocalVideoRenderer:
                     ),
                     "-t", f"{segment_seconds:.3f}", "-an", "-c:v", "libx264", "-preset", "veryfast", str(segment),
                 ]
-            completed = subprocess.run(command, capture_output=True, text=True, timeout=120, check=False)
+            completed = run_quietly(command, capture_output=True, text=True, timeout=120, check=False)
             if completed.returncode != 0:
                 return RenderResult(False, error=f"Production scene render başarısız: {completed.stderr[-400:]}", ffmpeg_path=ffmpeg)
             segment_paths.append(segment)
@@ -355,7 +357,7 @@ class LocalVideoRenderer:
         ))
         if stage_sink is not None:
             stage_sink["last_stage"] = "render_ffmpeg_compose"
-        completed = subprocess.run(command, cwd=job_dir, capture_output=True, text=True, timeout=180, check=False)
+        completed = run_quietly(command, cwd=job_dir, capture_output=True, text=True, timeout=180, check=False)
         if completed.returncode != 0:
             return RenderResult(False, error=f"Production composition başarısız: {completed.stderr[-400:]}", ffmpeg_path=ffmpeg)
 
@@ -404,7 +406,7 @@ def validate_video_artifact(path: str | Path) -> bool:
     if not ffprobe:
         return True
     try:
-        probe = subprocess.run(
+        probe = run_quietly(
             [ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_type",
              "-of", "default=nw=1:nk=1", str(candidate)],
             capture_output=True, text=True, timeout=15, check=False,
@@ -502,7 +504,7 @@ def _write_sapi_wav(path: Path, narration: str, language: str = "") -> bool:
     )
     encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
     try:
-        completed = subprocess.run(
+        completed = run_quietly(
             [powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
             capture_output=True, timeout=90, check=False,
         )
@@ -538,7 +540,7 @@ def _write_sapi_com_wav(path: Path, narration: str) -> bool:
     )
     encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
     try:
-        completed = subprocess.run(
+        completed = run_quietly(
             [powershell, "-NoProfile", "-NonInteractive", "-STA", "-EncodedCommand", encoded],
             capture_output=True, timeout=90, check=False,
         )
@@ -561,7 +563,7 @@ def _write_flite_wav(path: Path, narration: str) -> bool:
     try:
         text_path.write_text(ascii_text or "Jarvis video", encoding="utf-8")
         source = f"flite=textfile='{text_path.resolve().as_posix()}':voice=slt"
-        completed = subprocess.run(
+        completed = run_quietly(
             [ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", source,
              "-ar", "48000", str(path)],
             capture_output=True, text=True, timeout=120, check=False,
@@ -600,7 +602,7 @@ def write_narration_audio(
         try:
             if path.exists():
                 path.unlink()
-            completed = subprocess.run(
+            completed = run_quietly(
                 command, capture_output=True, text=True, timeout=120, check=False,
             )
             if completed.returncode == 0 and path.is_file() and path.stat().st_size > 1024:
@@ -623,7 +625,7 @@ def write_narration_audio(
     try:
         if path.exists():
             path.unlink()
-        completed = subprocess.run(
+        completed = run_quietly(
             [sys.executable, "-c", edge_script, str(edge_text), voice, str(path)],
             capture_output=True, text=True, timeout=120, check=False,
         )

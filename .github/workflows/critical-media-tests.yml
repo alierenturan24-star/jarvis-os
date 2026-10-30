@@ -149,4 +149,6 @@ jobs:
             src/mission/tests/test_recovery.py::test_research_timeout_retry_keeps_full_original_budget \
             src/providers/tests/test_yt_dlp_media_provider.py \
             src/providers/tests/test_wikimedia_media_provider.py \
-            src/media/tests/test_production_helpers.py
+            src/media/tests/test_production_helpers.py \
+            src/control_center/tests/test_launcher_autorun.py \
+            src/utils/tests/test_windows_process.py

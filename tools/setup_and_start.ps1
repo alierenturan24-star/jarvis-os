@@ -291,6 +291,19 @@ $registerActive = Join-Path $ProjectRoot 'tools\register_active_install.ps1'
 if (Test-Path -LiteralPath $registerActive -PathType Leaf) {
     & $registerActive -ProjectRoot $ProjectRoot
 }
+# Open the dashboard AND start at most one queued, non-publishing mission.
+try {
+    $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
+    $session.Cookies.Add((New-Object System.Net.Cookie('jarvis_session', $token, '/', '127.0.0.1')))
+    $launch = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/control/run-pending" -WebSession $session -Method Post -ContentType 'application/json' -Body '{}' -TimeoutSec 8 -ErrorAction Stop
+    if ($launch.started -eq $true) {
+        Write-Host "BEKLEYEN VIDEO GOREVI BASLADI: $($launch.mission_id)" -ForegroundColor Green
+    } else {
+        Write-Host "Otomatik gorev baslatilmadi: $($launch.reason)" -ForegroundColor Yellow
+    }
+} catch {
+    Write-Host "Otomatik gorev baslatilamadi: $($_.Exception.Message)" -ForegroundColor Yellow
+}
 Open-JarvisPanel $url
 Write-Host 'JARVIS HAZIR. Panel tarayicida acildi.' -ForegroundColor Green
 Write-Host 'Guvenlik: yalnizca bu bilgisayarda 127.0.0.1 adresinde calisiyor.' -ForegroundColor DarkGray

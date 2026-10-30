@@ -4,6 +4,8 @@ import json
 import os
 import shutil
 import subprocess
+
+from src.utils.windows_process import run_quietly
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -186,7 +188,7 @@ def _git_status_files_changed(cwd: Path, timeout_seconds: float = 10.0) -> tuple
     durumunu bu tespit etkilemez (dürüst-ama-en-iyi-çaba raporlama)."""
 
     try:
-        proc = subprocess.run(
+        proc = run_quietly(
             ["git", "status", "--porcelain"],
             capture_output=True, text=True, encoding="utf-8",
             timeout=timeout_seconds, cwd=str(cwd), shell=False,
@@ -282,7 +284,7 @@ class ClaudeCodeWorker:
         started = time.monotonic()
 
         try:
-            proc = subprocess.run(
+            proc = run_quietly(
                 command, capture_output=True, text=True, encoding="utf-8",
                 timeout=self.timeout_seconds, cwd=str(self.cwd), shell=False,
                 env=_clean_subprocess_env(),
@@ -356,7 +358,7 @@ class ClaudeCodeWorker:
         started = time.monotonic()
 
         try:
-            proc = subprocess.run(
+            proc = run_quietly(
                 command, capture_output=True, text=True, encoding="utf-8",
                 timeout=self.timeout_seconds, cwd=str(resolved_cwd), shell=False,
                 env=_clean_subprocess_env(),

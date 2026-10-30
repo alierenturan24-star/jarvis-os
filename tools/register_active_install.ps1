@@ -26,19 +26,11 @@ set /p "JARVIS_ROOT="<"%POINTER%"
 if not exist "%JARVIS_ROOT%\.git" goto :missing
 
 cd /d "%JARVIS_ROOT%"
-echo [0/3] JARVIS launcher guncelleniyor...
-git fetch origin main >nul 2>&1
-if errorlevel 1 goto :bootstrap_failed
-git checkout origin/main -- tools\update_active_install.ps1 tools\setup_and_start.ps1 START_JARVIS.bat >nul 2>&1
-if errorlevel 1 goto :bootstrap_failed
-
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%JARVIS_ROOT%\tools\update_active_install.ps1"
+rem Fast everyday launch. Never fetch, switch git branches, run pytest,
+rem or redeploy a worktree every time the user opens the dashboard.
+rem Updates remain a separate deliberate action via UPDATE_JARVIS.bat.
+call "%JARVIS_ROOT%\START_JARVIS.bat"
 exit /b %ERRORLEVEL%
-
-:bootstrap_failed
-echo En guncel JARVIS baslaticisi alinamadi.
-pause
-exit /b 1
 
 :missing
 echo JARVIS aktif kurulum yolu bulunamadi.
@@ -65,7 +57,7 @@ if ($desktop) {
     $shortcut.TargetPath = (Join-Path $env:WINDIR 'System32\wscript.exe')
     $shortcut.Arguments = ('"' + $hiddenLauncherPath + '"')
     $shortcut.WorkingDirectory = $projectsRoot
-    $shortcut.Description = 'JARVIS arka planda baslat; log: C:\Projects\JARVIS_AC.log'
+    $shortcut.Description = 'JARVIS hizli baslat; guncelleme ayri; log: C:\Projects\JARVIS_AC.log'
     $shortcut.Save()
 }
 

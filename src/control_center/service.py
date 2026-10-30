@@ -16,6 +16,7 @@ from contextlib import redirect_stdout
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from src.control_center.finance_engine import FinancePaperEngine
 from src.finance.manager import FinanceManager
@@ -635,12 +636,30 @@ class ControlCenterService:
             return {"started": False, "reason": "MISSION_ALREADY_RUNNING"}
         if self._paused or self.runtime.state == self.runtime.STOPPED:
             return {"started": False, "reason": "JARVIS_PAUSED_OR_STOPPED"}
-        queue = self.store.snapshot()["engines"]["youtube"]["queue"]
-        if not any(item.get("status") == "QUEUED" for item in queue):
-            return {"started": False, "reason": "NO_QUEUED_YOUTUBE_GOAL"}
-        mission = self.run_next_youtube(draft_only=True)
-        self.activity("PLANNING", "Masaustu baslaticisi: bekleyen video uretimi basladi; otomatik yayin yok.")
-        return {"started": True, "mission_id": mission["id"], "worker_id": mission["worker_id"]}
+        state = self.store.snapshot()
+        queue = state["engines"]["youtube"]["queue"]
+        if any(item.get("status") == "QUEUED" for item in queue):
+            mission = self.run_next_youtube(draft_only=True)
+            self.activity("PLANNING", "Masaustu baslaticisi: bekleyen video uretimi basladi; otomatik yayin yok.")
+            return {"started": True, "mission_id": mission["id"], "worker_id": mission["worker_id"]}
+
+        # The queue may be empty after the last finished production. Start one
+        # configured channel goal on the first desktop launch of each Berlin day,
+        # but never repeat it due to re-clicks or restarts on the same day.
+        today = datetime.now(ZoneInfo("Europe/Berlin")).date().isoformat()
+        if state.get("settings", {}).get("last_auto_video_day") == today:
+            return {"started": False, "reason": "AUTO_VIDEO_ALREADY_STARTED_TODAY"}
+        try:
+            worker_id, _channel_id = self._resolve_youtube_dispatch(None)
+        except RuntimeError as error:
+            return {"started": False, "reason": str(error)}
+        goal = (self.workforce.youtube_goal(worker_id) +
+                "\nBen onaylamadan YouTube'a yükleme veya yayınlama. "
+                "Ucretli medya servisi kullanma. Yalnizca yerel MP4/kapak hazirla.")
+        mission = self.run_worker_now(worker_id, goal=goal)
+        self.store.update(lambda s: s.setdefault("settings", {}).update(last_auto_video_day=today))
+        self.activity("PLANNING", "Masaustu baslaticisi: yeni gunluk video uretimi basladi (otomatik yayin yok).")
+        return {"started": True, "mission_id": mission["id"], "worker_id": worker_id}
 
     def run_next_youtube(self, *, draft_only: bool = False) -> dict[str, Any]:
         state = self.store.snapshot(); queue = state["engines"]["youtube"]["queue"]
